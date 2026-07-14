@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-NetTCPConnection -LocalPort 3001 -State Listen | ForEach-Object { Get-Process -Id $_.OwningProcess | Select-Object Id, ProcessName, Path })",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"ProcessId = 32620\")",
+      "Bash(npm run *)",
+      "Bash(curl -s -w \"\\\\nHTTP %{http_code}\\\\n\" http://localhost:3001/api/health)",
+      "PowerShell($f = \"C:\\\\Users\\\\NarenMurali\\\\OneDrive - Olivier, Inc\\\\HCC\\\\pm-review app\\\\backend\\\\server.js\"; \\(Get-Item $f\\).LastWriteTime = Get-Date; \"touched\")",
+      "PowerShell($root = \"C:\\\\Users\\\\NarenMurali\\\\OneDrive - Olivier, Inc\\\\HCC\\\\pm-review app\"; Get-ChildItem $root -Force | Select-Object Mode, Name | Format-Table -AutoSize; \"--- .gitignore present? ---\"; Test-Path \"$root\\\\.gitignore\"; \"--- .git present? ---\"; Test-Path \"$root\\\\.git\")",
+      "PowerShell($root = \"C:\\\\Users\\\\NarenMurali\\\\OneDrive - Olivier, Inc\\\\HCC\\\\pm-review app\"; Get-ChildItem \"$root\\\\backend\" -Force | Select-Object Mode, Length, Name | Format-Table -AutoSize)",
+      "PowerShell($root = \"C:\\\\Users\\\\NarenMurali\\\\OneDrive - Olivier, Inc\\\\HCC\\\\pm-review app\"; \"=== .run-logs ===\"; Get-ChildItem \"$root\\\\.run-logs\" -Force -ErrorAction SilentlyContinue | Select-Object Length, Name | Format-Table -AutoSize; \"=== budget-tracker-link ===\"; Get-ChildItem \"$root\\\\budget-tracker-link\" -Recurse -Force -ErrorAction SilentlyContinue | Select-Object Length, FullName | Format-Table -AutoSize)",
+      "Bash(git init *)",
+      "Bash(git symbolic-ref *)",
+      "Bash(git check-ignore *)",
+      "Bash(git add *)",
+      "Bash(grep -Ei \"\\\\.env$|\\\\.env\\\\.|\\\\.db|run-logs|node_modules\")"
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Secrets — never commit. .env.example is the safe template.
+.env
+.env.*
+!.env.example
+
+# SQLite database and its write-ahead log — contain real client project data
+*.db
+*.db-shm
+*.db-wal
+
+# Local run logs
+.run-logs/
+
+# OS cruft
+.DS_Store
+Thumbs.db
