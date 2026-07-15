@@ -1,0 +1,15 @@
+# Netlify hosts the frontend only. The Express backend must run elsewhere.
+
+[build]
+  # The React app lives in frontend/, not the repo root.
+  base = "frontend"
+  command = "npm run build"
+  # Relative to base, so this resolves to frontend/dist.
+  publish = "dist"
+
+# React Router handles routing in the browser, so every path must be
+# served index.html rather than looked up as a file on disk.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

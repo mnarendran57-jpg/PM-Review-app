@@ -17,6 +17,9 @@ dist/
 # Local run logs
 .run-logs/
 
+# Machine-local Claude Code settings (churns per session, not shareable)
+.claude/settings.local.json
+
 # OS cruft
 .DS_Store
 Thumbs.db
