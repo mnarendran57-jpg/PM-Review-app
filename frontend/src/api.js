@@ -140,6 +140,14 @@ export const payAppReviewApi = {
   }).then(r => r.data),
   projects: () => api.get('/pay-app-review/projects').then(r => r.data),
   projectHistory: projectId => api.get(`/pay-app-review/project/${projectId}/history`).then(r => r.data),
+  getContract: projectId => api.get(`/pay-app-review/project/${projectId}/contract`).then(r => r.data),
+  uploadContract: (projectId, formData) =>
+    api.post(`/pay-app-review/project/${projectId}/contract`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(r => r.data),
+  updateContractTerms: (projectId, terms) =>
+    api.patch(`/pay-app-review/project/${projectId}/contract`, { terms }).then(r => r.data),
+  deleteContract: projectId => api.delete(`/pay-app-review/project/${projectId}/contract`).then(r => r.data),
   latestForProject: ({ projectId, projectName }) =>
     api.get('/pay-app-review/latest-for-project', {
       params: projectId ? { project_id: projectId } : { project_name: projectName },
@@ -161,6 +169,23 @@ export const payAppReviewApi = {
     triggerDownload(res.data, fileName || `pay_app_${id}.pdf`);
   },
   delete: id => api.delete(`/pay-app-review/${id}`).then(r => r.data),
+};
+
+export const pcoReviewApi = {
+  list: params => api.get('/pco-review', { params }).then(r => r.data),
+  get: id => api.get(`/pco-review/${id}`).then(r => r.data),
+  create: formData => api.post('/pco-review', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }).then(r => r.data),
+  downloadMarkdown: async (id, fileName) => {
+    const res = await api.get(`/pco-review/${id}/report.md`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `pco_review_${id}.md`);
+  },
+  downloadOriginal: async (id, fileName) => {
+    const res = await api.get(`/pco-review/${id}/original.pdf`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `pco_${id}.pdf`);
+  },
+  delete: id => api.delete(`/pco-review/${id}`).then(r => r.data),
 };
 
 export const preconReviewApi = {

@@ -1,7 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   InboxArrowDownIcon, ArrowRightOnRectangleIcon, DocumentMagnifyingGlassIcon,
-  ClipboardDocumentCheckIcon, Squares2X2Icon,
+  ClipboardDocumentCheckIcon, Squares2X2Icon, ScaleIcon,
 } from '@heroicons/react/24/outline';
 import { authApi } from '../api';
 
@@ -13,6 +13,7 @@ const nav = [
   { to: '/home', label: 'Home', icon: Squares2X2Icon, color: '#a78bfa', glow: 'rgba(167,139,250,0.18)' },
   { to: '/proposal-intake', label: 'Proposal Intake', icon: InboxArrowDownIcon, color: '#fbbf24', glow: 'rgba(245,158,11,0.16)' },
   { to: '/pay-app-review', label: 'Pay App Review', icon: DocumentMagnifyingGlassIcon, color: '#60a5fa', glow: 'rgba(59,130,246,0.16)' },
+  { to: '/pco-review', label: 'Change Order Review', icon: ScaleIcon, color: '#fb923c', glow: 'rgba(249,115,22,0.16)' },
   { to: '/precon-review', label: 'Pre-Construction Review', icon: ClipboardDocumentCheckIcon, color: '#34d399', glow: 'rgba(16,185,129,0.16)' },
 ];
 

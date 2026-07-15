@@ -3,6 +3,7 @@ import Layout from './components/Layout';
 import Home from './pages/Home';
 import ProposalIntake from './pages/ProposalIntake';
 import PayAppReview from './pages/PayAppReview';
+import PcoReview from './pages/PcoReview';
 import PreconReview from './pages/PreconReview';
 import Login from './pages/Login';
 import { authApi } from './api';
@@ -31,6 +32,7 @@ export default function App() {
                 <Route path="/home" element={<Home />} />
                 <Route path="/proposal-intake" element={<ProposalIntake />} />
                 <Route path="/pay-app-review" element={<PayAppReview />} />
+                <Route path="/pco-review" element={<PcoReview />} />
                 <Route path="/precon-review" element={<PreconReview />} />
               </Routes>
             </Layout>

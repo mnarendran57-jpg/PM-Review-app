@@ -82,6 +82,109 @@ function HistoryItem({ item, onView, onDelete }) {
   );
 }
 
+// The executed contract, uploaded once per project. Its terms drive the contract-compliance
+// checks on every later pay app, so they are shown plainly and left editable — the model is
+// reading a legal document and can be wrong, and a bad term would otherwise mis-flag every
+// application from here on.
+function ContractPanel({ projectId, contract, onChange }) {
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const upload = async () => {
+    if (!file) return;
+    setBusy(true); setError('');
+    try {
+      const fd = new FormData();
+      fd.append('contract_file', file);
+      await payAppReviewApi.uploadContract(projectId, fd);
+      setFile(null);
+      onChange();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not read this contract.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    setBusy(true);
+    try { await payAppReviewApi.deleteContract(projectId); onChange(); }
+    finally { setBusy(false); }
+  };
+
+  if (!contract) {
+    return (
+      <div className="space-y-2">
+        <FileDrop file={file} onChange={setFile} label="Executed Contract (PDF)" />
+        <p className="text-[11px] text-gray-400">
+          Uploaded once per project. Its terms are read once and reused on every future pay app —
+          you never upload it again.
+        </p>
+        {error && <p className="text-[11px]" style={{ color: '#b91c1c' }}>{error}</p>}
+        {file && (
+          <button type="button" className="btn-secondary w-full justify-center py-1.5 text-xs" onClick={upload} disabled={busy}>
+            {busy ? 'Reading contract…' : 'Read contract terms'}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  const t = contract.terms || {};
+  const taxLabel = t.taxExempt === true ? 'Tax exempt' : t.taxExempt === false ? 'Not tax exempt' : 'Tax status not stated';
+  const taxStyle = t.taxExempt === true
+    ? { background: '#d1fae5', color: '#065f46' }
+    : t.taxExempt === false
+      ? { background: '#f1f5f9', color: '#475569' }
+      : { background: '#fff7ed', color: '#c2410c' };
+
+  return (
+    <div className="p-3 rounded-xl space-y-2.5" style={{ background: '#fafbfc', border: '1px solid #f1f5f9' }}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <DocumentTextIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
+          <span className="text-xs font-medium text-gray-900 truncate">{contract.file_name}</span>
+        </div>
+        <button type="button" className="btn-danger flex-shrink-0" onClick={remove} disabled={busy}>
+          <TrashIcon className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold" style={taxStyle}>
+          {taxLabel}
+        </span>
+        {contract.terms_edited ? (
+          <span className="text-[10px] text-gray-400">terms corrected by you</span>
+        ) : (
+          <span className="text-[10px] text-gray-400">read from the contract — check before relying on it</span>
+        )}
+      </div>
+
+      {t.taxExemptBasis && <p className="text-[11px] text-gray-500 italic">“{t.taxExemptBasis}”</p>}
+
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1">
+          Unallowable items ({(t.unallowableItems || []).length})
+        </p>
+        {(t.unallowableItems || []).length === 0 ? (
+          <p className="text-[11px] text-gray-400">None found in this contract.</p>
+        ) : (
+          <ul className="space-y-1">
+            {t.unallowableItems.map((u, i) => (
+              <li key={i} className="text-[11px] text-gray-600">
+                <span className="font-medium text-gray-900">{u.item}</span>
+                {u.basis && <span className="text-gray-400"> — {u.basis}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Where the job stands overall, before looking at any single application. Headline
 // numbers first (the view a PM would turn toward a client), then the application-by-
 // application movement underneath.
@@ -189,14 +292,24 @@ export default function PayAppReview() {
   const loadProjects = () => payAppReviewApi.projects().then(setProjects);
   useEffect(() => { loadHistory(); loadProjects(); }, []);
 
-  // Pull the selected project's billing history so the PM sees where the job stands
-  // before uploading anything.
+  const [contract, setContract] = useState(null);
+
+  const loadContract = () => {
+    if (!projectId) { setContract(null); return Promise.resolve(); }
+    return payAppReviewApi.getContract(projectId).then(setContract).catch(() => setContract(null));
+  };
+
+  // Pull the selected project's billing history and executed contract so the PM sees
+  // where the job stands, and what the contract allows, before uploading anything.
   useEffect(() => {
-    if (!projectId) { setBudget(null); return; }
+    if (!projectId) { setBudget(null); setContract(null); return; }
     let cancelled = false;
     payAppReviewApi.projectHistory(projectId)
       .then(d => { if (!cancelled) setBudget(d); })
       .catch(() => { if (!cancelled) setBudget(null); });
+    payAppReviewApi.getContract(projectId)
+      .then(d => { if (!cancelled) setContract(d); })
+      .catch(() => { if (!cancelled) setContract(null); });
     return () => { cancelled = true; };
   }, [projectId]);
 
@@ -362,6 +475,10 @@ export default function PayAppReview() {
                   : 'Leave blank and the project will be picked up from the name on the PDF.'}
               </p>
             </div>
+
+            {projectId && (
+              <ContractPanel projectId={projectId} contract={contract} onChange={loadContract} />
+            )}
 
             <FileDrop file={currentFile} onChange={setCurrentFile} label="Current Pay Application (PDF) *" />
             <FileDrop file={previousFile} onChange={setPreviousFile} label="Previous Pay Application (PDF)" />

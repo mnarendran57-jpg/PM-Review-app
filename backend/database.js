@@ -169,6 +169,46 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- The executed contract is signed once per project, so it is stored against the
+  -- project and its terms extracted once. Pay app reviews read the stored terms
+  -- rather than re-sending the contract PDF to the model every period.
+  CREATE TABLE IF NOT EXISTS project_contracts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    file_name TEXT NOT NULL,
+    file_blob BLOB NOT NULL,
+    -- Model-extracted terms, then user-corrected. Shape:
+    --   { taxExempt, taxExemptBasis, unallowableItems[], originalContractSum,
+    --     retainageRate, notes }
+    terms TEXT NOT NULL,
+    terms_edited INTEGER DEFAULT 0,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS pco_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    pco_number TEXT,
+    title TEXT,
+    contractor TEXT,
+    total_amount REAL,
+    is_allowance INTEGER DEFAULT 0,
+    extracted_data TEXT NOT NULL,
+    checks_result TEXT NOT NULL,
+    ai_observations TEXT,
+    report_markdown TEXT NOT NULL,
+    pco_file_name TEXT,
+    pco_file BLOB,
+    reference_file_name TEXT,
+    reference_file BLOB,
+    critical_count INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS preconstruction_reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_name TEXT,

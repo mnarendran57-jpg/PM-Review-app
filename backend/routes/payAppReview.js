@@ -6,6 +6,7 @@ const { analyzePayApps } = require('../lib/payAppExtract');
 const { runChecks } = require('../lib/payAppChecks');
 const { buildReport } = require('../lib/payAppReport');
 const { renderPayAppReportPdf } = require('../lib/payAppReportPdf');
+const { extractContractTerms } = require('../lib/contractExtract');
 const { buildSiteVerificationChecklist } = require('../lib/payAppChecklist');
 const { backfillPayApp } = require('../lib/payAppNormalize');
 const { parseCoLogCsv } = require('../lib/csv');
@@ -94,6 +95,80 @@ router.get('/project/:id/history', (req, res) => {
       totalIssuesFlagged: applications.reduce((a, r) => a + (r.fail_count || 0), 0),
     } : null,
   });
+});
+
+// --- Executed contract, stored per project -----------------------------------------
+// The contract is signed once, so it is uploaded once and its terms extracted once.
+// Later pay app reviews read the stored terms instead of re-sending the PDF, which
+// keeps a long contract from being re-billed to the API every period.
+
+router.get('/project/:id/contract', (req, res) => {
+  const row = db.prepare(`
+    SELECT id, project_id, file_name, terms, terms_edited, created_at, updated_at
+    FROM project_contracts WHERE project_id = ?
+    ORDER BY created_at DESC LIMIT 1
+  `).get(req.params.id);
+  if (!row) return res.json(null);
+  res.json({ ...row, terms: JSON.parse(row.terms) });
+});
+
+router.post('/project/:id/contract', upload.single('contract_file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'Contract PDF is required' });
+    if (file.mimetype !== 'application/pdf') return res.status(400).json({ error: 'Contract must be a PDF' });
+
+    const project = db.prepare(`SELECT id FROM projects WHERE id=?`).get(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const terms = await extractContractTerms(file.buffer);
+    const { usage, ...storedTerms } = terms;
+    if (usage) {
+      console.log(`[contract extract] project=${req.params.id} in=${usage.inputTokens} out=${usage.outputTokens} tokens`);
+    }
+
+    // One contract per project: replace any prior upload rather than accumulating
+    // versions the reviewer would have to choose between.
+    db.prepare(`DELETE FROM project_contracts WHERE project_id = ?`).run(req.params.id);
+    const result = db.prepare(`
+      INSERT INTO project_contracts (project_id, file_name, file_blob, terms, created_by)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(req.params.id, file.originalname, file.buffer, JSON.stringify(storedTerms), req.body.created_by || null);
+
+    res.json({ id: result.lastInsertRowid, file_name: file.originalname, terms: storedTerms });
+  } catch (err) {
+    console.error('Contract extract error:', err);
+    res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });
+  }
+});
+
+// The extraction is a model reading a legal document — it can be wrong. Let the PM
+// correct the terms once, rather than re-litigating a bad flag every month.
+router.patch('/project/:id/contract', (req, res) => {
+  const row = db.prepare(`SELECT id FROM project_contracts WHERE project_id=? ORDER BY created_at DESC LIMIT 1`).get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'No contract on file for this project' });
+  if (!req.body.terms) return res.status(400).json({ error: 'terms is required' });
+
+  db.prepare(`
+    UPDATE project_contracts SET terms=?, terms_edited=1, updated_at=datetime('now') WHERE id=?
+  `).run(JSON.stringify(req.body.terms), row.id);
+  res.json({ success: true });
+});
+
+router.delete('/project/:id/contract', (req, res) => {
+  db.prepare(`DELETE FROM project_contracts WHERE project_id=?`).run(req.params.id);
+  res.json({ success: true });
+});
+
+router.get('/project/:id/contract/original.pdf', (req, res) => {
+  const row = db.prepare(`
+    SELECT file_name, file_blob FROM project_contracts WHERE project_id=?
+    ORDER BY created_at DESC LIMIT 1
+  `).get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${row.file_name}"`);
+  res.send(Buffer.from(row.file_blob));
 });
 
 // Look up the most recent stored review for a project, to use as "previous application"
