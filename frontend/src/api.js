@@ -1,7 +1,11 @@
 import axios from 'axios';
 
 const TOKEN_KEY = 'pm_review_token';
-const api = axios.create({ baseURL: '/api' });
+const configuredBase = import.meta.env.VITE_API_BASE_URL || '/api';
+const apiBaseUrl = configuredBase.endsWith('/api')
+  ? configuredBase.replace(/\/$/, '')
+  : `${configuredBase.replace(/\/$/, '')}/api`;
+const api = axios.create({ baseURL: apiBaseUrl });
 
 api.interceptors.request.use(config => {
   const token = localStorage.getItem(TOKEN_KEY);

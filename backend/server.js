@@ -30,6 +30,6 @@ app.use('/api/memo-templates', require('./routes/memoTemplates'));
 app.use('/api/pay-app-review', require('./routes/payAppReview'));
 app.use('/api/precon-review', require('./routes/preconReview'));
 
-app.listen(PORT, () => {
-  console.log(`PM Review backend running on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`PM Review backend running on http://0.0.0.0:${PORT}`);
 });
