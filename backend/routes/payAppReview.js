@@ -5,6 +5,7 @@ const db = require('../database');
 const { analyzePayApps } = require('../lib/payAppExtract');
 const { runChecks } = require('../lib/payAppChecks');
 const { buildReport } = require('../lib/payAppReport');
+const { renderPayAppReportPdf } = require('../lib/payAppReportPdf');
 const { buildSiteVerificationChecklist } = require('../lib/payAppChecklist');
 const { backfillPayApp } = require('../lib/payAppNormalize');
 const { parseCoLogCsv } = require('../lib/csv');
@@ -36,16 +37,85 @@ router.post('/extract', upload.fields([{ name: 'current_file', maxCount: 1 }, { 
   }
 });
 
+// Projects to offer in the Pay App Review dropdown. Deliberately not a full project
+// list: only projects that are Active, ordered so the ones with recent pay app
+// activity surface first. Projects are created implicitly when a pay app is reviewed,
+// so this fills in on its own with no setup step.
+router.get('/projects', (req, res) => {
+  res.json(db.prepare(`
+    SELECT p.id, p.project_name, p.project_number, p.client_name,
+           COUNT(r.id)                AS pay_app_count,
+           MAX(r.application_number)  AS latest_application_number,
+           MAX(r.created_at)          AS last_reviewed_at
+    FROM projects p
+    LEFT JOIN pay_app_reviews r ON r.project_id = p.id
+    WHERE p.status = 'Active'
+    GROUP BY p.id
+    ORDER BY (last_reviewed_at IS NULL), last_reviewed_at DESC, p.project_name ASC
+  `).all());
+});
+
+// Billing history for one project: every pay app reviewed so far, oldest first, with the
+// period-over-period movement. This is what makes a new application legible in context —
+// "is this pace normal for this job?" — rather than as an isolated document.
+router.get('/project/:id/history', (req, res) => {
+  const project = db.prepare(`SELECT id, project_name, project_number, client_name, contract_value FROM projects WHERE id=?`).get(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const rows = db.prepare(`
+    SELECT id, application_number, period_to, contract_sum_to_date, total_completed_to_date,
+           current_payment_due, balance_to_finish, critical_count, fail_count, created_at
+    FROM pay_app_reviews
+    WHERE project_id = ?
+    ORDER BY application_number ASC, created_at ASC
+  `).all(req.params.id);
+
+  let prevCompleted = 0;
+  const applications = rows.map(r => {
+    const completed = r.total_completed_to_date ?? 0;
+    const billedThisPeriod = completed - prevCompleted;
+    const pctComplete = r.contract_sum_to_date ? (completed / r.contract_sum_to_date) * 100 : null;
+    prevCompleted = completed;
+    return { ...r, billed_this_period: billedThisPeriod, pct_complete: pctComplete };
+  });
+
+  const latest = applications[applications.length - 1] || null;
+  res.json({
+    project,
+    applications,
+    summary: latest ? {
+      applicationsReviewed: applications.length,
+      latestApplicationNumber: latest.application_number,
+      contractSumToDate: latest.contract_sum_to_date,
+      totalCompletedToDate: latest.total_completed_to_date,
+      balanceToFinish: latest.balance_to_finish,
+      pctComplete: latest.pct_complete,
+      totalPaidToDate: applications.reduce((a, r) => a + (r.current_payment_due || 0), 0),
+      totalIssuesFlagged: applications.reduce((a, r) => a + (r.fail_count || 0), 0),
+    } : null,
+  });
+});
+
 // Look up the most recent stored review for a project, to use as "previous application"
 // without requiring the user to re-upload the prior PDF.
 router.get('/latest-for-project', (req, res) => {
-  const { project_name } = req.query;
-  if (!project_name) return res.status(400).json({ error: 'project_name is required' });
-  const row = db.prepare(`
-    SELECT id, application_number, period_to, extracted_data
-    FROM pay_app_reviews WHERE project_name = ?
-    ORDER BY application_number DESC, created_at DESC LIMIT 1
-  `).get(project_name);
+  const { project_name, project_id } = req.query;
+  if (!project_name && !project_id) {
+    return res.status(400).json({ error: 'project_id or project_name is required' });
+  }
+  // Prefer project_id: matching on the name text read off the PDF silently misses
+  // whenever a vendor spells the project differently between applications.
+  const row = project_id
+    ? db.prepare(`
+        SELECT id, application_number, period_to, extracted_data
+        FROM pay_app_reviews WHERE project_id = ?
+        ORDER BY application_number DESC, created_at DESC LIMIT 1
+      `).get(project_id)
+    : db.prepare(`
+        SELECT id, application_number, period_to, extracted_data
+        FROM pay_app_reviews WHERE project_name = ?
+        ORDER BY application_number DESC, created_at DESC LIMIT 1
+      `).get(project_name);
   if (!row) return res.json(null);
   const extracted = JSON.parse(row.extracted_data);
   res.json({ id: row.id, applicationNumber: row.application_number, periodTo: row.period_to, current: extracted.current });
@@ -84,6 +154,20 @@ router.post('/', upload.single('current_file'), async (req, res) => {
       };
     }
 
+    // Resolve which project this review belongs to. The user normally picks from the
+    // dropdown (project_id); if they didn't, fall back to the name on the PDF and create
+    // the project on the fly so the dropdown fills in without a separate setup step.
+    let projectId = req.body.project_id ? Number(req.body.project_id) : null;
+    if (!projectId) {
+      const name = (current.summary.projectName || '').trim();
+      if (name) {
+        const found = db.prepare(`SELECT id FROM projects WHERE project_name = ?`).get(name);
+        projectId = found
+          ? found.id
+          : db.prepare(`INSERT INTO projects (project_name, status) VALUES (?, 'Active')`).run(name).lastInsertRowid;
+      }
+    }
+
     const data = { current, previous, contract, retainagePolicy };
     const results = runChecks(data);
     const report = buildReport({ data, results });
@@ -97,8 +181,8 @@ router.post('/', upload.single('current_file'), async (req, res) => {
         total_completed_to_date, current_payment_due, balance_to_finish,
         extracted_data, checks_result, report_markdown,
         current_file_name, current_file, previous_review_id,
-        contract_sum, co_log, critical_count, fail_count, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        contract_sum, co_log, critical_count, fail_count, created_by, project_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       current.summary.projectName || null,
       current.summary.applicationNumber ?? null,
@@ -115,10 +199,11 @@ router.post('/', upload.single('current_file'), async (req, res) => {
       originalContractSum,
       changeOrderLog ? JSON.stringify(changeOrderLog) : null,
       criticalCount, failCount,
-      req.body.created_by || null
+      req.body.created_by || null,
+      projectId
     );
 
-    res.json({ id: insertResult.lastInsertRowid, report, results });
+    res.json({ id: insertResult.lastInsertRowid, projectId, report, results });
   } catch (err) {
     console.error('Pay app review error:', err);
     res.status(500).json({ error: err.message });
@@ -158,6 +243,35 @@ router.get('/:id/report.md', (req, res) => {
   res.setHeader('Content-Type', 'text/markdown');
   res.setHeader('Content-Disposition', `attachment; filename="PayApp_${row.application_number || row.id}_${(row.project_name || 'report').replace(/[^a-z0-9]+/gi, '_')}.md"`);
   res.send(row.report_markdown);
+});
+
+// Client-facing PDF of the review, on Olivier letterhead. Rebuilt from the stored
+// extraction + check results (not the markdown) so it can never drift from what
+// the reviewer saw on screen. No AI call — pure rendering.
+router.get('/:id/report.pdf', async (req, res) => {
+  try {
+    const row = db.prepare('SELECT * FROM pay_app_reviews WHERE id=?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+
+    const data = JSON.parse(row.extracted_data);
+    const results = JSON.parse(row.checks_result);
+    const report = buildReport({ data, results });
+
+    // Reuse the letterhead the user maintains on their default memo template, so
+    // editing the address in Settings updates this report too.
+    const tpl = db.prepare(
+      `SELECT company_name FROM memo_templates ORDER BY is_default DESC, id ASC LIMIT 1`
+    ).get();
+
+    const pdf = await renderPayAppReportPdf({ report, companyName: tpl?.company_name || 'Olivier Inc.' });
+    const safeProject = (row.project_name || 'report').replace(/[^a-z0-9]+/gi, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="PayApp_${row.application_number || row.id}_${safeProject}_Review.pdf"`);
+    res.send(pdf);
+  } catch (err) {
+    console.error('Pay app report PDF error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.get('/:id/report.json', (req, res) => {

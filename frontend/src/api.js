@@ -138,7 +138,16 @@ export const payAppReviewApi = {
   create: formData => api.post('/pay-app-review', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
   }).then(r => r.data),
-  latestForProject: projectName => api.get('/pay-app-review/latest-for-project', { params: { project_name: projectName } }).then(r => r.data),
+  projects: () => api.get('/pay-app-review/projects').then(r => r.data),
+  projectHistory: projectId => api.get(`/pay-app-review/project/${projectId}/history`).then(r => r.data),
+  latestForProject: ({ projectId, projectName }) =>
+    api.get('/pay-app-review/latest-for-project', {
+      params: projectId ? { project_id: projectId } : { project_name: projectName },
+    }).then(r => r.data),
+  downloadPdf: async (id, fileName) => {
+    const res = await api.get(`/pay-app-review/${id}/report.pdf`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `pay_app_review_${id}.pdf`);
+  },
   downloadMarkdown: async (id, fileName) => {
     const res = await api.get(`/pay-app-review/${id}/report.md`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `pay_app_review_${id}.md`);

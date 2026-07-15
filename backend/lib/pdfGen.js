@@ -127,4 +127,7 @@ async function mergePdfBuffers(buffers) {
   return Buffer.from(bytes);
 }
 
-module.exports = { renderMemoPdf, mergePdfBuffers, fillPlaceholders };
+module.exports = {
+  renderMemoPdf, mergePdfBuffers, fillPlaceholders, wrapLine,
+  PAGE_WIDTH, PAGE_HEIGHT, MARGIN, CONTENT_WIDTH, LOGO_PATH,
+};

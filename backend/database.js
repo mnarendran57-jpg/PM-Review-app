@@ -207,6 +207,30 @@ if (!intakeCols.includes('new_total_amount')) {
   db.exec(`ALTER TABLE proposal_intakes ADD COLUMN new_total_amount TEXT`);
 }
 
+// Pay app reviews used to be tied to a project by the project-name text read off the
+// PDF, which silently failed whenever a vendor spelled the name differently between
+// applications. Link them to projects.id instead, and backfill existing rows by
+// creating a project for each distinct name already on file.
+const payAppCols = db.prepare(`PRAGMA table_info(pay_app_reviews)`).all().map(c => c.name);
+if (!payAppCols.includes('project_id')) {
+  db.exec(`ALTER TABLE pay_app_reviews ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL`);
+
+  const orphanNames = db.prepare(`
+    SELECT DISTINCT project_name FROM pay_app_reviews
+    WHERE project_name IS NOT NULL AND TRIM(project_name) <> ''
+  `).all();
+
+  const findProject = db.prepare(`SELECT id FROM projects WHERE project_name = ?`);
+  const createProject = db.prepare(`INSERT INTO projects (project_name, status) VALUES (?, 'Active')`);
+  const linkReviews = db.prepare(`UPDATE pay_app_reviews SET project_id = ? WHERE project_name = ?`);
+
+  for (const { project_name } of orphanNames) {
+    const existingProject = findProject.get(project_name);
+    const id = existingProject ? existingProject.id : createProject.run(project_name).lastInsertRowid;
+    linkReviews.run(id, project_name);
+  }
+}
+
 // Default settings
 const existing = db.prepare(`SELECT key FROM settings WHERE key IN ('rfi_response_days','submittal_review_days')`).all();
 const existingKeys = new Set(existing.map(r => r.key));

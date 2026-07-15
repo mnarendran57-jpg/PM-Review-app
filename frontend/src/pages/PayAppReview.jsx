@@ -82,6 +82,81 @@ function HistoryItem({ item, onView, onDelete }) {
   );
 }
 
+// Where the job stands overall, before looking at any single application. Headline
+// numbers first (the view a PM would turn toward a client), then the application-by-
+// application movement underneath.
+function BudgetSummary({ budget }) {
+  const s = budget.summary;
+  if (!s) {
+    return (
+      <div className="card p-5">
+        <h2 className="text-sm font-semibold text-gray-900">{budget.project.project_name}</h2>
+        <p className="text-xs text-gray-400 mt-1">
+          No pay applications reviewed on this project yet. Upload one and the budget history will build from there.
+        </p>
+      </div>
+    );
+  }
+
+  const pct = Math.max(0, Math.min(100, s.pctComplete ?? 0));
+  const stat = (label, value, sub) => (
+    <div>
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">{label}</p>
+      <p className="text-lg font-semibold text-gray-900 mt-0.5 tabular-nums">{value}</p>
+      {sub && <p className="text-[11px] text-gray-400 mt-0.5">{sub}</p>}
+    </div>
+  );
+
+  return (
+    <div className="card card-accent p-5 space-y-4" style={{ '--card-accent': 'linear-gradient(90deg, #10b981, #3b82f6)' }}>
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 className="text-sm font-semibold text-gray-900 truncate">{budget.project.project_name}</h2>
+        <span className="text-xs text-gray-400 flex-shrink-0">
+          {s.applicationsReviewed} application{s.applicationsReviewed === 1 ? '' : 's'} reviewed
+        </span>
+      </div>
+
+      <div>
+        <div className="flex items-baseline justify-between mb-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Work completed</span>
+          <span className="text-sm font-semibold text-gray-900 tabular-nums">{pct.toFixed(1)}%</span>
+        </div>
+        <div className="h-2 rounded-full overflow-hidden" style={{ background: '#eef2f7' }}>
+          <div className="h-full rounded-full" style={{ width: `${pct}%`, background: 'linear-gradient(90deg, #10b981, #3b82f6)' }} />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        {stat('Paid to date', money(s.totalPaidToDate))}
+        {stat('Balance to finish', money(s.balanceToFinish))}
+        {stat('Completed & stored', money(s.totalCompletedToDate), `of ${money(s.contractSumToDate)} contract`)}
+        {stat(
+          'Issues flagged',
+          String(s.totalIssuesFlagged),
+          s.totalIssuesFlagged === 0 ? 'across all applications' : 'across all applications to date'
+        )}
+      </div>
+
+      {budget.applications.length > 1 && (
+        <div className="pt-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Application history</p>
+          <div className="space-y-1">
+            {budget.applications.map(a => (
+              <div key={a.id} className="flex items-center justify-between text-xs py-1 border-b last:border-0" style={{ borderColor: '#f1f5f9' }}>
+                <span className="text-gray-500">App #{a.application_number ?? '—'} · {a.period_to || '—'}</span>
+                <span className="tabular-nums text-gray-900">
+                  {money(a.billed_this_period)}
+                  <span className="text-gray-400"> · {a.pct_complete != null ? `${a.pct_complete.toFixed(1)}%` : '—'}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PayAppReview() {
   const [currentFile, setCurrentFile] = useState(null);
   const [previousFile, setPreviousFile] = useState(null);
@@ -104,8 +179,26 @@ export default function PayAppReview() {
   const [history, setHistory] = useState([]);
   const [viewing, setViewing] = useState(null); // { id, report }
 
+  // Projects populate themselves as pay apps are reviewed — there is no separate
+  // "create a project" step, so this list fills in on its own.
+  const [projects, setProjects] = useState([]);
+  const [projectId, setProjectId] = useState('');
+  const [budget, setBudget] = useState(null); // { project, applications, summary }
+
   const loadHistory = () => payAppReviewApi.list().then(setHistory);
-  useEffect(() => { loadHistory(); }, []);
+  const loadProjects = () => payAppReviewApi.projects().then(setProjects);
+  useEffect(() => { loadHistory(); loadProjects(); }, []);
+
+  // Pull the selected project's billing history so the PM sees where the job stands
+  // before uploading anything.
+  useEffect(() => {
+    if (!projectId) { setBudget(null); return; }
+    let cancelled = false;
+    payAppReviewApi.projectHistory(projectId)
+      .then(d => { if (!cancelled) setBudget(d); })
+      .catch(() => { if (!cancelled) setBudget(null); });
+    return () => { cancelled = true; };
+  }, [projectId]);
 
   const runAnalysis = async (current, previous, currentFileForUpload, previousReviewId) => {
     const fd = new FormData();
@@ -113,6 +206,7 @@ export default function PayAppReview() {
     fd.append('current', JSON.stringify(current));
     if (previous) fd.append('previous', JSON.stringify(previous));
     if (previousReviewId) fd.append('previous_review_id', previousReviewId);
+    if (projectId) fd.append('project_id', projectId);
     if (contractSum) fd.append('original_contract_sum', contractSum);
     if (coLogCsv) fd.append('co_log_csv', coLogCsv);
     if (retainageRate) {
@@ -122,7 +216,12 @@ export default function PayAppReview() {
     }
     const data = await payAppReviewApi.create(fd);
     setResult({ id: data.id, report: data.report, extracted: { current, previous }, previousReviewId });
+    // A review may have created a project (or added to one), so refresh both the
+    // dropdown and the budget panel rather than leaving stale numbers on screen.
+    if (data.projectId && !projectId) setProjectId(String(data.projectId));
+    else if (projectId) payAppReviewApi.projectHistory(projectId).then(setBudget).catch(() => {});
     loadHistory();
+    loadProjects();
   };
 
   const handleAnalyze = async () => {
@@ -134,10 +233,16 @@ export default function PayAppReview() {
       if (previousFile) fd.append('previous_file', previousFile);
       const extracted = await payAppReviewApi.extract(fd);
 
+      // With no previous PDF uploaded, fall back to the last pay app already on file.
+      // Matching on the selected project's ID is exact; matching on the name text read
+      // off the PDF is a guess, and misses when a vendor respells the project.
       let previousData = extracted.previous;
       let previousReviewId = null;
-      if (!previousFile && extracted.current.summary.projectName) {
-        const match = await payAppReviewApi.latestForProject(extracted.current.summary.projectName);
+      if (!previousFile && (projectId || extracted.current.summary.projectName)) {
+        const match = await payAppReviewApi.latestForProject({
+          projectId: projectId || undefined,
+          projectName: extracted.current.summary.projectName,
+        });
         if (match) {
           setHistoryMatch(match);
           setUsePreviousFromHistory(true);
@@ -238,6 +343,26 @@ export default function PayAppReview() {
               )}
             </div>
 
+            <div>
+              <label className="label">Project</label>
+              <select className="input" value={projectId} onChange={e => setProjectId(e.target.value)}>
+                <option value="">Which project is this pay app for?</option>
+                {projects.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.project_name}
+                    {p.pay_app_count > 0
+                      ? ` — ${p.pay_app_count} reviewed, latest App #${p.latest_application_number ?? '—'}`
+                      : ' — no pay apps yet'}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-400 mt-1">
+                {projectId
+                  ? 'This application will be compared against this project\'s billing history.'
+                  : 'Leave blank and the project will be picked up from the name on the PDF.'}
+              </p>
+            </div>
+
             <FileDrop file={currentFile} onChange={setCurrentFile} label="Current Pay Application (PDF) *" />
             <FileDrop file={previousFile} onChange={setPreviousFile} label="Previous Pay Application (PDF)" />
 
@@ -289,9 +414,17 @@ export default function PayAppReview() {
             </button>
 
             {!previousFile && !historyMatch && !result && (
-              <p className="text-[11px] text-gray-400">
-                No previous application uploaded — only single-period checks will run. Upload one for full cross-application checks.
-              </p>
+              budget?.summary ? (
+                // A prior application is already on file for the selected project, so the
+                // comparison will run against it — don't tell the user to upload one.
+                <p className="text-[11px] text-gray-400">
+                  No previous PDF needed — this will be compared against App #{budget.summary.latestApplicationNumber} already on file for this project.
+                </p>
+              ) : (
+                <p className="text-[11px] text-gray-400">
+                  No previous application on file — only single-period checks will run. Upload one for full cross-application checks.
+                </p>
+              )
             )}
 
             {result && (
@@ -339,11 +472,16 @@ export default function PayAppReview() {
         </div>
 
         <div className="col-span-3 space-y-4">
+          {budget && <BudgetSummary budget={budget} />}
+
           {result && (
             <>
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">Review Result</h2>
                 <div className="flex items-center gap-2">
+                  <button className="btn-primary px-3 py-1.5" onClick={() => payAppReviewApi.downloadPdf(result.id)}>
+                    <ArrowDownTrayIcon className="w-4 h-4" /> PDF Report
+                  </button>
                   <button className="btn-secondary px-3 py-1.5" onClick={() => payAppReviewApi.downloadMarkdown(result.id)}>
                     <DocumentTextIcon className="w-4 h-4" /> .md
                   </button>
@@ -362,6 +500,9 @@ export default function PayAppReview() {
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">Stored Review</h2>
                 <div className="flex items-center gap-2">
+                  <button className="btn-primary px-3 py-1.5" onClick={() => payAppReviewApi.downloadPdf(viewing.id)}>
+                    <ArrowDownTrayIcon className="w-4 h-4" /> PDF Report
+                  </button>
                   <button className="btn-secondary px-3 py-1.5" onClick={() => payAppReviewApi.downloadMarkdown(viewing.id)}>
                     <DocumentTextIcon className="w-4 h-4" /> .md
                   </button>
