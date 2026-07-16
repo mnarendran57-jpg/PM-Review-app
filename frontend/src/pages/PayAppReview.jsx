@@ -263,6 +263,9 @@ function BudgetSummary({ budget }) {
 export default function PayAppReview() {
   const [currentFile, setCurrentFile] = useState(null);
   const [previousFile, setPreviousFile] = useState(null);
+  // Backup often arrives bundled inside the pay app PDF itself; these are for the
+  // vendors who send it separately.
+  const [backupFiles, setBackupFiles] = useState([]);
   const [historyMatch, setHistoryMatch] = useState(null);
   const [usePreviousFromHistory, setUsePreviousFromHistory] = useState(false);
 
@@ -316,6 +319,7 @@ export default function PayAppReview() {
   const runAnalysis = async (current, previous, currentFileForUpload, previousReviewId) => {
     const fd = new FormData();
     fd.append('current_file', currentFileForUpload);
+    for (const f of backupFiles) fd.append('backup_files', f);
     fd.append('current', JSON.stringify(current));
     if (previous) fd.append('previous', JSON.stringify(previous));
     if (previousReviewId) fd.append('previous_review_id', previousReviewId);
@@ -413,6 +417,7 @@ export default function PayAppReview() {
           balanceToFinish: s.line9, contractSumToDate: s.line3, billedPct, retainedPct,
         },
         plainEnglish, critical, mathErrors, warnings, cleanBill, checklist: record.checklist || [],
+        compliance: record.compliance_findings || null,
       },
     });
     setResult(null);
@@ -426,7 +431,7 @@ export default function PayAppReview() {
   };
 
   const reset = () => {
-    setCurrentFile(null); setPreviousFile(null); setHistoryMatch(null);
+    setCurrentFile(null); setPreviousFile(null); setBackupFiles([]); setHistoryMatch(null);
     setUsePreviousFromHistory(false); setResult(null); setViewing(null); setError(''); setEditing(false);
     setContractSum(''); setCoLogCsv(''); setRetainageRate(''); setRetainageMilestonePct(''); setRetainageReducedRate('');
   };
@@ -482,6 +487,23 @@ export default function PayAppReview() {
 
             <FileDrop file={currentFile} onChange={setCurrentFile} label="Current Pay Application (PDF) *" />
             <FileDrop file={previousFile} onChange={setPreviousFile} label="Previous Pay Application (PDF)" />
+
+            {contract && (
+              <div>
+                <label className="label">Extra Backup Documentation (PDF)</label>
+                <input
+                  type="file" multiple accept=".pdf"
+                  className="text-xs text-gray-500 w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 file:cursor-pointer"
+                  onChange={e => setBackupFiles(Array.from(e.target.files || []))}
+                />
+                <p className="text-[11px] text-gray-400 mt-1">
+                  {backupFiles.length > 0
+                    ? `${backupFiles.length} file${backupFiles.length === 1 ? '' : 's'} added. `
+                    : 'Optional. '}
+                  Receipts and invoices bundled inside the pay app above are read automatically — only add files here if they arrived separately.
+                </p>
+              </div>
+            )}
 
             <button type="button" className="text-xs font-medium text-gray-500 underline" onClick={() => setShowOptional(o => !o)}>
               {showOptional ? 'Hide' : 'Show'} optional contract-level inputs

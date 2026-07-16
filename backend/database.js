@@ -271,6 +271,12 @@ if (!payAppCols.includes('project_id')) {
   }
 }
 
+// Contract-compliance findings are stored alongside the math results so a stored
+// review reopens exactly as it was first produced, without re-running the AI scan.
+if (!db.prepare(`PRAGMA table_info(pay_app_reviews)`).all().map(c => c.name).includes('compliance_findings')) {
+  db.exec(`ALTER TABLE pay_app_reviews ADD COLUMN compliance_findings TEXT`);
+}
+
 // Default settings
 const existing = db.prepare(`SELECT key FROM settings WHERE key IN ('rfi_response_days','submittal_review_days')`).all();
 const existingKeys = new Set(existing.map(r => r.key));

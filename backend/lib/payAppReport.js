@@ -1,13 +1,15 @@
 const { money } = require('./payAppChecks');
 const { buildSiteVerificationChecklist } = require('./payAppChecklist');
 
-function buildReport({ data, results }) {
+function buildReport({ data, results, compliance = null, contractTerms = null }) {
   const s = data.current.summary;
   const critical = results.filter(r => r.critical && r.status === 'FAIL');
   const mathErrors = results.filter(r => !r.critical && r.status === 'FAIL');
   const warnings = results.filter(r => r.status === 'SKIPPED');
   const cleanBill = results.filter(r => r.status === 'PASS');
   const checklist = buildSiteVerificationChecklist(data.current, data.previous);
+  const complianceCount =
+    (compliance?.taxFindings?.length || 0) + (compliance?.unallowableFindings?.length || 0);
 
   const billedPct = s.line3 ? (s.line4 / s.line3) * 100 : null;
   const retainedPct = s.line4 ? (s.line5 / s.line4) * 100 : null;
@@ -27,6 +29,9 @@ function buildReport({ data, results }) {
   if (checklist.length > 0) {
     plainEnglish += ` ${checklist.length} item${checklist.length === 1 ? '' : 's'} to verify on site this period.`;
   }
+  if (complianceCount > 0) {
+    plainEnglish += ` ${complianceCount} possible contract conflict${complianceCount === 1 ? '' : 's'} flagged for review.`;
+  }
 
   const header = {
     projectName: s.projectName || 'Not specified',
@@ -39,12 +44,12 @@ function buildReport({ data, results }) {
     billedPct, retainedPct,
   };
 
-  const markdown = renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, cleanBill, checklist });
+  const markdown = renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, cleanBill, checklist, compliance, contractTerms });
 
-  return { header, plainEnglish, critical, mathErrors, warnings, cleanBill, checklist, markdown };
+  return { header, plainEnglish, critical, mathErrors, warnings, cleanBill, checklist, compliance, contractTerms, markdown };
 }
 
-function renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, cleanBill, checklist }) {
+function renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, cleanBill, checklist, compliance, contractTerms }) {
   const lines = [];
   lines.push(`# Pay Application Review — ${header.projectName}`);
   lines.push('');
@@ -87,6 +92,50 @@ function renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, 
     }
   }
   lines.push('');
+
+  // Compliance findings are the AI's reading of the documents against the contract —
+  // kept in their own section, and worded as things to check rather than as proven
+  // errors, because unlike the arithmetic above they can be wrong.
+  if (compliance) {
+    lines.push('## Contract Compliance — checked against the executed contract');
+    lines.push('');
+    lines.push('> These are read from the documents rather than calculated, so treat them as items to verify before approving, not as proven errors.');
+    lines.push('');
+
+    if (compliance.taxFindings?.length) {
+      lines.push(`### Tax found${contractTerms?.taxExempt === true ? ' on a tax-exempt project' : ''}`);
+      lines.push('');
+      for (const f of compliance.taxFindings) {
+        lines.push(`- **${f.description}**${f.amount != null ? ` — ${money(f.amount)}` : ''}${f.where ? ` (${f.where})` : ''}`);
+        lines.push(`  ${f.detail}`);
+      }
+      lines.push('');
+    }
+
+    if (compliance.unallowableFindings?.length) {
+      lines.push('### Costs the contract does not allow');
+      lines.push('');
+      for (const f of compliance.unallowableFindings) {
+        lines.push(`- **${f.contractItem}**${f.amount != null ? ` — ${money(f.amount)}` : ''}${f.where ? ` (${f.where})` : ''}`);
+        lines.push(`  ${f.detail}`);
+      }
+      lines.push('');
+    }
+
+    if (!compliance.taxFindings?.length && !compliance.unallowableFindings?.length) {
+      lines.push('_Nothing on this application conflicts with the contract terms on file._');
+      lines.push('');
+    }
+
+    if (compliance.backupCoverage) {
+      lines.push(`**Backup documentation:** ${compliance.backupCoverage}`);
+      lines.push('');
+    }
+    if (compliance.notes) {
+      lines.push(`**Note:** ${compliance.notes}`);
+      lines.push('');
+    }
+  }
 
   section('Checks We Couldn\'t Fully Complete', warnings, '_None._');
   section('Everything Else Checked Out Fine', cleanBill, '_None passed._');

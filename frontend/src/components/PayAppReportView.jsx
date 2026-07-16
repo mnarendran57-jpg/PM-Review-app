@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   ExclamationTriangleIcon, ExclamationCircleIcon, InformationCircleIcon,
-  CheckCircleIcon, ChevronDownIcon, ChevronUpIcon, ClipboardDocumentCheckIcon,
+  CheckCircleIcon, ChevronDownIcon, ChevronUpIcon, ClipboardDocumentCheckIcon, ScaleIcon,
 } from '@heroicons/react/24/outline';
 import { CheckCircleIcon as CheckCircleSolid } from '@heroicons/react/24/solid';
 
@@ -113,8 +113,65 @@ function SiteVerificationChecklist({ items }) {
   );
 }
 
+// Findings read from the documents against the executed contract. Kept visually distinct
+// from the math checks and worded as things to confirm: unlike the arithmetic, a model
+// reading a receipt can be wrong, and a reviewer needs to know which is which.
+function ContractComplianceSection({ compliance }) {
+  if (!compliance) return null;
+
+  const findings = [
+    ...(compliance.taxFindings || []).map(f => ({
+      head: `Tax charged — ${f.description}`, amount: f.amount, where: f.where, detail: f.detail,
+    })),
+    ...(compliance.unallowableFindings || []).map(f => ({
+      head: `Not allowed by contract — ${f.contractItem}`, amount: f.amount, where: f.where, detail: f.detail,
+    })),
+  ];
+
+  return (
+    <div className="card p-5 space-y-3" style={{ background: '#f5f3ff', border: '1px solid #ddd6fe' }}>
+      <div>
+        <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: '#6d28d9' }}>
+          <ScaleIcon className="w-4 h-4" /> Checked Against the Contract
+          {findings.length > 0 && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: '#ede9fe', color: '#6d28d9' }}>
+              {findings.length}
+            </span>
+          )}
+        </h3>
+        <p className="text-[11px] text-gray-500 mt-1">
+          Read from the documents rather than calculated — confirm each before approving.
+        </p>
+      </div>
+
+      {findings.length === 0 ? (
+        <p className="text-xs text-gray-500">Nothing on this application conflicts with the contract terms on file.</p>
+      ) : (
+        findings.map((f, i) => (
+          <div key={i}>
+            <p className="text-sm font-medium text-gray-900">
+              {f.head}{f.amount != null ? ` — ${money(f.amount)}` : ''}
+            </p>
+            {f.where && <p className="text-[11px] text-gray-400">{f.where}</p>}
+            <p className="text-xs text-gray-600 mt-0.5">{f.detail}</p>
+          </div>
+        ))
+      )}
+
+      {compliance.backupCoverage && (
+        <p className="text-xs text-gray-600 pt-1" style={{ borderTop: '1px solid #ddd6fe' }}>
+          <span className="font-medium text-gray-900">Backup documentation: </span>{compliance.backupCoverage}
+        </p>
+      )}
+      {compliance.notes && (
+        <p className="text-xs" style={{ color: compliance.incomplete ? '#c2410c' : '#6b7280' }}>{compliance.notes}</p>
+      )}
+    </div>
+  );
+}
+
 export default function PayAppReportView({ report }) {
-  const { header, plainEnglish, critical, mathErrors, warnings, cleanBill, checklist = [] } = report;
+  const { header, plainEnglish, critical, mathErrors, warnings, cleanBill, checklist = [], compliance = null } = report;
   const isClean = critical.length === 0 && mathErrors.length === 0;
 
   return (
@@ -156,6 +213,7 @@ export default function PayAppReportView({ report }) {
 
       <CheckSection title="Issues to Resolve Before Approving" icon={ExclamationTriangleIcon} items={critical} color="#b91c1c" bg="#fef2f2" defaultOpen />
       <CheckSection title="Other Calculation Problems Found" icon={ExclamationCircleIcon} items={mathErrors} color="#c2410c" bg="#fff7ed" defaultOpen />
+      <ContractComplianceSection compliance={compliance} />
       <SiteVerificationChecklist items={checklist} />
       <CheckSection title="Checks We Couldn't Fully Complete" icon={InformationCircleIcon} items={warnings} color="#a16207" bg="#fefce8" defaultOpen={false} />
       <CheckSection title="Everything Else Checked Out Fine" icon={CheckCircleIcon} items={cleanBill} color="#15803d" bg="#f0fdf4" defaultOpen={false} />

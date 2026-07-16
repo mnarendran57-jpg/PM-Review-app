@@ -119,6 +119,33 @@ async function renderPayAppReportPdf({ report, companyName }) {
     y -= 4;
   }
 
+  // Read from the documents rather than calculated, so it is set apart from the math
+  // above and worded as items to confirm.
+  const c = report.compliance;
+  if (c) {
+    const findings = [
+      ...(c.taxFindings || []).map(f => ({
+        head: `Tax charged: ${f.description}`, amount: f.amount, where: f.where, detail: f.detail,
+      })),
+      ...(c.unallowableFindings || []).map(f => ({
+        head: `Not allowed by contract: ${f.contractItem}`, amount: f.amount, where: f.where, detail: f.detail,
+      })),
+    ];
+    text('Checked Against the Contract', { bold: true, size: 12, gapAfter: 3 });
+    text('Read from the documents rather than calculated — confirm each before approving.', { size: 9, italic: true, color: GREY, gapAfter: 5 });
+    if (findings.length === 0) {
+      text('Nothing on this application conflicts with the contract terms on file.', { italic: true, gapAfter: 12 });
+    } else {
+      for (const f of findings) {
+        text(`• ${f.head}${f.amount != null ? ` — ${money(f.amount)}` : ''}`, { bold: true, gapAfter: 2 });
+        if (f.where) text(f.where, { indent: 12, size: 9, color: GREY, gapAfter: 1 });
+        text(f.detail, { indent: 12, gapAfter: 7 });
+      }
+      y -= 4;
+    }
+    if (c.backupCoverage) text(`Backup documentation: ${c.backupCoverage}`, { size: 9, color: GREY, gapAfter: 10 });
+  }
+
   text('To Verify On Site Before Approving', { bold: true, size: 12, gapAfter: 5 });
   if (report.checklist.length === 0) {
     text('Nothing new was billed this period, so there is no new work to confirm on site.', { italic: true, gapAfter: 12 });

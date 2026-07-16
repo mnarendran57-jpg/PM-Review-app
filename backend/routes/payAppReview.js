@@ -7,6 +7,7 @@ const { runChecks } = require('../lib/payAppChecks');
 const { buildReport } = require('../lib/payAppReport');
 const { renderPayAppReportPdf } = require('../lib/payAppReportPdf');
 const { extractContractTerms } = require('../lib/contractExtract');
+const { scanCompliance } = require('../lib/payAppCompliance');
 const { buildSiteVerificationChecklist } = require('../lib/payAppChecklist');
 const { backfillPayApp } = require('../lib/payAppNormalize');
 const { parseCoLogCsv } = require('../lib/csv');
@@ -196,10 +197,14 @@ router.get('/latest-for-project', (req, res) => {
   res.json({ id: row.id, applicationNumber: row.application_number, periodTo: row.period_to, current: extracted.current });
 });
 
-router.post('/', upload.single('current_file'), async (req, res) => {
+router.post('/', upload.fields([
+  { name: 'current_file', maxCount: 1 },
+  { name: 'backup_files', maxCount: 10 },
+]), async (req, res) => {
   try {
-    const currentFile = req.file;
+    const currentFile = req.files?.current_file?.[0];
     if (!currentFile) return res.status(400).json({ error: 'Current pay application PDF is required' });
+    const backupFiles = (req.files?.backup_files || []).filter(f => f.mimetype === 'application/pdf');
 
     const normalizePayApp = pa => pa && backfillPayApp({
       ...pa,
@@ -212,13 +217,10 @@ router.post('/', upload.single('current_file'), async (req, res) => {
     const previousReviewId = req.body.previous_review_id ? Number(req.body.previous_review_id) : null;
 
     let contract = null;
-    const originalContractSum = req.body.original_contract_sum ? parseFloat(req.body.original_contract_sum) : null;
+    let originalContractSum = req.body.original_contract_sum ? parseFloat(req.body.original_contract_sum) : null;
     let changeOrderLog = null;
     if (req.body.co_log_csv) changeOrderLog = parseCoLogCsv(req.body.co_log_csv);
     else if (req.body.co_log_json) changeOrderLog = JSON.parse(req.body.co_log_json);
-    if (originalContractSum != null || changeOrderLog) {
-      contract = { originalContractSum, changeOrderLog };
-    }
 
     let retainagePolicy = null;
     if (req.body.retainage_rate) {
@@ -243,9 +245,54 @@ router.post('/', upload.single('current_file'), async (req, res) => {
       }
     }
 
+    // The project's executed contract, if one is on file, is the source of truth for the
+    // contract-level figures the reviewer would otherwise re-type every period, and for
+    // the tax / unallowable-item rules. Anything typed on the form still wins — the PM
+    // overriding a term is a deliberate act.
+    let contractTerms = null;
+    if (projectId) {
+      const contractRow = db.prepare(`
+        SELECT terms FROM project_contracts WHERE project_id = ? ORDER BY created_at DESC LIMIT 1
+      `).get(projectId);
+      if (contractRow) contractTerms = JSON.parse(contractRow.terms);
+    }
+    if (contractTerms) {
+      if (originalContractSum == null && contractTerms.originalContractSum != null) {
+        originalContractSum = contractTerms.originalContractSum;
+      }
+      if (!retainagePolicy && contractTerms.retainageRate != null) {
+        retainagePolicy = { rate: contractTerms.retainageRate, reductionMilestonePct: null, reducedRate: null };
+      }
+    }
+    if (originalContractSum != null || changeOrderLog) {
+      contract = { originalContractSum, changeOrderLog };
+    }
+
     const data = { current, previous, contract, retainagePolicy };
     const results = runChecks(data);
-    const report = buildReport({ data, results });
+
+    // Advisory half: read the pay app (and any separate backup) against the contract's
+    // tax status and unallowable items. Never let this sink the review — the math checks
+    // above are the load-bearing part and have already succeeded.
+    let compliance = null;
+    if (contractTerms) {
+      try {
+        compliance = await scanCompliance({
+          payAppBuffer: currentFile.buffer,
+          backupBuffers: backupFiles.map(f => f.buffer),
+          contractTerms,
+        });
+      } catch (err) {
+        console.error('Compliance scan failed (review continues):', err.message);
+        compliance = {
+          taxFindings: [], unallowableFindings: [], backupCoverage: null,
+          notes: `The contract compliance scan could not be completed (${friendlyAiError(err)}). The math checks are unaffected.`,
+          incomplete: true,
+        };
+      }
+    }
+
+    const report = buildReport({ data, results, compliance, contractTerms });
 
     const criticalCount = results.filter(r => r.critical && r.status === 'FAIL').length;
     const failCount = results.filter(r => r.status === 'FAIL').length;
@@ -256,8 +303,9 @@ router.post('/', upload.single('current_file'), async (req, res) => {
         total_completed_to_date, current_payment_due, balance_to_finish,
         extracted_data, checks_result, report_markdown,
         current_file_name, current_file, previous_review_id,
-        contract_sum, co_log, critical_count, fail_count, created_by, project_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        contract_sum, co_log, critical_count, fail_count, created_by, project_id,
+        compliance_findings
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       current.summary.projectName || null,
       current.summary.applicationNumber ?? null,
@@ -275,7 +323,8 @@ router.post('/', upload.single('current_file'), async (req, res) => {
       changeOrderLog ? JSON.stringify(changeOrderLog) : null,
       criticalCount, failCount,
       req.body.created_by || null,
-      projectId
+      projectId,
+      compliance ? JSON.stringify(compliance) : null
     );
 
     res.json({ id: insertResult.lastInsertRowid, projectId, report, results });
@@ -309,6 +358,7 @@ router.get('/:id', (req, res) => {
     checks_result: JSON.parse(row.checks_result),
     checklist: buildSiteVerificationChecklist(extractedData.current, extractedData.previous),
     co_log: row.co_log ? JSON.parse(row.co_log) : null,
+    compliance_findings: row.compliance_findings ? JSON.parse(row.compliance_findings) : null,
   });
 });
 
@@ -330,7 +380,10 @@ router.get('/:id/report.pdf', async (req, res) => {
 
     const data = JSON.parse(row.extracted_data);
     const results = JSON.parse(row.checks_result);
-    const report = buildReport({ data, results });
+    const report = buildReport({
+      data, results,
+      compliance: row.compliance_findings ? JSON.parse(row.compliance_findings) : null,
+    });
 
     // Reuse the letterhead the user maintains on their default memo template, so
     // editing the address in Settings updates this report too.
