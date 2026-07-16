@@ -8,6 +8,7 @@ const { buildReport } = require('../lib/payAppReport');
 const { renderPayAppReportPdf } = require('../lib/payAppReportPdf');
 const { extractContractTerms } = require('../lib/contractExtract');
 const { scanCompliance } = require('../lib/payAppCompliance');
+const { buildSubReconciliation, runMissedItemChecks } = require('../lib/payAppReconcile');
 const { buildSiteVerificationChecklist } = require('../lib/payAppChecklist');
 const { backfillPayApp } = require('../lib/payAppNormalize');
 const { parseCoLogCsv } = require('../lib/csv');
@@ -294,22 +295,61 @@ router.post('/', upload.fields([
     }
 
     const data = { current, previous, contract, retainagePolicy };
-    const results = runChecks(data);
+    const subRecon = buildSubReconciliation(current);
+    const results = [
+      ...runChecks(data),
+      ...subRecon.results,
+      ...runMissedItemChecks({ current, previous, subReconciliation: subRecon }),
+    ];
+
+    // Scope baseline for the in/out-of-contract comparison: the contract's schedule of
+    // values when one was extracted, else the project's FIRST pay application, which
+    // established the agreed schedule. The first app is never compared against itself.
+    let scopeBaseline = null;
+    if (contractTerms?.scheduleOfValues?.length) {
+      scopeBaseline = { source: 'contract', items: contractTerms.scheduleOfValues };
+    } else if (projectId) {
+      const firstReview = db.prepare(`
+        SELECT id, application_number, extracted_data FROM pay_app_reviews WHERE project_id = ?
+        ORDER BY application_number ASC, created_at ASC LIMIT 1
+      `).get(projectId);
+      // The baseline must verifiably predate the application under review — comparing
+      // an app against its own stored review proves nothing, so when either
+      // application number is unknown, skip rather than guess.
+      if (firstReview && firstReview.application_number != null
+        && current.summary.applicationNumber != null
+        && firstReview.application_number < current.summary.applicationNumber) {
+        const firstItems = JSON.parse(firstReview.extracted_data)?.current?.lineItems || [];
+        if (firstItems.length) {
+          scopeBaseline = {
+            source: 'first_app',
+            items: firstItems.map(li => ({ itemNo: li.itemNo, description: li.description, amount: li.c ?? null })),
+          };
+        }
+      }
+    }
 
     // Advisory half: read the pay app (and any separate backup) against the contract's
-    // tax status and unallowable items. Never let this sink the review — the math checks
-    // above are the load-bearing part and have already succeeded.
+    // tax status and unallowable items, and compare billed lines to the agreed scope.
+    // Never let this sink the review — the math checks above are the load-bearing part
+    // and have already succeeded.
     let compliance = null;
-    if (contractTerms) {
+    if (contractTerms || scopeBaseline) {
       try {
         compliance = await scanCompliance({
           payAppBuffer: currentFile.buffer,
           backupBuffers: backupFiles.map(f => f.buffer),
           contractTerms,
+          scopeBaseline,
+          currentItems: current.lineItems.map(li => ({
+            itemNo: li.itemNo, description: li.description, scheduledValue: li.c ?? null, billedToDate: li.g ?? null,
+          })),
+          coLog: changeOrderLog,
         });
       } catch (err) {
         console.error('Compliance scan failed (review continues):', err.message);
         compliance = {
+          scopeComparison: null, scopeSource: null,
           taxFindings: [], unallowableFindings: [], backupCoverage: null,
           notes: `The contract compliance scan could not be completed (${friendlyAiError(err)}). The math checks are unaffected.`,
           incomplete: true,
@@ -317,7 +357,7 @@ router.post('/', upload.fields([
       }
     }
 
-    const report = buildReport({ data, results, compliance, contractTerms });
+    const report = buildReport({ data, results, compliance, contractTerms, subReconciliation: subRecon.rows });
 
     const criticalCount = results.filter(r => r.critical && r.status === 'FAIL').length;
     const failCount = results.filter(r => r.status === 'FAIL').length;
@@ -376,14 +416,24 @@ router.get('/:id', (req, res) => {
   const row = db.prepare('SELECT * FROM pay_app_reviews WHERE id=?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
   const extractedData = JSON.parse(row.extracted_data);
+  const results = JSON.parse(row.checks_result);
+  const compliance = row.compliance_findings ? JSON.parse(row.compliance_findings) : null;
+  // Rebuild the full report server-side — the sub-reconciliation chart is derived from
+  // the stored extraction, and one builder means the stored view can never drift from
+  // what the reviewer saw when the review ran.
+  const report = buildReport({
+    data: extractedData, results, compliance,
+    subReconciliation: buildSubReconciliation(extractedData.current).rows,
+  });
   res.json({
     ...row,
     current_file: undefined,
     extracted_data: extractedData,
-    checks_result: JSON.parse(row.checks_result),
-    checklist: buildSiteVerificationChecklist(extractedData.current, extractedData.previous),
+    checks_result: results,
+    checklist: report.checklist,
     co_log: row.co_log ? JSON.parse(row.co_log) : null,
-    compliance_findings: row.compliance_findings ? JSON.parse(row.compliance_findings) : null,
+    compliance_findings: compliance,
+    report,
   });
 });
 
@@ -408,6 +458,7 @@ router.get('/:id/report.pdf', async (req, res) => {
     const report = buildReport({
       data, results,
       compliance: row.compliance_findings ? JSON.parse(row.compliance_findings) : null,
+      subReconciliation: buildSubReconciliation(data.current).rows,
     });
 
     // Reuse the letterhead the user maintains on their default memo template, so

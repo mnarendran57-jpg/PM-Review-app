@@ -1,15 +1,20 @@
 const { money } = require('./payAppChecks');
 const { buildSiteVerificationChecklist } = require('./payAppChecklist');
 
-function buildReport({ data, results, compliance = null, contractTerms = null }) {
+function buildReport({ data, results, compliance = null, contractTerms = null, subReconciliation = [] }) {
   const s = data.current.summary;
-  const critical = results.filter(r => r.critical && r.status === 'FAIL');
-  const mathErrors = results.filter(r => !r.critical && r.status === 'FAIL');
+  // N-series checks are "missed and worth noting" observations, not calculation
+  // errors — they get their own section rather than being mixed into the math.
+  const isWorthNoting = r => String(r.id || '').startsWith('N');
+  const critical = results.filter(r => r.critical && r.status === 'FAIL' && !isWorthNoting(r));
+  const mathErrors = results.filter(r => !r.critical && r.status === 'FAIL' && !isWorthNoting(r));
+  const worthNoting = results.filter(r => r.status === 'FAIL' && isWorthNoting(r));
   const warnings = results.filter(r => r.status === 'SKIPPED');
   const cleanBill = results.filter(r => r.status === 'PASS');
   const checklist = buildSiteVerificationChecklist(data.current, data.previous);
   const complianceCount =
     (compliance?.taxFindings?.length || 0) + (compliance?.unallowableFindings?.length || 0);
+  const outOfContract = (compliance?.scopeComparison || []).filter(r => r.status === 'not_in_contract');
 
   const billedPct = s.line3 ? (s.line4 / s.line3) * 100 : null;
   const retainedPct = s.line4 ? (s.line5 / s.line4) * 100 : null;
@@ -29,8 +34,14 @@ function buildReport({ data, results, compliance = null, contractTerms = null })
   if (checklist.length > 0) {
     plainEnglish += ` ${checklist.length} item${checklist.length === 1 ? '' : 's'} to verify on site this period.`;
   }
+  if (worthNoting.length > 0) {
+    plainEnglish += ` ${worthNoting.length} item${worthNoting.length === 1 ? '' : 's'} worth noting.`;
+  }
   if (complianceCount > 0) {
     plainEnglish += ` ${complianceCount} possible contract conflict${complianceCount === 1 ? '' : 's'} flagged for review.`;
+  }
+  if (outOfContract.length > 0) {
+    plainEnglish += ` ${outOfContract.length} billed line${outOfContract.length === 1 ? '' : 's'} appear${outOfContract.length === 1 ? 's' : ''} to be outside the contract scope.`;
   }
 
   const header = {
@@ -44,12 +55,12 @@ function buildReport({ data, results, compliance = null, contractTerms = null })
     billedPct, retainedPct,
   };
 
-  const markdown = renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, cleanBill, checklist, compliance, contractTerms });
+  const markdown = renderMarkdown({ header, plainEnglish, critical, mathErrors, worthNoting, warnings, cleanBill, checklist, compliance, contractTerms, subReconciliation });
 
-  return { header, plainEnglish, critical, mathErrors, warnings, cleanBill, checklist, compliance, contractTerms, markdown };
+  return { header, plainEnglish, critical, mathErrors, worthNoting, warnings, cleanBill, checklist, compliance, contractTerms, subReconciliation, markdown };
 }
 
-function renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, cleanBill, checklist, compliance, contractTerms }) {
+function renderMarkdown({ header, plainEnglish, critical, mathErrors, worthNoting, warnings, cleanBill, checklist, compliance, contractTerms, subReconciliation }) {
   const lines = [];
   lines.push(`# Pay Application Review — ${header.projectName}`);
   lines.push('');
@@ -80,6 +91,24 @@ function renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, 
 
   section('Issues to Resolve Before Approving', critical, '_None._');
   section('Other Calculation Problems Found', mathErrors, '_None._');
+  section('Missed or Worth Noting', worthNoting, '_Nothing missing or unusual stood out._');
+
+  // Chart 1: each subcontractor's own cost breakdown reconciled against the billing
+  // summary line it supports. Shown whenever breakdowns exist — matches included,
+  // because the reconciliation itself is the deliverable.
+  if (subReconciliation && subReconciliation.length > 0) {
+    lines.push('## Subcontractor Billing vs. Their Cost Breakdown');
+    lines.push('');
+    lines.push('| Subcontractor | Billed on summary | Their breakdown | Difference | Status |');
+    lines.push('|---|---:|---:|---:|---|');
+    for (const r of subReconciliation) {
+      const status = r.status === 'match' ? 'Matches'
+        : r.status === 'mismatch' ? '**MISMATCH**'
+        : 'No matching billing line';
+      lines.push(`| ${r.subName}${r.comparedTo ? ` (${r.comparedTo})` : ''} | ${r.g703Amount != null ? money(r.g703Amount) : '—'} | ${money(r.breakdownTotal)} | ${r.difference ? money(r.difference) : '—'} | ${status} |`);
+    }
+    lines.push('');
+  }
 
   lines.push('## Site Verification Checklist — confirm on site before approving');
   lines.push('');
@@ -101,6 +130,24 @@ function renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, 
     lines.push('');
     lines.push('> These are read from the documents rather than calculated, so treat them as items to verify before approving, not as proven errors.');
     lines.push('');
+
+    // Chart 2: every billed line classified against the agreed scope.
+    if (compliance.scopeComparison?.length) {
+      lines.push(`### Billed Scope vs. ${compliance.scopeSource === 'contract' ? 'the Contract' : 'the Original Schedule (App #1)'}`);
+      lines.push('');
+      lines.push('| Item | Scheduled value | Status | Notes |');
+      lines.push('|---|---:|---|---|');
+      for (const r of compliance.scopeComparison) {
+        const status = r.status === 'in_contract' ? 'In contract'
+          : r.status === 'changed' ? 'In contract — value changed'
+          : r.status === 'covered_by_co' ? `Approved change${r.coNumber ? ` (${r.coNumber})` : ''}`
+          : '**NOT IN CONTRACT**';
+        const note = r.status === 'not_in_contract' ? (r.note || 'No scheduled line or change order covers this — challenge before approving.')
+          : (r.matchedTo && r.status !== 'in_contract' ? r.matchedTo : '');
+        lines.push(`| ${r.itemNo ? `#${r.itemNo} ` : ''}${r.description} | ${r.scheduledValue != null ? money(r.scheduledValue) : '—'} | ${status} | ${note} |`);
+      }
+      lines.push('');
+    }
 
     if (compliance.taxFindings?.length) {
       lines.push(`### Tax found${contractTerms?.taxExempt === true ? ' on a tax-exempt project' : ''}`);

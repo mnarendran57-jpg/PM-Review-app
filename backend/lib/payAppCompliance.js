@@ -12,13 +12,29 @@ function safeJsonFromText(text) {
   }
 }
 
-function buildPrompt(contractTerms) {
-  const banned = contractTerms.unallowableItems || [];
-  return `You are auditing a subcontractor's pay application and its backup documentation
+function buildPrompt({ contractTerms, scopeBaseline, currentItems, coLog }) {
+  const banned = contractTerms?.unallowableItems || [];
+  const scopeSection = scopeBaseline
+    ? `
+For the scope comparison, the agreed schedule of values (${scopeBaseline.source === 'contract'
+      ? 'from the executed contract'
+      : "from the project's first pay application, which established the schedule"}):
+${JSON.stringify(scopeBaseline.items, null, 2)}
+
+The line items billed on the CURRENT application:
+${JSON.stringify(currentItems, null, 2)}
+
+${coLog?.length
+      ? `Approved change orders on this project:\n${JSON.stringify(coLog, null, 2)}`
+      : 'No change order log was provided.'}
+`
+    : '';
+
+  return `You are auditing a contractor's pay application and its backup documentation
 (receipts, invoices, lien waivers) against the executed contract, on behalf of the
 owner's project manager.
 
-The contract's relevant terms, already verified by the PM:
+${contractTerms ? `The contract's relevant terms, already verified by the PM:
 ${JSON.stringify(
     {
       taxExempt: contractTerms.taxExempt,
@@ -26,11 +42,22 @@ ${JSON.stringify(
       unallowableItems: banned,
     },
     null, 2
-  )}
-
+  )}` : 'No contract terms are on file — skip the tax and unallowable-item review (return empty arrays for those) and perform only the scope comparison.'}
+${scopeSection}
 Return ONLY valid JSON in this exact shape:
 
 {
+  "scopeComparison": ${scopeBaseline ? `[
+    {
+      "itemNo": "<the current application's item number, as given above>",
+      "description": "<the current application's line description>",
+      "scheduledValue": <that line's scheduled value, number or null>,
+      "status": "<\\"in_contract\\" | \\"changed\\" | \\"covered_by_co\\" | \\"not_in_contract\\">",
+      "matchedTo": "<which schedule-of-values line it corresponds to, or null>",
+      "coNumber": "<the change order that covers it, only when status is covered_by_co, else null>",
+      "note": "<one plain-English sentence when status is not in_contract, else null>"
+    }
+  ]` : 'null'},
   "taxFindings": [
     {
       "where": "<which document/page/line this appears on>",
@@ -52,9 +79,16 @@ Return ONLY valid JSON in this exact shape:
 }
 
 Rules:
-- ${contractTerms.taxExempt === true
+${scopeBaseline ? `- "scopeComparison": every line item on the CURRENT application must appear exactly once.
+  Match lines to the schedule of values by meaning, not exact wording ("Elec rough-in" and
+  "Electrical rough in" are the same item). "in_contract" = matches a scheduled line at the
+  same value; "changed" = matches a scheduled line but its scheduled value differs from the
+  agreed amount; "covered_by_co" = not in the original schedule but plausibly covered by one
+  of the approved change orders listed (name it); "not_in_contract" = no scheduled match and
+  no change order covers it — these are the ones the PM must challenge.
+` : ''}- ${contractTerms?.taxExempt === true
     ? 'This project IS tax exempt. Report EVERY instance of sales/use tax you can find charged anywhere in these documents — on the pay application itself or on any receipt or invoice in the backup. This is the single most important thing to catch.'
-    : contractTerms.taxExempt === false
+    : contractTerms?.taxExempt === false
       ? 'This project is NOT tax exempt, so tax is expected. Only report tax that looks wrong (e.g. wrong rate, tax charged twice). Do not report ordinary correct tax.'
       : 'The contract does not state the tax status. Report any tax you find, and note that the PM must confirm whether it is allowed — do not assert that it is wrong.'}
 - For "unallowableFindings", only report costs matching an item in the contract's
@@ -71,7 +105,9 @@ Rules:
 async function callClaude(content) {
   return client.messages.create({
     model: 'claude-sonnet-4-5',
-    max_tokens: 8000,
+    // Raised from 8000 when the scope comparison was added — its table returns one
+    // row per G703 line item.
+    max_tokens: 12000,
     messages: [{ role: 'user', content }],
   });
 }
@@ -84,8 +120,10 @@ async function callClaude(content) {
 //
 // Returns advisory findings — this is a model reading documents and exercising
 // judgment, not arithmetic. The caller renders it separately from the math checks.
-async function scanCompliance({ payAppBuffer, backupBuffers = [], contractTerms }) {
-  if (!contractTerms) return null;
+async function scanCompliance({ payAppBuffer, backupBuffers = [], contractTerms, scopeBaseline = null, currentItems = null, coLog = null }) {
+  // Runs with contract terms (tax + unallowable review), a scope baseline (in/out-of-
+  // contract comparison), or both. With neither there is nothing to audit against.
+  if (!contractTerms && !scopeBaseline) return null;
 
   const content = [
     { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: payAppBuffer.toString('base64') } },
@@ -93,7 +131,7 @@ async function scanCompliance({ payAppBuffer, backupBuffers = [], contractTerms 
   for (const buf of backupBuffers) {
     content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') } });
   }
-  content.push({ type: 'text', text: buildPrompt(contractTerms) });
+  content.push({ type: 'text', text: buildPrompt({ contractTerms, scopeBaseline, currentItems, coLog }) });
 
   let response;
   try {
@@ -111,6 +149,7 @@ async function scanCompliance({ payAppBuffer, backupBuffers = [], contractTerms 
     // Don't fail the whole review over the advisory half — the math checks are the
     // load-bearing part and they have already run.
     return {
+      scopeComparison: null, scopeSource: null,
       taxFindings: [], unallowableFindings: [], backupCoverage: null,
       notes: 'The contract compliance scan was cut off — there was more backup documentation than could be read in one pass. The math checks above are unaffected, but the compliance review is incomplete.',
       incomplete: true,
@@ -122,6 +161,10 @@ async function scanCompliance({ payAppBuffer, backupBuffers = [], contractTerms 
     console.log(`[compliance scan] in=${response.usage.input_tokens} out=${response.usage.output_tokens} tokens`);
   }
   return {
+    scopeComparison: scopeBaseline && Array.isArray(parsed.scopeComparison)
+      ? parsed.scopeComparison.filter(r => r && r.description)
+      : null,
+    scopeSource: scopeBaseline ? scopeBaseline.source : null,
     taxFindings: Array.isArray(parsed.taxFindings) ? parsed.taxFindings : [],
     unallowableFindings: Array.isArray(parsed.unallowableFindings) ? parsed.unallowableFindings : [],
     backupCoverage: parsed.backupCoverage || null,

@@ -59,6 +59,27 @@ const PAY_APP_SHAPE = `{
     "coBreakdown": [ { "coNumber": "<CO number>", "amount": <number> } ] or null if there is no itemized change-order breakdown section
   }`;
 
+// Subcontractor cost-breakdown sections appear after the continuation sheet in many pay
+// apps: a per-sub page detailing the amount that appears as a single line on the G703.
+// Only extracted for the CURRENT application — the previous app's breakdowns feed nothing.
+const SUB_BREAKDOWN_SHAPE = `,
+    "subBreakdowns": [
+      {
+        "subName": "<name of the subcontractor or vendor this breakdown belongs to>",
+        "matchesItemNo": "<the continuation-sheet item number this breakdown supports, if stated or inferable, else null>",
+        "matchesDescription": "<the continuation-sheet line description it supports, else null>",
+        "basis": "<\\"this-period\\" if the breakdown covers the amount billed this period, \\"to-date\\" if it covers the total billed to date, or \\"unclear\\">",
+        "statedTotal": <the total printed on the breakdown itself, number or null>,
+        "components": [ { "description": "<string>", "amount": <number> } ]
+      }
+    ] or [] if the document contains no subcontractor cost-breakdown sections`;
+
+function payAppShape(withSubBreakdowns) {
+  return withSubBreakdowns
+    ? PAY_APP_SHAPE.replace(/\n  \}$/, `${SUB_BREAKDOWN_SHAPE}\n  }`)
+    : PAY_APP_SHAPE;
+}
+
 function buildPrompt(hasPrevious) {
   return `You are reading contractor Application(s) and Certificate(s) for Payment (AIA G702-style summary sheet plus G703-style continuation sheet, or an equivalent format) for a construction project.
 
@@ -73,8 +94,8 @@ Lines 1-9 on the summary/cover sheet are almost always printed explicitly somewh
 Respond with ONLY a raw JSON object (no markdown, no commentary) matching this exact shape:
 
 {
-  "current": ${PAY_APP_SHAPE},
-  "previous": ${hasPrevious ? PAY_APP_SHAPE : 'null'}
+  "current": ${payAppShape(true)},
+  "previous": ${hasPrevious ? payAppShape(false) : 'null'}
 }
 
 Rules:
@@ -83,7 +104,8 @@ Rules:
 - Rates are decimals (10% -> 0.10), not the number 10.
 - If a continuation sheet spans multiple pages, include every line item from every page in that application's single "lineItems" array, in order.
 - Do not skip any line item, including subtotal-only rows unless they are clearly a page subtotal (put those in pageSubtotals, not lineItems) or the final grand total (put that in grandTotalRow, not lineItems).
-- Never merge or average line items to shorten the response — every row on the continuation sheet must appear.`;
+- Never merge or average line items to shorten the response — every row on the continuation sheet must appear.
+- "subBreakdowns" (current application only): capture EVERY subcontractor or vendor cost-breakdown section that appears after the continuation sheet — these detail the amount shown as a single line on the G703. Read "basis" from the breakdown's own wording (a heading like "this period" or "billed to date"); use "unclear" rather than guessing. Include every component row. If the document has no such sections, use [].`;
 }
 
 async function callClaude(content) {

@@ -32,6 +32,9 @@ Return ONLY valid JSON in this exact shape:
       "basis": "<the clause or wording that makes it unallowable>"
     }
   ],
+  "scheduleOfValues": [
+    { "itemNo": "<item number as printed, or null>", "description": "<scope line description>", "amount": <number or null> }
+  ],
   "notes": "<anything a PM auditing pay apps should know, or null>"
 }
 
@@ -48,12 +51,17 @@ Rules:
 - Dollar amounts are plain numbers (no "$", no commas). Rates are decimals (10% -> 0.10).
 - If a field cannot be found with confidence, use null. Do not use the string "Not specified".
 - Prefer returning fewer, well-grounded items over a long speculative list. A project manager
-  will act on these, so a false flag costs them real time.`;
+  will act on these, so a false flag costs them real time.
+- "scheduleOfValues": ONLY if the contract includes a schedule of values, exhibit, or scope
+  breakdown listing the priced items of work. Transcribe every line of it. If the contract has
+  no such list, return [] — do not reconstruct one from prose scope descriptions.`;
 
 async function callClaude(content) {
   return client.messages.create({
     model: 'claude-sonnet-4-5',
-    max_tokens: 8000,
+    // Raised from 8000 when schedule-of-values extraction was added — a long SOV
+    // exhibit is the largest thing this call can now be asked to transcribe.
+    max_tokens: 16000,
     messages: [{ role: 'user', content }],
   });
 }
@@ -95,6 +103,15 @@ async function extractContractTerms(contractBuffer) {
     retainageRate: typeof parsed.retainageRate === 'number' ? parsed.retainageRate : null,
     unallowableItems: Array.isArray(parsed.unallowableItems)
       ? parsed.unallowableItems.filter(i => i && i.item).map(i => ({ item: String(i.item), basis: i.basis || null }))
+      : [],
+    scheduleOfValues: Array.isArray(parsed.scheduleOfValues)
+      ? parsed.scheduleOfValues
+          .filter(i => i && i.description)
+          .map(i => ({
+            itemNo: i.itemNo != null ? String(i.itemNo) : null,
+            description: String(i.description),
+            amount: typeof i.amount === 'number' ? i.amount : null,
+          }))
       : [],
     notes: parsed.notes || null,
     usage: response.usage

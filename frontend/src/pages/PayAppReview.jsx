@@ -437,33 +437,10 @@ export default function PayAppReview() {
 
   const handleView = async id => {
     const record = await payAppReviewApi.get(id);
-    const s = record.extracted_data.current.summary;
-    const critical = record.checks_result.filter(r => r.critical && r.status === 'FAIL');
-    const mathErrors = record.checks_result.filter(r => !r.critical && r.status === 'FAIL');
-    const warnings = record.checks_result.filter(r => r.status === 'SKIPPED');
-    const cleanBill = record.checks_result.filter(r => r.status === 'PASS');
-    const billedPct = s.line3 ? (s.line4 / s.line3) * 100 : null;
-    const retainedPct = s.line4 ? (s.line5 / s.line4) * 100 : null;
-    let plainEnglish;
-    if (critical.length === 0 && mathErrors.length === 0) {
-      plainEnglish = `This application requests ${money(s.line8)}. Math checks out — no issues found.`;
-    } else {
-      const total = critical.length + mathErrors.length;
-      plainEnglish = `This application requests ${money(s.line8)}. ${total} issue${total === 1 ? '' : 's'} found${critical.length ? ` (${critical.length} critical).` : '.'}`;
-    }
-    if (billedPct != null) plainEnglish += ` Overall billing is at ${billedPct.toFixed(1)}% of contract sum${retainedPct != null ? `, ${retainedPct.toFixed(1)}% retained.` : '.'}`;
-    setViewing({
-      id,
-      report: {
-        header: {
-          projectName: s.projectName || 'Not specified', applicationNumber: s.applicationNumber ?? 'Not specified',
-          periodTo: s.periodTo || 'Not specified', currentPaymentDue: s.line8, totalCompletedToDate: s.line4,
-          balanceToFinish: s.line9, contractSumToDate: s.line3, billedPct, retainedPct,
-        },
-        plainEnglish, critical, mathErrors, warnings, cleanBill, checklist: record.checklist || [],
-        compliance: record.compliance_findings || null,
-      },
-    });
+    // The backend builds the full report (both charts, worth-noting, compliance) from the
+    // stored data, so use it directly rather than reassembling it here — a second builder
+    // silently drifts from the first.
+    setViewing({ id, report: record.report });
     setResult(null);
   };
 
