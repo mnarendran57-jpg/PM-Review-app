@@ -113,6 +113,27 @@ function ContractPanel({ projectId, contract, onChange }) {
     finally { setBusy(false); }
   };
 
+  // Shown even with no project selected. A contract attaches to a project, so it can't
+  // actually be uploaded yet — but hiding the control entirely made it undiscoverable,
+  // and the reviewer had no way to know the feature existed at all.
+  if (!projectId) {
+    return (
+      <div className="space-y-2 opacity-60">
+        <div>
+          <label className="label">Executed Contract (PDF)</label>
+          <div className="rounded-xl px-4 py-6 text-center" style={{ border: '1px dashed #e2e8f0', background: '#fafbfc' }}>
+            <DocumentTextIcon className="w-5 h-5 mx-auto text-gray-300" />
+            <p className="text-xs text-gray-400 mt-1.5">Pick a project above to attach the contract</p>
+          </div>
+        </div>
+        <p className="text-[11px] text-gray-400">
+          Uploaded once per project. Its terms drive the tax and unallowable-cost checks on every
+          pay app for that project.
+        </p>
+      </div>
+    );
+  }
+
   if (!contract) {
     return (
       <div className="space-y-2">
@@ -481,9 +502,7 @@ export default function PayAppReview() {
               </p>
             </div>
 
-            {projectId && (
-              <ContractPanel projectId={projectId} contract={contract} onChange={loadContract} />
-            )}
+            <ContractPanel projectId={projectId} contract={contract} onChange={loadContract} />
 
             <FileDrop file={currentFile} onChange={setCurrentFile} label="Current Pay Application (PDF) *" />
             <FileDrop file={previousFile} onChange={setPreviousFile} label="Previous Pay Application (PDF)" />
