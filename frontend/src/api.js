@@ -139,6 +139,8 @@ export const payAppReviewApi = {
     headers: { 'Content-Type': 'multipart/form-data' }
   }).then(r => r.data),
   projects: () => api.get('/pay-app-review/projects').then(r => r.data),
+  createProject: projectName =>
+    api.post('/pay-app-review/projects', { project_name: projectName }).then(r => r.data),
   projectHistory: projectId => api.get(`/pay-app-review/project/${projectId}/history`).then(r => r.data),
   getContract: projectId => api.get(`/pay-app-review/project/${projectId}/contract`).then(r => r.data),
   uploadContract: (projectId, formData) =>

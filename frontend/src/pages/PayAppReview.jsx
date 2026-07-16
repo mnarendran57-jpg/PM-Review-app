@@ -312,9 +312,32 @@ export default function PayAppReview() {
   const [projectId, setProjectId] = useState('');
   const [budget, setBudget] = useState(null); // { project, applications, summary }
 
+  const [addingProject, setAddingProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [creatingProject, setCreatingProject] = useState(false);
+
   const loadHistory = () => payAppReviewApi.list().then(setHistory);
   const loadProjects = () => payAppReviewApi.projects().then(setProjects);
   useEffect(() => { loadHistory(); loadProjects(); }, []);
+
+  // Adding a project selects it immediately — the reviewer's next move is always to
+  // upload something against it, so making them re-find it in the list is pure friction.
+  const createProject = async () => {
+    const name = newProjectName.trim();
+    if (!name) return;
+    setCreatingProject(true); setError('');
+    try {
+      const created = await payAppReviewApi.createProject(name);
+      await loadProjects();
+      setProjectId(String(created.id));
+      setAddingProject(false);
+      setNewProjectName('');
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not add this project.');
+    } finally {
+      setCreatingProject(false);
+    }
+  };
 
   const [contract, setContract] = useState(null);
 
@@ -484,22 +507,57 @@ export default function PayAppReview() {
 
             <div>
               <label className="label">Project</label>
-              <select className="input" value={projectId} onChange={e => setProjectId(e.target.value)}>
-                <option value="">Which project is this pay app for?</option>
-                {projects.map(p => (
-                  <option key={p.id} value={p.id}>
-                    {p.project_name}
-                    {p.pay_app_count > 0
-                      ? ` — ${p.pay_app_count} reviewed, latest App #${p.latest_application_number ?? '—'}`
-                      : ' — no pay apps yet'}
+              {addingProject ? (
+                <div className="space-y-2">
+                  <input
+                    className="input" autoFocus placeholder="Project name — e.g. Aldine ISD — Middle School Rebuild"
+                    value={newProjectName}
+                    onChange={e => setNewProjectName(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') { e.preventDefault(); createProject(); }
+                      if (e.key === 'Escape') { setAddingProject(false); setNewProjectName(''); }
+                    }}
+                  />
+                  <div className="flex items-center gap-2">
+                    <button type="button" className="btn-primary flex-1 justify-center py-1.5 text-xs"
+                      onClick={createProject} disabled={creatingProject || !newProjectName.trim()}>
+                      {creatingProject ? 'Adding…' : 'Add project'}
+                    </button>
+                    <button type="button" className="btn-secondary px-3 py-1.5 text-xs"
+                      onClick={() => { setAddingProject(false); setNewProjectName(''); }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <select
+                  className="input" value={projectId}
+                  onChange={e => {
+                    if (e.target.value === '__new__') { setAddingProject(true); return; }
+                    setProjectId(e.target.value);
+                  }}
+                >
+                  <option value="">
+                    {projects.length ? 'Which project is this pay app for?' : 'No projects yet — add one to get started'}
                   </option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-400 mt-1">
-                {projectId
-                  ? 'This application will be compared against this project\'s billing history.'
-                  : 'Leave blank and the project will be picked up from the name on the PDF.'}
-              </p>
+                  {projects.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.project_name}
+                      {p.pay_app_count > 0
+                        ? ` — ${p.pay_app_count} reviewed, latest App #${p.latest_application_number ?? '—'}`
+                        : ' — no pay apps yet'}
+                    </option>
+                  ))}
+                  <option value="__new__">+ Add a new project…</option>
+                </select>
+              )}
+              {!addingProject && (
+                <p className="text-xs text-gray-400 mt-1">
+                  {projectId
+                    ? 'This application will be compared against this project\'s billing history.'
+                    : 'Pick a project, or add one — then upload the contract and pay applications below.'}
+                </p>
+              )}
             </div>
 
             <ContractPanel projectId={projectId} contract={contract} onChange={loadContract} />

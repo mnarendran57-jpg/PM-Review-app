@@ -57,6 +57,31 @@ router.get('/projects', (req, res) => {
   `).all());
 });
 
+// Create a project up front. Projects are also created implicitly when a pay app names a
+// new one, but that left a fresh install with nothing to select — and therefore no way to
+// attach a contract, which must exist before the first pay app is reviewed if the tax and
+// unallowable-cost checks are to run on it.
+router.post('/projects', (req, res) => {
+  const name = (req.body.project_name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Project name is required' });
+
+  const existing = db.prepare(`SELECT id, project_name, status FROM projects WHERE project_name = ?`).get(name);
+  if (existing) {
+    // Re-selecting an existing project is the sane outcome here; a duplicate-name error
+    // would just make the reviewer guess at what is already on file.
+    if (existing.status !== 'Active') {
+      db.prepare(`UPDATE projects SET status='Active' WHERE id=?`).run(existing.id);
+    }
+    return res.json({ id: existing.id, project_name: existing.project_name, existed: true });
+  }
+
+  const result = db.prepare(`
+    INSERT INTO projects (project_name, project_number, client_name, status)
+    VALUES (?, ?, ?, 'Active')
+  `).run(name, req.body.project_number || null, req.body.client_name || null);
+  res.json({ id: result.lastInsertRowid, project_name: name, existed: false });
+});
+
 // Billing history for one project: every pay app reviewed so far, oldest first, with the
 // period-over-period movement. This is what makes a new application legible in context —
 // "is this pace normal for this job?" — rather than as an isolated document.
