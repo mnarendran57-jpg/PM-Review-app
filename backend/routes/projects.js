@@ -34,12 +34,29 @@ router.post('/', (req, res) => {
     contract_value, start_date, projected_end_date, status,
     project_manager, notes
   } = req.body;
+  // Only the project name is required. Every other field is optional — coerce any that
+  // weren't sent to null/defaults, because node:sqlite rejects `undefined` bindings and
+  // the create-project form only sends a name and (optionally) a client.
+  if (!project_name || !String(project_name).trim()) {
+    return res.status(400).json({ error: 'Project name is required' });
+  }
   const result = db.prepare(`
     INSERT INTO projects (project_name, project_number, client_name, project_type, project_type_other,
       contract_value, start_date, projected_end_date, status, project_manager, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(project_name, project_number, client_name, project_type, project_type_other || null,
-    contract_value, start_date, projected_end_date, status, project_manager, notes);
+  `).run(
+    String(project_name).trim(),
+    project_number ?? null,
+    client_name ?? null,
+    project_type ?? 'MEP',
+    project_type_other ?? null,
+    contract_value ?? null,
+    start_date ?? null,
+    projected_end_date ?? null,
+    status ?? 'Active',
+    project_manager ?? null,
+    notes ?? null
+  );
   res.json({ id: result.lastInsertRowid });
 });
 
@@ -53,8 +70,20 @@ router.put('/:id', (req, res) => {
     UPDATE projects SET project_name=?, project_number=?, client_name=?, project_type=?, project_type_other=?,
       contract_value=?, start_date=?, projected_end_date=?, status=?, project_manager=?, notes=?
     WHERE id=?
-  `).run(project_name, project_number, client_name, project_type, project_type_other || null,
-    contract_value, start_date, projected_end_date, status, project_manager, notes, req.params.id);
+  `).run(
+    project_name ?? null,
+    project_number ?? null,
+    client_name ?? null,
+    project_type ?? 'MEP',
+    project_type_other ?? null,
+    contract_value ?? null,
+    start_date ?? null,
+    projected_end_date ?? null,
+    status ?? 'Active',
+    project_manager ?? null,
+    notes ?? null,
+    req.params.id
+  );
   res.json({ success: true });
 });
 
