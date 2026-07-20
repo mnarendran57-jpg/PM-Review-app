@@ -8,10 +8,10 @@ const { friendlyAiError } = require('../lib/aiErrors');
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024, files: 10 }
+  limits: { fileSize: 500 * 1024 * 1024, files: 100 }
 });
 
-router.post('/', upload.array('documents', 10), async (req, res) => {
+router.post('/', upload.array('documents', 100), async (req, res) => {
   try {
     const files = req.files;
     if (!files || files.length === 0) {

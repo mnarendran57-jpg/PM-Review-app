@@ -4,8 +4,8 @@ import { CloudArrowUpIcon, DocumentIcon, XMarkIcon } from '@heroicons/react/24/o
 export default function MultiFileDrop({
   files, onChange, label,
   accept = '.pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.xls,.xlsx',
-  hint = 'PDF, images, Word/Excel · max 20 MB each, up to 10 files',
-  maxFiles = 10,
+  hint = 'PDF, images, Word/Excel · no size or file-count limit',
+  maxFiles = 100,
 }) {
   const ref = useRef();
   const [dragOver, setDragOver] = useState(false);

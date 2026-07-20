@@ -6,7 +6,7 @@ const db = require('../database');
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 }
+  limits: { fileSize: 500 * 1024 * 1024 }
 });
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -22,7 +22,7 @@ const MEDIA_TYPES = {
 function buildPrompt(docType, contextNotes, generalSubType) {
   const ctx = contextNotes ? `\n\nUser context: ${contextNotes}` : '';
   const prompts = {
-    'Pay Application': `You are a construction project manager reviewing a pay application for Olivier Inc., an MEP consulting firm. Review this pay application carefully.${ctx}
+    'Pay Application': `You are a construction project manager reviewing a pay application for TandemIQ, an MEP consulting firm. Review this pay application carefully.${ctx}
 
 Structure your response as follows:
 
@@ -47,7 +47,7 @@ Structure your response as follows:
 **[APPROVE / APPROVE WITH COMMENTS / HOLD FOR CLARIFICATION]**
 [1–2 sentence justification]`,
 
-    'Invoice': `You are a construction project manager reviewing an invoice for Olivier Inc., an MEP consulting firm.${ctx}
+    'Invoice': `You are a construction project manager reviewing an invoice for TandemIQ, an MEP consulting firm.${ctx}
 
 Structure your response as follows:
 
@@ -66,7 +66,7 @@ Structure your response as follows:
 **[APPROVE / QUERY / REJECT]**
 [1–2 sentence justification]`,
 
-    'RFI': `You are a construction project manager reviewing an RFI for Olivier Inc., an MEP consulting firm.${ctx}
+    'RFI': `You are a construction project manager reviewing an RFI for TandemIQ, an MEP consulting firm.${ctx}
 
 Structure your response as follows:
 
@@ -88,7 +88,7 @@ Structure your response as follows:
 **[HIGH / MEDIUM / LOW]**
 [Brief reasoning]`,
 
-    'Submittal': `You are a construction project manager reviewing a submittal for Olivier Inc., an MEP consulting firm.${ctx}
+    'Submittal': `You are a construction project manager reviewing a submittal for TandemIQ, an MEP consulting firm.${ctx}
 
 Structure your response as follows:
 
@@ -107,7 +107,7 @@ Structure your response as follows:
 **[APPROVED / APPROVED AS NOTED / REVISE AND RESUBMIT / REJECTED]**
 [Notes justifying the action and any conditions]`,
 
-    'Change Order': `You are a construction project manager reviewing a change order for Olivier Inc., an MEP consulting firm.${ctx}
+    'Change Order': `You are a construction project manager reviewing a change order for TandemIQ, an MEP consulting firm.${ctx}
 
 Structure your response as follows:
 
@@ -129,7 +129,7 @@ Structure your response as follows:
 **[APPROVE / NEGOTIATE / REJECT]**
 [1–2 sentence justification]`,
 
-    'Construction Drawing': `You are a construction project manager reviewing construction drawings for Olivier Inc., an MEP consulting firm.${ctx}
+    'Construction Drawing': `You are a construction project manager reviewing construction drawings for TandemIQ, an MEP consulting firm.${ctx}
 
 Structure your response as follows:
 
@@ -150,7 +150,7 @@ Structure your response as follows:
 ### Scope Boundary Issues
 [Flag any ambiguity in who is responsible for what work]`,
 
-    'General / Other': `You are a construction project manager reviewing a document for Olivier Inc., an MEP consulting firm.${ctx}${generalSubType ? `\n\nDocument type specified by user: ${generalSubType}` : ''}
+    'General / Other': `You are a construction project manager reviewing a document for TandemIQ, an MEP consulting firm.${ctx}${generalSubType ? `\n\nDocument type specified by user: ${generalSubType}` : ''}
 
 Structure your response as follows:
 

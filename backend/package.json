@@ -1,7 +1,7 @@
 {
   "name": "pm-review-backend",
   "version": "1.0.0",
-  "description": "Olivier Inc. PM Review Tool - Backend",
+  "description": "TandemIQ - Backend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

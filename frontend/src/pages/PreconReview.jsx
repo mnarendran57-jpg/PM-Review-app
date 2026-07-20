@@ -4,6 +4,7 @@ import {
   DocumentTextIcon, DocumentMagnifyingGlassIcon, ClipboardDocumentCheckIcon,
 } from '@heroicons/react/24/outline';
 import { preconReviewApi } from '../api';
+import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import MultiFileDrop from '../components/MultiFileDrop';
 import PreconReviewView from '../components/PreconReviewView';
@@ -36,6 +37,8 @@ function HistoryItem({ item, onView, onDelete }) {
 }
 
 export default function PreconReview() {
+  const ctx = useProject();
+  const routeProjectName = ctx?.project?.project_name;
   const [files, setFiles] = useState([]);
   const [projectName, setProjectName] = useState('');
   const [reviewFocus, setReviewFocus] = useState('');
@@ -59,7 +62,7 @@ export default function PreconReview() {
     try {
       const fd = new FormData();
       files.forEach(f => fd.append('documents', f));
-      if (projectName) fd.append('project_name', projectName);
+      if (routeProjectName || projectName) fd.append('project_name', routeProjectName || projectName);
       if (reviewFocus) fd.append('review_focus', reviewFocus);
       const data = await preconReviewApi.create(fd);
       setResult(data);
@@ -119,10 +122,12 @@ export default function PreconReview() {
 
             <MultiFileDrop files={files} onChange={setFiles} label="Project Documents *" />
 
-            <div>
-              <label className="label">Project Name (optional)</label>
-              <input className="input" value={projectName} onChange={e => setProjectName(e.target.value)} placeholder="e.g. HCC Building Mechanical Upgrade" />
-            </div>
+            {!routeProjectName && (
+              <div>
+                <label className="label">Project Name (optional)</label>
+                <input className="input" value={projectName} onChange={e => setProjectName(e.target.value)} placeholder="e.g. HCC Building Mechanical Upgrade" />
+              </div>
+            )}
             <div>
               <label className="label">Review Focus (optional)</label>
               <textarea className="input" rows={2} value={reviewFocus} onChange={e => setReviewFocus(e.target.value)} placeholder="e.g. Pay attention to electrical capacity and phasing risk" />

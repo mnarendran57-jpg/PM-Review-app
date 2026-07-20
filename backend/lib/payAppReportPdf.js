@@ -1,8 +1,7 @@
-const fs = require('fs');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const { money } = require('./payAppChecks');
 const {
-  wrapLine, PAGE_WIDTH, PAGE_HEIGHT, MARGIN, CONTENT_WIDTH, LOGO_PATH,
+  wrapLine, PAGE_WIDTH, PAGE_HEIGHT, MARGIN, CONTENT_WIDTH,
 } = require('./pdfGen');
 
 const BODY_SIZE = 10;
@@ -10,7 +9,7 @@ const RED = rgb(0.65, 0.13, 0.13);
 const GREY = rgb(0.35, 0.35, 0.35);
 const INK = rgb(0.1, 0.1, 0.1);
 
-// Renders the pay app review report as a client-facing PDF on Olivier letterhead.
+// Renders the pay app review report as a client-facing PDF on the TandemIQ letterhead.
 // Consumes the same object buildReport() already returns, so the PDF and the
 // markdown export never drift apart. Deliberately omits check IDs and the
 // pass/skip detail — those are internal, and this document goes to a client.
@@ -19,14 +18,6 @@ async function renderPayAppReportPdf({ report, companyName }) {
   const font = await pdfDoc.embedFont(StandardFonts.TimesRoman);
   const fontBold = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
   const fontItalic = await pdfDoc.embedFont(StandardFonts.TimesRomanItalic);
-
-  let logoImage = null;
-  let logoDims = { width: 0, height: 0 };
-  if (fs.existsSync(LOGO_PATH)) {
-    logoImage = await pdfDoc.embedJpg(fs.readFileSync(LOGO_PATH));
-    const scale = 158 / logoImage.width;
-    logoDims = { width: logoImage.width * scale, height: logoImage.height * scale };
-  }
 
   let page;
   let y;
@@ -37,19 +28,11 @@ async function renderPayAppReportPdf({ report, companyName }) {
       x: (PAGE_WIDTH - fontItalic.widthOfTextAtSize(label, BODY_SIZE)) / 2,
       y: PAGE_HEIGHT - 28, size: BODY_SIZE, font: fontItalic, color: GREY,
     });
-    if (logoImage) {
-      page.drawImage(logoImage, {
-        x: MARGIN - 8, y: PAGE_HEIGHT - 40 - logoDims.height,
-        width: logoDims.width, height: logoDims.height,
-      });
-    }
-    let ay = PAGE_HEIGHT - 48;
-    for (const line of (companyName || '').split('\n')) {
-      const w = font.widthOfTextAtSize(line, BODY_SIZE);
-      page.drawText(line, { x: PAGE_WIDTH - MARGIN - w, y: ay, size: BODY_SIZE, font, color: rgb(0.25, 0.25, 0.25) });
-      ay -= 13;
-    }
-    return PAGE_HEIGHT - 40 - logoDims.height - 24;
+    // Wordmark, top-left, in place of a logo image.
+    page.drawText(companyName || 'TandemIQ', {
+      x: MARGIN, y: PAGE_HEIGHT - 52, size: 18, font: fontBold, color: INK,
+    });
+    return PAGE_HEIGHT - 76;
   };
 
   const newPage = () => { page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]); y = drawLetterhead(); };

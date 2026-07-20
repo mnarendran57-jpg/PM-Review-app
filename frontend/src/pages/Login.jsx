@@ -33,12 +33,12 @@ export default function Login() {
       <div className="card p-8 w-full max-w-sm animate-fade-up" style={{ position: 'relative', zIndex: 1 }}>
         <div className="flex items-center gap-3 mb-6">
           <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg, #f59e0b, #f97316)', boxShadow: '0 4px 14px rgba(245,158,11,0.45)' }}>
-            <span className="text-white font-black text-base tracking-tight">O</span>
+            style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', boxShadow: '0 4px 14px rgba(99,102,241,0.45)' }}>
+            <span className="text-white font-black text-base tracking-tight">IQ</span>
           </div>
           <div>
-            <p className="text-sm font-bold text-gray-900 leading-tight">Olivier Inc.</p>
-            <p className="text-[10px] font-medium tracking-widest uppercase text-gray-400">PM Review</p>
+            <p className="text-sm font-bold text-gray-900 leading-tight">TandemIQ</p>
+            <p className="text-[10px] font-medium tracking-widest uppercase text-gray-400">Project Reviews</p>
           </div>
         </div>
 

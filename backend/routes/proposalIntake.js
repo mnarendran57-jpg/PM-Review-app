@@ -8,7 +8,7 @@ const { friendlyAiError } = require('../lib/aiErrors');
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 }
+  limits: { fileSize: 500 * 1024 * 1024 }
 });
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });

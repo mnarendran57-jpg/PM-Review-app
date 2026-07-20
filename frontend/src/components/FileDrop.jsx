@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { CloudArrowUpIcon } from '@heroicons/react/24/outline';
 
-export default function FileDrop({ file, onChange, label, accept = '.pdf', hint = 'PDF only · max 20 MB' }) {
+export default function FileDrop({ file, onChange, label, accept = '.pdf', hint = 'PDF · no size limit' }) {
   const ref = useRef();
   const [dragOver, setDragOver] = useState(false);
   return (

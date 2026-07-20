@@ -190,6 +190,23 @@ export const pcoReviewApi = {
   delete: id => api.delete(`/pco-review/${id}`).then(r => r.data),
 };
 
+export const invoiceReviewApi = {
+  list: params => api.get('/invoice-review', { params }).then(r => r.data),
+  get: id => api.get(`/invoice-review/${id}`).then(r => r.data),
+  create: formData => api.post('/invoice-review', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }).then(r => r.data),
+  downloadMarkdown: async (id, fileName) => {
+    const res = await api.get(`/invoice-review/${id}/report.md`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `invoice_review_${id}.md`);
+  },
+  downloadFile: async (reviewId, fileId, fileName) => {
+    const res = await api.get(`/invoice-review/${reviewId}/files/${fileId}`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `invoice_${fileId}.pdf`);
+  },
+  delete: id => api.delete(`/invoice-review/${id}`).then(r => r.data),
+};
+
 export const preconReviewApi = {
   list: params => api.get('/precon-review', { params }).then(r => r.data),
   get: id => api.get(`/precon-review/${id}`).then(r => r.data),

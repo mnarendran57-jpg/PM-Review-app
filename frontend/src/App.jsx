@@ -1,17 +1,15 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Home from './pages/Home';
-import ProposalIntake from './pages/ProposalIntake';
-import PayAppReview from './pages/PayAppReview';
-import PcoReview from './pages/PcoReview';
-import PreconReview from './pages/PreconReview';
+import ProjectWorkspace from './pages/ProjectWorkspace';
+import Settings from './pages/Settings';
+import Contact from './pages/Contact';
 import Login from './pages/Login';
 import { authApi } from './api';
 
-// Other pages (Projects, DocumentReview, RFITracker, SubmittalTracker, Finance, Settings)
-// are intentionally left unrouted — only Proposal Intake, Pay App Review, and
-// Pre-Construction Document Review are live for now. The files remain in src/pages for
-// reuse later; re-add their imports/routes here to revive them.
+// The app is organized around projects. The home page (/projects) is a gallery of
+// projects; opening one drops into /project/:projectId/* where the individual tools
+// live (see ProjectWorkspace). Settings and Contact are global sample pages.
 
 function RequireAuth({ children }) {
   if (!authApi.isLoggedIn()) return <Navigate to="/login" replace />;
@@ -26,16 +24,14 @@ export default function App() {
         path="/*"
         element={
           <RequireAuth>
-            <Layout>
-              <Routes>
-                <Route path="/" element={<Navigate to="/home" replace />} />
-                <Route path="/home" element={<Home />} />
-                <Route path="/proposal-intake" element={<ProposalIntake />} />
-                <Route path="/pay-app-review" element={<PayAppReview />} />
-                <Route path="/pco-review" element={<PcoReview />} />
-                <Route path="/precon-review" element={<PreconReview />} />
-              </Routes>
-            </Layout>
+            <Routes>
+              <Route path="/" element={<Navigate to="/projects" replace />} />
+              <Route path="/home" element={<Navigate to="/projects" replace />} />
+              <Route path="/projects" element={<Layout><Home /></Layout>} />
+              <Route path="/settings" element={<Layout><Settings /></Layout>} />
+              <Route path="/contact" element={<Layout><Contact /></Layout>} />
+              <Route path="/project/:projectId/*" element={<ProjectWorkspace />} />
+            </Routes>
           </RequireAuth>
         }
       />

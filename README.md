@@ -1,6 +1,6 @@
 # PM Review App
 
-An internal web tool for MEP construction project management at Olivier, Inc. It takes the document review work that a project manager would otherwise do by hand — reading vendor proposals, checking contractor pay applications, and combing through drawing sets — and does the mechanical parts automatically, so the PM reviews conclusions instead of hunting for them.
+TandemIQ — an internal web tool for MEP construction project management. It takes the document review work that a project manager would otherwise do by hand — reading vendor proposals, checking contractor pay applications, and combing through drawing sets — and does the mechanical parts automatically, so the PM reviews conclusions instead of hunting for them.
 
 The app runs a shared team login and uses the Anthropic Claude API to read construction PDFs.
 

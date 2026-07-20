@@ -198,18 +198,18 @@ export default function Settings() {
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-sm font-bold"
                   style={{ background: 'linear-gradient(135deg, #f59e0b, #f97316)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-                  PM Review
+                  TandemIQ
                 </span>
                 <span className="text-xs px-1.5 py-0.5 rounded"
                   style={{ background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.5)' }}>
                   v1.0
                 </span>
               </div>
-              <p className="text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>Olivier Inc. · MEP Construction Management</p>
+              <p className="text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>TandemIQ · MEP Construction Management</p>
             </div>
             <div className="px-5 py-4">
               <p className="text-xs text-gray-500 leading-relaxed">
-                Internal project management tool for Olivier Inc. Data stored locally in SQLite.
+                Internal project management tool for TandemIQ. Data stored locally in SQLite.
                 AI document reviews powered by the Anthropic Claude API.
               </p>
               <p className="text-xs text-gray-400 mt-3 pt-3" style={{ borderTop: '1px solid #f3f4f6' }}>

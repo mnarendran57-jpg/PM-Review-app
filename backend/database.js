@@ -228,6 +228,35 @@ db.exec(`
     mime_type TEXT,
     file_blob BLOB NOT NULL
   );
+
+  -- Vendor invoice reviews. The project's stored contract terms are the reference the
+  -- invoice is checked against (tax status, unallowable/reimbursable cost rules), so the
+  -- contract PDF is never re-sent. The uploaded invoice(s) — one primary invoice plus any
+  -- backup receipts/invoices for reimbursable costs — are kept in invoice_review_files.
+  CREATE TABLE IF NOT EXISTS invoice_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    vendor TEXT,
+    invoice_number TEXT,
+    invoice_date TEXT,
+    total_amount REAL,
+    extracted_data TEXT NOT NULL,
+    checks_result TEXT NOT NULL,
+    ai_observations TEXT,
+    report_markdown TEXT NOT NULL,
+    critical_count INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS invoice_review_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_id INTEGER NOT NULL REFERENCES invoice_reviews(id) ON DELETE CASCADE,
+    file_name TEXT NOT NULL,
+    mime_type TEXT,
+    file_blob BLOB NOT NULL
+  );
 `);
 
 // Migrations — add columns that may not exist in older databases

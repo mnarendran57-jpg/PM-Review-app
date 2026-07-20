@@ -4,6 +4,7 @@ import {
   TrashIcon, ClockIcon, DocumentTextIcon, CodeBracketIcon, PencilSquareIcon,
 } from '@heroicons/react/24/outline';
 import { payAppReviewApi } from '../api';
+import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import FileDrop from '../components/FileDrop';
 import PayAppReportView from '../components/PayAppReportView';
@@ -306,10 +307,15 @@ export default function PayAppReview() {
   const [history, setHistory] = useState([]);
   const [viewing, setViewing] = useState(null); // { id, report }
 
+  // The active project comes from the URL (/project/:id/...). Inside a project the
+  // reviewer never picks one — this tool is already scoped to it.
+  const ctx = useProject();
+  const routeProjectId = ctx?.projectId;
+
   // Projects populate themselves as pay apps are reviewed — there is no separate
   // "create a project" step, so this list fills in on its own.
   const [projects, setProjects] = useState([]);
-  const [projectId, setProjectId] = useState('');
+  const [projectId, setProjectId] = useState(routeProjectId ? String(routeProjectId) : '');
   const [budget, setBudget] = useState(null); // { project, applications, summary }
 
   const [addingProject, setAddingProject] = useState(false);
@@ -319,6 +325,11 @@ export default function PayAppReview() {
   const loadHistory = () => payAppReviewApi.list().then(setHistory);
   const loadProjects = () => payAppReviewApi.projects().then(setProjects);
   useEffect(() => { loadHistory(); loadProjects(); }, []);
+
+  // Keep the scoped project in sync if the route changes under us.
+  useEffect(() => {
+    if (routeProjectId) setProjectId(String(routeProjectId));
+  }, [routeProjectId]);
 
   // Adding a project selects it immediately — the reviewer's next move is always to
   // upload something against it, so making them re-find it in the list is pure friction.
@@ -482,6 +493,7 @@ export default function PayAppReview() {
               )}
             </div>
 
+            {!routeProjectId && (
             <div>
               <label className="label">Project</label>
               {addingProject ? (
@@ -536,6 +548,7 @@ export default function PayAppReview() {
                 </p>
               )}
             </div>
+            )}
 
             <ContractPanel projectId={projectId} contract={contract} onChange={loadContract} />
 

@@ -16,7 +16,7 @@ const { friendlyAiError } = require('../lib/aiErrors');
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 }
+  limits: { fileSize: 500 * 1024 * 1024 }
 });
 
 // Extract structured data from one or two uploaded pay app PDFs — both files (if present)
@@ -445,7 +445,7 @@ router.get('/:id/report.md', (req, res) => {
   res.send(row.report_markdown);
 });
 
-// Client-facing PDF of the review, on Olivier letterhead. Rebuilt from the stored
+// Client-facing PDF of the review, on the TandemIQ letterhead. Rebuilt from the stored
 // extraction + check results (not the markdown) so it can never drift from what
 // the reviewer saw on screen. No AI call — pure rendering.
 router.get('/:id/report.pdf', async (req, res) => {
@@ -461,13 +461,7 @@ router.get('/:id/report.pdf', async (req, res) => {
       subReconciliation: buildSubReconciliation(data.current).rows,
     });
 
-    // Reuse the letterhead the user maintains on their default memo template, so
-    // editing the address in Settings updates this report too.
-    const tpl = db.prepare(
-      `SELECT company_name FROM memo_templates ORDER BY is_default DESC, id ASC LIMIT 1`
-    ).get();
-
-    const pdf = await renderPayAppReportPdf({ report, companyName: tpl?.company_name || 'Olivier Inc.' });
+    const pdf = await renderPayAppReportPdf({ report, companyName: 'TandemIQ' });
     const safeProject = (row.project_name || 'report').replace(/[^a-z0-9]+/gi, '_');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="PayApp_${row.application_number || row.id}_${safeProject}_Review.pdf"`);

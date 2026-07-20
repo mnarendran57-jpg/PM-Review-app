@@ -5,6 +5,7 @@ import {
   Cog6ToothIcon, InboxArrowDownIcon,
 } from '@heroicons/react/24/outline';
 import { proposalIntakeApi, memoTemplatesApi } from '../api';
+import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import MemoTemplateEditor from '../components/MemoTemplateEditor';
 import FileDrop from '../components/FileDrop';
@@ -55,6 +56,8 @@ function HistoryItem({ item, onDelete }) {
 }
 
 export default function ProposalIntake() {
+  const ctx = useProject();
+  const routeProjectName = ctx?.project?.project_name;
   const [tab, setTab] = useState('intake');
   const [intakeType, setIntakeType] = useState('New Vendor');
   const [proposalFile, setProposalFile] = useState(null);
@@ -127,7 +130,7 @@ export default function ProposalIntake() {
       const fd = new FormData();
       fd.append('intake_type', intakeType);
       fd.append('vendor_name', fields.vendor_name || '');
-      fd.append('project_name', fields.project_name || '');
+      fd.append('project_name', routeProjectName || fields.project_name || '');
       fd.append('proposal_date', fields.proposal_date || '');
       fd.append('scope_of_work', fields.scope_of_work || '');
       if (intakeType === 'Change Order') {
@@ -264,7 +267,10 @@ export default function ProposalIntake() {
                 </div>
                 <div>
                   <label className="label">Project Name</label>
-                  <input className="input" value={fields.project_name || ''} onChange={setField('project_name')} />
+                  <input className="input" value={routeProjectName || fields.project_name || ''}
+                    onChange={setField('project_name')} readOnly={!!routeProjectName}
+                    style={routeProjectName ? { background: '#f8fafc', color: '#64748b' } : undefined} />
+                  {routeProjectName && <p className="text-[11px] text-gray-400 mt-1">Set by the project — memos file under this project automatically.</p>}
                 </div>
                 <div>
                   <label className="label">Proposal Date</label>
