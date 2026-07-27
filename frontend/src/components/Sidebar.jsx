@@ -77,10 +77,7 @@ export default function Sidebar() {
         className="h-[64px] flex items-center px-5 flex-shrink-0 w-full text-left"
         style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg, #f97316, #2563eb)', boxShadow: '0 2px 10px rgba(37,99,235,0.5)' }}>
-            <span className="text-white font-black text-sm tracking-tight">C</span>
-          </div>
+          <img src="/coaster-logo.svg" alt="Coaster" className="w-8 h-8 rounded-lg flex-shrink-0" />
           <div>
             <p className="text-white font-bold text-[15px] leading-tight tracking-tight">Coaster</p>
           </div>
@@ -140,8 +137,7 @@ export default function Sidebar() {
       <div className="px-5 py-4 flex-shrink-0" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
-            <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0"
-              style={{ background: 'linear-gradient(135deg, #f97316, #2563eb)' }}>C</div>
+            <img src="/coaster-logo.svg" alt="Coaster" className="w-6 h-6 rounded-md flex-shrink-0" />
             <div className="min-w-0">
               <p className="text-[11px] font-medium truncate" style={{ color: 'rgba(255,255,255,0.6)' }}>Coaster</p>
               <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.25)' }}>Internal · v1.0</p>

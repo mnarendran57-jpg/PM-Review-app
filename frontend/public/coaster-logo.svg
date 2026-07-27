@@ -1,0 +1,15 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="rounded"><rect width="100" height="100" rx="24"/></clipPath>
+  </defs>
+  <g clip-path="url(#rounded)">
+    <!-- navy upper-left, coral lower-right, split corner-to-corner -->
+    <rect width="100" height="100" fill="#1c2f4a"/>
+    <path d="M100 0 L100 100 L0 100 Z" fill="#dd7b5e"/>
+    <!-- the "C" ring, open on the right -->
+    <path d="M 69.8 32.2 A 28 28 0 1 0 69.8 71.8"
+          fill="none" stroke="#ffffff" stroke-width="13" stroke-linecap="round"/>
+    <!-- cream dot, upper-left -->
+    <circle cx="32" cy="27" r="7.5" fill="#ecd3a0"/>
+  </g>
+</svg>

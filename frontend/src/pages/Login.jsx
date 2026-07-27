@@ -32,10 +32,7 @@ export default function Login() {
       <div className="bg-mesh" />
       <div className="card p-8 w-full max-w-sm animate-fade-up" style={{ position: 'relative', zIndex: 1 }}>
         <div className="flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg, #f97316, #2563eb)', boxShadow: '0 4px 14px rgba(37,99,235,0.45)' }}>
-            <span className="text-white font-black text-base tracking-tight">C</span>
-          </div>
+          <img src="/coaster-logo.svg" alt="Coaster" className="w-10 h-10 rounded-xl flex-shrink-0" />
           <div>
             <p className="text-sm font-bold text-gray-900 leading-tight">Coaster</p>
           </div>
