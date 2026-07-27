@@ -8,6 +8,7 @@ import ProposalIntake from './ProposalIntake';
 import PayAppReview from './PayAppReview';
 import PcoReview from './PcoReview';
 import InvoiceReview from './InvoiceReview';
+import ProgressReport from './ProgressReport';
 import PreconReview from './PreconReview';
 
 // Everything under /project/:projectId lives here. The project is fetched once and
@@ -38,6 +39,7 @@ export default function ProjectWorkspace() {
             <Route path="pay-app-review" element={<PayAppReview />} />
             <Route path="pco-review" element={<PcoReview />} />
             <Route path="invoice-review" element={<InvoiceReview />} />
+            <Route path="progress-report" element={<ProgressReport />} />
             <Route path="precon-review" element={<PreconReview />} />
           </Routes>
         )}

@@ -3,6 +3,7 @@ const ACCENTS = {
   blue: { bg: 'linear-gradient(135deg, #3b82f6, #6366f1)', glow: 'rgba(59,130,246,0.4)', text: 'linear-gradient(135deg, #2563eb, #4f46e5)' },
   emerald: { bg: 'linear-gradient(135deg, #10b981, #059669)', glow: 'rgba(16,185,129,0.4)', text: 'linear-gradient(135deg, #059669, #047857)' },
   teal: { bg: 'linear-gradient(135deg, #14b8a6, #0891b2)', glow: 'rgba(20,184,166,0.4)', text: 'linear-gradient(135deg, #0d9488, #0e7490)' },
+  rose: { bg: 'linear-gradient(135deg, #f43f5e, #e11d48)', glow: 'rgba(244,63,94,0.4)', text: 'linear-gradient(135deg, #e11d48, #be123c)' },
 };
 
 export default function PageHeader({ title, subtitle, actions, icon: Icon, accent = 'amber' }) {

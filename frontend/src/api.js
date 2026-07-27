@@ -5,7 +5,14 @@ const configuredBase = import.meta.env.VITE_API_BASE_URL || '/api';
 const apiBaseUrl = configuredBase.endsWith('/api')
   ? configuredBase.replace(/\/$/, '')
   : `${configuredBase.replace(/\/$/, '')}/api`;
-const api = axios.create({ baseURL: apiBaseUrl });
+// Long-running AI/upload calls override this per request (see AI_TIMEOUT below). The
+// default keeps ordinary reads/writes from hanging forever when the backend is
+// unreachable — which is exactly what happens on a deployed frontend with no backend
+// behind it: without a timeout, every request spins indefinitely and the app "lags".
+const DEFAULT_TIMEOUT = 20000;   // 20s — plenty for any DB-backed request
+const AI_TIMEOUT = 180000;       // 3min — document extraction / report generation
+
+const api = axios.create({ baseURL: apiBaseUrl, timeout: DEFAULT_TIMEOUT });
 
 api.interceptors.request.use(config => {
   const token = localStorage.getItem(TOKEN_KEY);
@@ -20,6 +27,11 @@ api.interceptors.response.use(
     if (err.response?.status === 401 && !isLoginCall) {
       localStorage.removeItem(TOKEN_KEY);
       window.location.href = '/login';
+    }
+    // Turn a timeout / unreachable-backend failure into a clear, consistent message so
+    // callers can surface "can't reach the server" instead of appearing to hang.
+    if (!err.response && (err.code === 'ECONNABORTED' || err.code === 'ERR_NETWORK' || err.message === 'Network Error')) {
+      err.friendlyMessage = 'Cannot reach the server. It may be offline or still starting up — check that the backend is running and reachable, then try again.';
     }
     return Promise.reject(err);
   }
@@ -69,7 +81,7 @@ export const financeApi = {
 
 export const reviewsApi = {
   submit: formData => api.post('/reviews', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),
   list: params => api.get('/reviews', { params }).then(r => r.data),
   delete: id => api.delete(`/reviews/${id}`).then(r => r.data),
@@ -90,10 +102,10 @@ export const settingsApi = {
 export const proposalIntakeApi = {
   list: params => api.get('/proposal-intake', { params }).then(r => r.data),
   extract: formData => api.post('/proposal-intake/extract', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),
   create: formData => api.post('/proposal-intake', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),
   download: async (id, fileName) => {
     const res = await api.get(`/proposal-intake/${id}/download`, { responseType: 'blob' });
@@ -133,10 +145,10 @@ export const payAppReviewApi = {
   list: params => api.get('/pay-app-review', { params }).then(r => r.data),
   get: id => api.get(`/pay-app-review/${id}`).then(r => r.data),
   extract: formData => api.post('/pay-app-review/extract', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),
   create: formData => api.post('/pay-app-review', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),
   projects: () => api.get('/pay-app-review/projects').then(r => r.data),
   createProject: projectName =>
@@ -145,7 +157,7 @@ export const payAppReviewApi = {
   getContract: projectId => api.get(`/pay-app-review/project/${projectId}/contract`).then(r => r.data),
   uploadContract: (projectId, formData) =>
     api.post(`/pay-app-review/project/${projectId}/contract`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+      headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
     }).then(r => r.data),
   updateContractTerms: (projectId, terms) =>
     api.patch(`/pay-app-review/project/${projectId}/contract`, { terms }).then(r => r.data),
@@ -177,7 +189,7 @@ export const pcoReviewApi = {
   list: params => api.get('/pco-review', { params }).then(r => r.data),
   get: id => api.get(`/pco-review/${id}`).then(r => r.data),
   create: formData => api.post('/pco-review', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),
   downloadMarkdown: async (id, fileName) => {
     const res = await api.get(`/pco-review/${id}/report.md`, { responseType: 'blob' });
@@ -194,7 +206,7 @@ export const invoiceReviewApi = {
   list: params => api.get('/invoice-review', { params }).then(r => r.data),
   get: id => api.get(`/invoice-review/${id}`).then(r => r.data),
   create: formData => api.post('/invoice-review', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),
   downloadMarkdown: async (id, fileName) => {
     const res = await api.get(`/invoice-review/${id}/report.md`, { responseType: 'blob' });
@@ -207,11 +219,25 @@ export const invoiceReviewApi = {
   delete: id => api.delete(`/invoice-review/${id}`).then(r => r.data),
 };
 
+export const progressReportApi = {
+  list: params => api.get('/progress-report', { params }).then(r => r.data),
+  get: id => api.get(`/progress-report/${id}`).then(r => r.data),
+  create: formData => api.post('/progress-report', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => r.data),
+  fileUrl: (reportId, fileId) => `${apiBaseUrl}/progress-report/${reportId}/files/${fileId}`,
+  downloadMarkdown: async (id, fileName) => {
+    const res = await api.get(`/progress-report/${id}/report.md`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `progress_report_${id}.md`);
+  },
+  delete: id => api.delete(`/progress-report/${id}`).then(r => r.data),
+};
+
 export const preconReviewApi = {
   list: params => api.get('/precon-review', { params }).then(r => r.data),
   get: id => api.get(`/precon-review/${id}`).then(r => r.data),
   create: formData => api.post('/precon-review', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),
   downloadMarkdown: async (id, fileName) => {
     const res = await api.get(`/precon-review/${id}/report.md`, { responseType: 'blob' });

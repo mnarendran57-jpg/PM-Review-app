@@ -257,6 +257,34 @@ db.exec(`
     mime_type TEXT,
     file_blob BLOB NOT NULL
   );
+
+  -- Site-visit progress reports. A PM uploads a batch of site photos (with captions) at a
+  -- set visit frequency; Claude writes a narrative progress report from the images. The
+  -- photos and their captions are kept in progress_report_files so the report can be
+  -- reopened with its photo log intact.
+  CREATE TABLE IF NOT EXISTS progress_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    frequency TEXT,
+    period_label TEXT,
+    visit_date TEXT,
+    notes TEXT,
+    image_count INTEGER DEFAULT 0,
+    report_json TEXT NOT NULL,
+    report_markdown TEXT NOT NULL,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS progress_report_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id INTEGER NOT NULL REFERENCES progress_reports(id) ON DELETE CASCADE,
+    sort_order INTEGER DEFAULT 0,
+    file_name TEXT NOT NULL,
+    mime_type TEXT,
+    caption TEXT,
+    file_blob BLOB NOT NULL
+  );
 `);
 
 // Migrations — add columns that may not exist in older databases

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   InboxArrowDownIcon, DocumentMagnifyingGlassIcon, ClipboardDocumentCheckIcon,
   ScaleIcon, ArrowRightIcon, DocumentTextIcon, TrashIcon, CheckCircleIcon,
-  ReceiptPercentIcon,
+  ReceiptPercentIcon, CameraIcon,
 } from '@heroicons/react/24/outline';
 import { payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -22,6 +22,9 @@ const TOOLS = [
   { slug: 'invoice-review', label: 'Invoice Review',
     description: 'Check a vendor invoice for math errors, unallowable costs, and missing reimbursable backup.',
     icon: ReceiptPercentIcon, bg: 'linear-gradient(135deg, #14b8a6, #0891b2)', glow: 'rgba(20,184,166,0.28)' },
+  { slug: 'progress-report', label: 'Progress Report',
+    description: 'Upload site-visit photos with captions and generate a progress report to send to the team.',
+    icon: CameraIcon, bg: 'linear-gradient(135deg, #f43f5e, #e11d48)', glow: 'rgba(244,63,94,0.28)' },
   { slug: 'precon-review', label: 'Pre-Construction Review',
     description: 'Upload drawings, specs, or narratives for a risk, cost, and change-order review.',
     icon: ClipboardDocumentCheckIcon, bg: 'linear-gradient(135deg, #10b981, #059669)', glow: 'rgba(16,185,129,0.28)' },
