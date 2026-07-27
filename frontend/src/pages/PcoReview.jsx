@@ -199,7 +199,7 @@ export default function PcoReview() {
   const active = result || viewing;
 
   return (
-    <div className="space-y-6">
+    <div className="p-8 space-y-6">
       <PageHeader
         icon={ScaleIcon}
         iconGradient="linear-gradient(135deg, #f59e0b, #ef4444)"

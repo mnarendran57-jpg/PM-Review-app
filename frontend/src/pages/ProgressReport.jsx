@@ -272,12 +272,12 @@ export default function ProgressReport() {
   const active = result || viewing;
 
   return (
-    <div className="space-y-6">
+    <div className="p-8 space-y-6">
       <PageHeader
         icon={CameraIcon}
         accent="rose"
         title="Progress Report"
-        subtitle="Add site-visit photos with descriptions — Claude writes the report, downloadable as a PDF for the team"
+        subtitle="Turn site-visit photos and descriptions into a progress report, downloadable as a PDF to send to the team"
       />
 
       <div className="grid grid-cols-5 gap-6">

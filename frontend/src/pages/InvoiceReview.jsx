@@ -186,7 +186,7 @@ export default function InvoiceReview() {
   const active = result || viewing;
 
   return (
-    <div className="space-y-6">
+    <div className="p-8 space-y-6">
       <PageHeader
         icon={ReceiptPercentIcon}
         accent="teal"
