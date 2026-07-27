@@ -269,9 +269,14 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS progress_reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    report_number INTEGER,
     frequency TEXT,
     period_label TEXT,
     visit_date TEXT,
+    visit_time TEXT,
+    weather TEXT,
+    submitted_by TEXT,
+    contractor TEXT,
     notes TEXT,
     image_count INTEGER DEFAULT 0,
     report_json TEXT NOT NULL,
@@ -295,6 +300,16 @@ db.exec(`
 const projectCols = db.prepare(`PRAGMA table_info(projects)`).all().map(c => c.name);
 if (!projectCols.includes('project_type_other')) {
   db.exec(`ALTER TABLE projects ADD COLUMN project_type_other TEXT`);
+}
+
+// Progress reports gained template header fields (report number, time, weather,
+// submitted-by, contractor) after the table first shipped.
+const prCols = db.prepare(`PRAGMA table_info(progress_reports)`).all().map(c => c.name);
+for (const [col, type] of [
+  ['report_number', 'INTEGER'], ['visit_time', 'TEXT'], ['weather', 'TEXT'],
+  ['submitted_by', 'TEXT'], ['contractor', 'TEXT'],
+]) {
+  if (!prCols.includes(col)) db.exec(`ALTER TABLE progress_reports ADD COLUMN ${col} ${type}`);
 }
 
 const intakeCols = db.prepare(`PRAGMA table_info(proposal_intakes)`).all().map(c => c.name);

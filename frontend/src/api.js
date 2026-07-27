@@ -226,6 +226,10 @@ export const progressReportApi = {
     headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),
   fileUrl: (reportId, fileId) => `${apiBaseUrl}/progress-report/${reportId}/files/${fileId}`,
+  downloadPdf: async (id, fileName) => {
+    const res = await api.get(`/progress-report/${id}/report.pdf`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `progress_report_${id}.pdf`);
+  },
   downloadMarkdown: async (id, fileName) => {
     const res = await api.get(`/progress-report/${id}/report.md`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `progress_report_${id}.md`);

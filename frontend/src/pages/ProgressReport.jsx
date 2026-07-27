@@ -1,16 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   CameraIcon, SparklesIcon, DocumentTextIcon, TrashIcon, ClockIcon, XMarkIcon,
-  ExclamationTriangleIcon, CheckCircleIcon, PhotoIcon, PlusIcon,
+  PhotoIcon, PlusIcon, ArrowDownTrayIcon,
 } from '@heroicons/react/24/outline';
 import { progressReportApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 
+const FREQUENCIES = ['Weekly', 'Bi-weekly', 'Monthly', 'One-off visit'];
+
 // Add photos one at a time — each photo gets its description before the next is added.
-// The running list of what's already in the report is shown so the PM can see progress
-// and remove any mistakes without leaving the dialog.
 function AddPhotosModal({ photos, onAdd, onRemove, onClose }) {
   const [pending, setPending] = useState(null); // { file, url }
   const [desc, setDesc] = useState('');
@@ -64,7 +64,7 @@ function AddPhotosModal({ photos, onAdd, onRemove, onClose }) {
                 <label className="label">What does this photo show? *</label>
                 <textarea className="input" rows={3} autoFocus value={desc}
                   onChange={e => setDesc(e.target.value)}
-                  placeholder="e.g. Level 2 ductwork rough-in complete along the east corridor" />
+                  placeholder="e.g. Irrigation works on site" />
               </div>
             </div>
             <div className="flex justify-end gap-2 mt-3">
@@ -78,7 +78,6 @@ function AddPhotosModal({ photos, onAdd, onRemove, onClose }) {
 
         {err && <p className="text-xs" style={{ color: '#b91c1c' }}>{err}</p>}
 
-        {/* Running list of photos already added */}
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-2">
             In this report ({photos.length})
@@ -111,59 +110,55 @@ function AddPhotosModal({ photos, onAdd, onRemove, onClose }) {
   );
 }
 
-const FREQUENCIES = ['Weekly', 'Bi-weekly', 'Monthly', 'One-off visit'];
-
-function ReportView({ report, header }) {
+// The report as laid out in the standard template: header block, Progress bullets, and a
+// captioned photo grid. localPhotos (present only for a just-generated report) supply the
+// thumbnails; the downloadable PDF always contains the full-size images.
+function ReportView({ report, header, localPhotos }) {
+  const num = header.reportNumber != null ? `-${header.reportNumber}` : '';
+  const field = (label, value) => (
+    <div className="flex gap-2 text-sm">
+      <span className="text-gray-400 w-28 flex-shrink-0">{label}</span>
+      <span className="text-gray-900">{value || '—'}</span>
+    </div>
+  );
   return (
     <div className="space-y-4">
-      <div className="card p-5">
-        <h3 className="text-base font-bold text-gray-900">{report.title || 'Site Progress Report'}</h3>
-        <p className="text-xs text-gray-400 mt-1">
-          {[header?.frequency, header?.periodLabel, header?.visitDate].filter(Boolean).join(' · ')}
-          {header?.imageCount ? ` · ${header.imageCount} photos` : ''}
-        </p>
-        {report.executiveSummary && <p className="text-sm text-gray-700 mt-3 leading-relaxed">{report.executiveSummary}</p>}
+      <div className="card p-5 space-y-3">
+        <h3 className="text-base font-bold text-gray-900">{header.projectName || 'Project'} Progress Report{num}</h3>
+        <div className="grid grid-cols-3 gap-x-4 gap-y-1 text-sm">
+          {field('Date', header.visitDate)}
+          {field('Time', header.visitTime)}
+          {field('Weather', header.weather)}
+        </div>
+        <div className="space-y-1">
+          {field('Submitted By', header.submittedBy)}
+          {field('Project', header.projectName)}
+          {field('Contractor', header.contractor)}
+        </div>
       </div>
 
-      {report.workObserved?.length > 0 && (
-        <div className="card p-5 space-y-2.5">
-          <h3 className="text-sm font-semibold text-gray-900">Work Observed This Period</h3>
-          {report.workObserved.map((w, i) => (
-            <div key={i}>
-              <p className="text-sm font-medium text-gray-900">{w.area || 'General'}</p>
-              <p className="text-xs text-gray-600 mt-0.5">{w.observation}</p>
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="card p-5">
+        <h3 className="text-sm font-semibold text-gray-900 mb-2">Progress</h3>
+        {report.progress?.length ? (
+          <ul className="space-y-1.5">
+            {report.progress.map((p, i) => (
+              <li key={i} className="text-sm text-gray-700 flex gap-2"><span className="text-gray-400">•</span><span>{p}</span></li>
+            ))}
+          </ul>
+        ) : <p className="text-sm text-gray-400">No observations recorded.</p>}
+      </div>
 
-      {report.issuesAndConcerns?.length > 0 && (
-        <div className="card p-5 space-y-2" style={{ background: '#fff7ed', border: '1px solid #fed7aa' }}>
-          <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: '#c2410c' }}>
-            <ExclamationTriangleIcon className="w-4 h-4" /> Issues &amp; Concerns
-          </h3>
-          {report.issuesAndConcerns.map((it, i) => <p key={i} className="text-xs text-gray-700">• {it}</p>)}
-        </div>
-      )}
-
-      {report.recommendedNextSteps?.length > 0 && (
-        <div className="card p-5 space-y-2">
-          <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-            <CheckCircleIcon className="w-4 h-4" style={{ color: '#059669' }} /> Recommended Next Steps
-          </h3>
-          {report.recommendedNextSteps.map((s, i) => <p key={i} className="text-xs text-gray-700">• {s}</p>)}
-        </div>
-      )}
-
-      {report.photoLog?.length > 0 && (
-        <div className="card p-5 space-y-3">
-          <h3 className="text-sm font-semibold text-gray-900">Photo Log</h3>
-          {report.photoLog.map((p, i) => (
-            <div key={i} className="pb-2" style={{ borderBottom: i < report.photoLog.length - 1 ? '1px solid #f3f4f6' : 'none' }}>
-              <p className="text-sm font-medium text-gray-900">Photo {p.photo ?? i + 1}{p.caption ? ` — ${p.caption}` : ''}</p>
-              <p className="text-xs text-gray-600 mt-0.5">{p.observation}</p>
-            </div>
-          ))}
+      {localPhotos?.length > 0 && (
+        <div className="card p-5">
+          <h3 className="text-sm font-semibold text-gray-900 mb-3">Site Pictures</h3>
+          <div className="grid grid-cols-2 gap-4">
+            {localPhotos.map((p, i) => (
+              <div key={i}>
+                <img src={p.url} alt="" className="w-full rounded-lg object-cover" style={{ maxHeight: 180 }} />
+                <p className="text-xs text-gray-500 text-center mt-1">{p.caption}</p>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -177,11 +172,11 @@ function HistoryRow({ item, onView, onDelete }) {
       <div className="flex items-center gap-3 min-w-0">
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-semibold flex-shrink-0"
           style={{ background: 'rgba(244,63,94,0.08)', color: '#e11d48' }}>
-          {item.frequency || 'Report'}
+          #{item.report_number ?? '—'}
         </span>
         <div className="min-w-0">
-          <p className="text-sm font-medium text-gray-900 truncate">{item.period_label || 'Site progress report'}</p>
-          <p className="text-xs text-gray-400 mt-0.5">{item.image_count} photos{item.visit_date ? ` · ${item.visit_date}` : ''}</p>
+          <p className="text-sm font-medium text-gray-900 truncate">Progress Report{item.report_number != null ? `-${item.report_number}` : ''}</p>
+          <p className="text-xs text-gray-400 mt-0.5">{item.image_count} photos{item.visit_date ? ` · ${item.visit_date}` : ''}{item.contractor ? ` · ${item.contractor}` : ''}</p>
         </div>
       </div>
       <div className="flex items-center gap-3 flex-shrink-0 ml-4">
@@ -197,22 +192,30 @@ export default function ProgressReport() {
   const routeProjectId = ctx?.projectId;
 
   const [frequency, setFrequency] = useState('Weekly');
-  const [periodLabel, setPeriodLabel] = useState('');
+  const [reportNumber, setReportNumber] = useState('');
   const [visitDate, setVisitDate] = useState('');
+  const [visitTime, setVisitTime] = useState('');
+  const [weather, setWeather] = useState('');
+  const [submittedBy, setSubmittedBy] = useState(() => localStorage.getItem('pr_submitted_by') || '');
+  const [contractor, setContractor] = useState('');
   const [notes, setNotes] = useState('');
   const [photos, setPhotos] = useState([]); // { file, caption, url }
   const [showAddPhotos, setShowAddPhotos] = useState(false);
 
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState('');
-  const [result, setResult] = useState(null);   // { id, report, header }
+  const [result, setResult] = useState(null);   // { id, report, header, localPhotos }
   const [viewing, setViewing] = useState(null); // { id, report, header }
   const [history, setHistory] = useState([]);
 
-  const loadHistory = () => progressReportApi.list(routeProjectId ? { project_id: routeProjectId } : undefined).then(setHistory);
+  const loadHistory = () => progressReportApi.list(routeProjectId ? { project_id: routeProjectId } : undefined).then(list => {
+    setHistory(list);
+    // Pre-fill the next sequential report number from history.
+    const maxNum = list.reduce((m, r) => Math.max(m, r.report_number || 0), 0);
+    setReportNumber(prev => prev === '' ? String(maxNum + 1) : prev);
+  });
   useEffect(() => { loadHistory(); }, [routeProjectId]);
 
-  // Object URLs for previews are revoked on unmount to avoid leaks.
   useEffect(() => () => photos.forEach(p => URL.revokeObjectURL(p.url)), []); // eslint-disable-line
 
   const addOne = (file, caption) => {
@@ -222,22 +225,27 @@ export default function ProgressReport() {
   const removeAt = idx => setPhotos(prev => { URL.revokeObjectURL(prev[idx]?.url); return prev.filter((_, i) => i !== idx); });
 
   const handleGenerate = async () => {
-    if (photos.length === 0) { setError('Upload at least one site photo first.'); return; }
+    if (photos.length === 0) { setError('Add at least one site photo first.'); return; }
     setError(''); setGenerating(true); setResult(null); setViewing(null);
+    if (submittedBy.trim()) localStorage.setItem('pr_submitted_by', submittedBy.trim());
     try {
       const fd = new FormData();
       photos.forEach(p => fd.append('images', p.file));
       fd.append('captions', JSON.stringify(photos.map(p => p.caption)));
       fd.append('frequency', frequency);
-      if (periodLabel) fd.append('period_label', periodLabel);
+      if (reportNumber) fd.append('report_number', reportNumber);
       if (visitDate) fd.append('visit_date', visitDate);
+      if (visitTime) fd.append('visit_time', visitTime);
+      if (weather) fd.append('weather', weather);
+      if (submittedBy) fd.append('submitted_by', submittedBy);
+      if (contractor) fd.append('contractor', contractor);
       if (notes) fd.append('notes', notes);
       if (routeProjectId) fd.append('project_id', routeProjectId);
       const data = await progressReportApi.create(fd);
-      setResult({ id: data.id, report: data.report, header: data.header });
+      setResult({ id: data.id, report: data.report, header: data.header, localPhotos: photos });
       loadHistory();
     } catch (err) {
-      setError(err.response?.data?.error || 'Could not generate the progress report.');
+      setError(err.friendlyMessage || err.response?.data?.error || 'Could not generate the progress report.');
     } finally {
       setGenerating(false);
     }
@@ -258,7 +266,8 @@ export default function ProgressReport() {
 
   const reset = () => {
     photos.forEach(p => URL.revokeObjectURL(p.url));
-    setPhotos([]); setPeriodLabel(''); setVisitDate(''); setNotes(''); setResult(null); setError('');
+    setPhotos([]); setVisitDate(''); setVisitTime(''); setWeather(''); setContractor(''); setNotes('');
+    setResult(null); setError('');
   };
   const active = result || viewing;
 
@@ -268,12 +277,12 @@ export default function ProgressReport() {
         icon={CameraIcon}
         accent="rose"
         title="Progress Report"
-        subtitle="Upload site-visit photos with captions — Claude writes a progress report to send to the team"
+        subtitle="Add site-visit photos with descriptions — Claude writes the report, downloadable as a PDF for the team"
       />
 
       <div className="grid grid-cols-5 gap-6">
         <div className="col-span-2 space-y-4">
-          <div className="card card-accent p-6 space-y-5" style={{ '--card-accent': 'linear-gradient(90deg, #f43f5e, #e11d48)' }}>
+          <div className="card card-accent p-6 space-y-4" style={{ '--card-accent': 'linear-gradient(90deg, #f43f5e, #e11d48)' }}>
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
@@ -295,18 +304,32 @@ export default function ProgressReport() {
                 </select>
               </div>
               <div>
-                <label className="label">Visit Date</label>
+                <label className="label">Report #</label>
+                <input className="input" type="number" min="1" value={reportNumber} onChange={e => setReportNumber(e.target.value)} placeholder="Auto" />
+              </div>
+              <div>
+                <label className="label">Date</label>
                 <input className="input" type="date" value={visitDate} onChange={e => setVisitDate(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Time</label>
+                <input className="input" value={visitTime} onChange={e => setVisitTime(e.target.value)} placeholder="e.g. 12:30 PM" />
+              </div>
+              <div>
+                <label className="label">Weather</label>
+                <input className="input" value={weather} onChange={e => setWeather(e.target.value)} placeholder="e.g. Sunny" />
+              </div>
+              <div>
+                <label className="label">Contractor</label>
+                <input className="input" value={contractor} onChange={e => setContractor(e.target.value)} placeholder="e.g. ERC" />
               </div>
             </div>
 
             <div>
-              <label className="label">Reporting Period (optional)</label>
-              <input className="input" value={periodLabel} onChange={e => setPeriodLabel(e.target.value)}
-                placeholder="e.g. Week of Jul 21, 2026" />
+              <label className="label">Submitted By</label>
+              <input className="input" value={submittedBy} onChange={e => setSubmittedBy(e.target.value)} placeholder="Your name" />
             </div>
 
-            {/* Photos are added one at a time, each with its description, in a dialog */}
             <div>
               <label className="label">Site Photos (JPG/JPEG) *</label>
               <button type="button" onClick={() => setShowAddPhotos(true)}
@@ -336,7 +359,7 @@ export default function ProgressReport() {
             <div>
               <label className="label">Overall Notes for This Visit (optional)</label>
               <textarea className="input" rows={2} value={notes} onChange={e => setNotes(e.target.value)}
-                placeholder="Anything the report should account for that isn't obvious from the photos" />
+                placeholder="Anything the Progress notes should account for that isn't obvious from the photos" />
             </div>
 
             {error && (
@@ -357,13 +380,16 @@ export default function ProgressReport() {
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">{result ? 'Generated Report' : 'Saved Report'}</h2>
                 <div className="flex items-center gap-2">
+                  <button className="btn-primary px-3 py-1.5" onClick={() => progressReportApi.downloadPdf(active.id)}>
+                    <ArrowDownTrayIcon className="w-4 h-4" /> Download PDF
+                  </button>
                   <button className="btn-secondary px-3 py-1.5" onClick={() => progressReportApi.downloadMarkdown(active.id)}>
-                    <DocumentTextIcon className="w-4 h-4" /> Download .md
+                    <DocumentTextIcon className="w-4 h-4" /> .md
                   </button>
                   <button className="btn-secondary px-3 py-1.5" onClick={() => { setResult(null); setViewing(null); }}>Close</button>
                 </div>
               </div>
-              <ReportView report={active.report} header={active.header} />
+              <ReportView report={active.report} header={active.header} localPhotos={active.localPhotos} />
             </>
           )}
 
@@ -372,7 +398,7 @@ export default function ProgressReport() {
               <h2 className="text-sm font-semibold text-gray-900">Report History</h2>
               {history.length === 0 ? (
                 <div className="card p-8 text-center text-sm text-gray-400">
-                  No progress reports yet. Upload this visit's photos to generate one.
+                  No progress reports yet. Add this visit's photos to generate one.
                 </div>
               ) : (
                 <div className="space-y-2">
