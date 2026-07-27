@@ -85,19 +85,19 @@ function ProjectCard({ project, index, onOpen }) {
     >
       <div className="flex items-start justify-between mb-4">
         <div className="w-12 h-12 rounded-2xl flex items-center justify-center"
-          style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', boxShadow: '0 8px 24px rgba(99,102,241,0.28)' }}>
+          style={{ background: 'linear-gradient(135deg, #2563eb, #3b82f6)', boxShadow: '0 8px 24px rgba(37,99,235,0.28)' }}>
           <FolderIcon className="w-6 h-6 text-white" />
         </div>
         {project.status && (
           <span className="text-[11px] font-bold px-2.5 py-1 rounded-full"
-            style={{ background: 'rgba(99,102,241,0.08)', color: '#4f46e5' }}>{project.status}</span>
+            style={{ background: 'rgba(37,99,235,0.08)', color: '#1d4ed8' }}>{project.status}</span>
         )}
       </div>
       <h3 className="text-lg font-bold text-gray-900 mb-1 leading-snug">{project.project_name}</h3>
       <p className="text-sm text-gray-500 flex-1">{project.client_name || 'No client set'}</p>
       <div className="flex items-center justify-between mt-5">
         <span className="text-[12px] text-gray-400">{activity.length ? activity.join(' · ') : 'No open items'}</span>
-        <span className="flex items-center gap-1 text-sm font-semibold text-indigo-600">
+        <span className="flex items-center gap-1 text-sm font-semibold text-blue-600">
           Open <ArrowRightIcon className="w-4 h-4 transition-transform group-hover:translate-x-1" />
         </span>
       </div>
@@ -132,8 +132,8 @@ export default function Home() {
           className="w-full card p-12 flex flex-col items-center justify-center gap-3 cursor-pointer border-dashed animate-fade-up"
           style={{ borderStyle: 'dashed', borderColor: '#d1d5db' }}>
           <div className="w-14 h-14 rounded-2xl flex items-center justify-center"
-            style={{ background: 'rgba(99,102,241,0.08)' }}>
-            <DocumentTextIcon className="w-7 h-7" style={{ color: '#6366f1' }} />
+            style={{ background: 'rgba(37,99,235,0.08)' }}>
+            <DocumentTextIcon className="w-7 h-7" style={{ color: '#2563eb' }} />
           </div>
           <p className="text-lg font-bold text-gray-900">No projects yet</p>
           <p className="text-sm text-gray-500">Click to add your first project — give it a name and (optionally) its contract.</p>

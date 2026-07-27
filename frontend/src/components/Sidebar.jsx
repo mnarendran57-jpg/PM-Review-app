@@ -19,7 +19,7 @@ const projectTools = [
 ];
 
 const globalNav = [
-  { to: '/projects', label: 'Projects', icon: FolderIcon, color: '#a78bfa', glow: 'rgba(167,139,250,0.18)' },
+  { to: '/projects', label: 'Projects', icon: FolderIcon, color: '#3b82f6', glow: 'rgba(37,99,235,0.2)' },
   { to: '/settings', label: 'Settings', icon: Cog6ToothIcon, color: '#94a3b8', glow: 'rgba(148,163,184,0.18)' },
   { to: '/contact', label: 'Contact Us', icon: EnvelopeIcon, color: '#f472b6', glow: 'rgba(244,114,182,0.18)' },
 ];
@@ -78,13 +78,11 @@ export default function Sidebar() {
         style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', boxShadow: '0 2px 10px rgba(99,102,241,0.5)' }}>
-            <span className="text-white font-black text-sm tracking-tight">IQ</span>
+            style={{ background: 'linear-gradient(135deg, #f97316, #2563eb)', boxShadow: '0 2px 10px rgba(37,99,235,0.5)' }}>
+            <span className="text-white font-black text-sm tracking-tight">C</span>
           </div>
           <div>
-            <p className="text-white font-bold text-[15px] leading-tight tracking-tight">TandemIQ</p>
-            <p className="text-[10px] font-medium tracking-widest uppercase"
-              style={{ color: 'rgba(255,255,255,0.35)' }}>Project Reviews</p>
+            <p className="text-white font-bold text-[15px] leading-tight tracking-tight">Coaster</p>
           </div>
         </div>
       </button>
@@ -115,7 +113,7 @@ export default function Sidebar() {
             </div>
             <div className="space-y-1">
               <NavRow to={`/project/${projectId}`} end label="Overview" Icon={Squares2X2Icon}
-                color="#a78bfa" glow="rgba(167,139,250,0.18)" />
+                color="#3b82f6" glow="rgba(37,99,235,0.2)" />
               {projectTools.map(t => (
                 <NavRow key={t.slug} to={`/project/${projectId}/${t.slug}`}
                   label={t.label} Icon={t.icon} color={t.color} glow={t.glow} />
@@ -143,9 +141,9 @@ export default function Sidebar() {
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0"
-              style={{ background: 'rgba(255,255,255,0.1)' }}>T</div>
+              style={{ background: 'linear-gradient(135deg, #f97316, #2563eb)' }}>C</div>
             <div className="min-w-0">
-              <p className="text-[11px] font-medium truncate" style={{ color: 'rgba(255,255,255,0.6)' }}>TandemIQ</p>
+              <p className="text-[11px] font-medium truncate" style={{ color: 'rgba(255,255,255,0.6)' }}>Coaster</p>
               <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.25)' }}>Internal · v1.0</p>
             </div>
           </div>

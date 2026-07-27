@@ -1,4 +1,4 @@
-# Render deployment for the TandemIQ backend (Node + Express + node:sqlite).
+# Render deployment for the Coaster backend (Node + Express + node:sqlite).
 #
 # Netlify hosts the frontend (see netlify.toml); this hosts the API it talks to.
 # After the service is live, set VITE_API_BASE_URL in Netlify to the backend URL

@@ -33,12 +33,11 @@ export default function Login() {
       <div className="card p-8 w-full max-w-sm animate-fade-up" style={{ position: 'relative', zIndex: 1 }}>
         <div className="flex items-center gap-3 mb-6">
           <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', boxShadow: '0 4px 14px rgba(99,102,241,0.45)' }}>
-            <span className="text-white font-black text-base tracking-tight">IQ</span>
+            style={{ background: 'linear-gradient(135deg, #f97316, #2563eb)', boxShadow: '0 4px 14px rgba(37,99,235,0.45)' }}>
+            <span className="text-white font-black text-base tracking-tight">C</span>
           </div>
           <div>
-            <p className="text-sm font-bold text-gray-900 leading-tight">TandemIQ</p>
-            <p className="text-[10px] font-medium tracking-widest uppercase text-gray-400">Project Reviews</p>
+            <p className="text-sm font-bold text-gray-900 leading-tight">Coaster</p>
           </div>
         </div>
 

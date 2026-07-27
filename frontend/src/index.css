@@ -48,8 +48,8 @@
   .bg-mesh::after {
     width: 560px; height: 560px;
     bottom: -200px; left: 180px;
-    background: radial-gradient(circle at 60% 40%, #6366f1, transparent 70%);
-    opacity: 0.18;
+    background: radial-gradient(circle at 60% 40%, #2563eb, transparent 70%);
+    opacity: 0.2;
   }
 
   /* ── Buttons ───────────────────────────────────────────────────── */

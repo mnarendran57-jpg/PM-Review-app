@@ -445,7 +445,7 @@ router.get('/:id/report.md', (req, res) => {
   res.send(row.report_markdown);
 });
 
-// Client-facing PDF of the review, on the TandemIQ letterhead. Rebuilt from the stored
+// Client-facing PDF of the review, on the Coaster letterhead. Rebuilt from the stored
 // extraction + check results (not the markdown) so it can never drift from what
 // the reviewer saw on screen. No AI call — pure rendering.
 router.get('/:id/report.pdf', async (req, res) => {
@@ -461,7 +461,7 @@ router.get('/:id/report.pdf', async (req, res) => {
       subReconciliation: buildSubReconciliation(data.current).rows,
     });
 
-    const pdf = await renderPayAppReportPdf({ report, companyName: 'TandemIQ' });
+    const pdf = await renderPayAppReportPdf({ report, companyName: 'Coaster' });
     const safeProject = (row.project_name || 'report').replace(/[^a-z0-9]+/gi, '_');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="PayApp_${row.application_number || row.id}_${safeProject}_Review.pdf"`);

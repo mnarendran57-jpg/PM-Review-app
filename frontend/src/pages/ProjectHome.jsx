@@ -15,7 +15,7 @@ const TOOLS = [
     icon: InboxArrowDownIcon, bg: 'linear-gradient(135deg, #f59e0b, #f97316)', glow: 'rgba(245,158,11,0.28)' },
   { slug: 'pay-app-review', label: 'Pay App Review',
     description: 'Catch math errors and over-billing on pay applications before you verify work on site.',
-    icon: DocumentMagnifyingGlassIcon, bg: 'linear-gradient(135deg, #3b82f6, #6366f1)', glow: 'rgba(59,130,246,0.28)' },
+    icon: DocumentMagnifyingGlassIcon, bg: 'linear-gradient(135deg, #3b82f6, #2563eb)', glow: 'rgba(59,130,246,0.28)' },
   { slug: 'pco-review', label: 'Change Order Review',
     description: 'Check a proposed change order against the contract before you approve it.',
     icon: ScaleIcon, bg: 'linear-gradient(135deg, #fb923c, #f97316)', glow: 'rgba(249,115,22,0.28)' },
@@ -66,7 +66,7 @@ function ContractSection({ projectId }) {
   return (
     <div className="card p-6">
       <div className="flex items-center gap-2 mb-1">
-        <DocumentTextIcon className="w-5 h-5 text-indigo-500" />
+        <DocumentTextIcon className="w-5 h-5 text-blue-600" />
         <h2 className="text-base font-bold text-gray-900">Shared Documents</h2>
       </div>
       <p className="text-sm text-gray-500 mb-4">
@@ -137,7 +137,7 @@ export default function ProjectHome() {
                 </div>
                 <h3 className="text-base font-bold text-gray-900 mb-1.5">{tool.label}</h3>
                 <p className="text-sm text-gray-500 leading-relaxed flex-1">{tool.description}</p>
-                <span className="flex items-center gap-1 mt-4 text-sm font-semibold text-indigo-600">
+                <span className="flex items-center gap-1 mt-4 text-sm font-semibold text-blue-600">
                   Open <ArrowRightIcon className="w-4 h-4 transition-transform group-hover:translate-x-1" />
                 </span>
               </button>

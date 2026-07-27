@@ -9,7 +9,7 @@ const RED = rgb(0.65, 0.13, 0.13);
 const GREY = rgb(0.35, 0.35, 0.35);
 const INK = rgb(0.1, 0.1, 0.1);
 
-// Renders the pay app review report as a client-facing PDF on the TandemIQ letterhead.
+// Renders the pay app review report as a client-facing PDF on the Coaster letterhead.
 // Consumes the same object buildReport() already returns, so the PDF and the
 // markdown export never drift apart. Deliberately omits check IDs and the
 // pass/skip detail — those are internal, and this document goes to a client.
@@ -29,7 +29,7 @@ async function renderPayAppReportPdf({ report, companyName }) {
       y: PAGE_HEIGHT - 28, size: BODY_SIZE, font: fontItalic, color: GREY,
     });
     // Wordmark, top-left, in place of a logo image.
-    page.drawText(companyName || 'TandemIQ', {
+    page.drawText(companyName || 'Coaster', {
       x: MARGIN, y: PAGE_HEIGHT - 52, size: 18, font: fontBold, color: INK,
     });
     return PAGE_HEIGHT - 76;

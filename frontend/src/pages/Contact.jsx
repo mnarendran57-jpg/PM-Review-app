@@ -62,8 +62,8 @@ export default function Contact() {
           {details.map(({ icon: Icon, label, value }) => (
             <div key={label} className="flex items-start gap-3">
               <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-                style={{ background: 'rgba(99,102,241,0.08)' }}>
-                <Icon className="w-5 h-5" style={{ color: '#6366f1' }} />
+                style={{ background: 'rgba(37,99,235,0.08)' }}>
+                <Icon className="w-5 h-5" style={{ color: '#2563eb' }} />
               </div>
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{label}</p>
