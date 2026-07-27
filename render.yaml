@@ -1,0 +1,39 @@
+# Render deployment for the TandemIQ backend (Node + Express + node:sqlite).
+#
+# Netlify hosts the frontend (see netlify.toml); this hosts the API it talks to.
+# After the service is live, set VITE_API_BASE_URL in Netlify to the backend URL
+# (e.g. https://tandemiq-backend.onrender.com) and redeploy the frontend.
+#
+# To deploy: in Render, "New +" -> "Blueprint", connect this repo. Render reads this
+# file, creates the service and a 1 GB persistent disk, and prompts for the secret
+# env vars marked `sync: false` below.
+services:
+  - type: web
+    name: tandemiq-backend
+    runtime: node
+    rootDir: backend
+    plan: starter            # Free instances sleep and cold-start (~30-60s of "lag");
+                             # Starter stays warm. Change to `free` to trial at no cost.
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    autoDeploy: true
+    # Persistent disk so the SQLite file (and its WAL) survive redeploys. Without this,
+    # every deploy starts from an empty database.
+    disk:
+      name: tandemiq-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      # SQLite lives on the mounted disk, not the ephemeral app directory.
+      - key: DB_PATH
+        value: /var/data/pm_review.db
+      # Render injects PORT; server.js already reads process.env.PORT.
+      # Secrets — entered in the Render dashboard, never committed:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: APP_PASSWORD_HASH        # bcrypt hash of the shared team password
+        sync: false
+      # Session signing secret — let Render generate a strong random value.
+      - key: JWT_SECRET
+        generateValue: true

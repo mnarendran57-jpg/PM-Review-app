@@ -1,7 +1,11 @@
 const { DatabaseSync } = require('node:sqlite');
 const path = require('path');
 
-const db = new DatabaseSync(path.join(__dirname, 'pm_review.db'));
+// DB_PATH lets a deployment point the database at a persistent disk (e.g. Render's
+// mounted volume) instead of the app directory, which is ephemeral on most hosts and
+// would wipe all data on every redeploy. Falls back to the local file for dev.
+const dbPath = process.env.DB_PATH || path.join(__dirname, 'pm_review.db');
+const db = new DatabaseSync(dbPath);
 
 db.exec(`PRAGMA journal_mode = WAL`);
 db.exec(`PRAGMA foreign_keys = ON`);
