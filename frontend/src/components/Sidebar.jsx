@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import {
   InboxArrowDownIcon, ArrowRightOnRectangleIcon, DocumentMagnifyingGlassIcon,
   ClipboardDocumentCheckIcon, Squares2X2Icon, ScaleIcon, ArrowLeftIcon,
-  Cog6ToothIcon, EnvelopeIcon, FolderIcon, ReceiptPercentIcon, CameraIcon,
+  Cog6ToothIcon, EnvelopeIcon, FolderIcon, ReceiptPercentIcon, CameraIcon, UserGroupIcon,
 } from '@heroicons/react/24/outline';
 import { authApi, selectedClient } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -20,6 +20,8 @@ const projectTools = [
 
 const globalNav = [
   { to: '/projects', label: 'Projects', icon: FolderIcon, color: '#3b82f6', glow: 'rgba(37,99,235,0.2)' },
+  // Managing who can sign in is an administrator's job, so it is hidden from members.
+  { to: '/team', label: 'Team', icon: UserGroupIcon, color: '#fb923c', glow: 'rgba(249,115,22,0.18)', adminOnly: true },
   { to: '/settings', label: 'Settings', icon: Cog6ToothIcon, color: '#94a3b8', glow: 'rgba(148,163,184,0.18)' },
   { to: '/contact', label: 'Contact Us', icon: EnvelopeIcon, color: '#f472b6', glow: 'rgba(244,114,182,0.18)' },
 ];
@@ -63,6 +65,7 @@ export default function Sidebar() {
   const project = ctx?.project;
   const projectId = ctx?.projectId;
   const client = selectedClient.get();
+  const isAdmin = ['admin', 'superadmin'].includes(authApi.user()?.role);
 
   const handleLogout = () => {
     authApi.logout();
@@ -138,7 +141,7 @@ export default function Sidebar() {
                 style={{ color: 'rgba(255,255,255,0.25)' }}>Menu</span>
             </div>
             <div className="space-y-1">
-              {globalNav.map(n => (
+              {globalNav.filter(n => !n.adminOnly || isAdmin).map(n => (
                 <NavRow key={n.to} to={n.to} end={n.to === '/projects'}
                   label={n.label} Icon={n.icon} color={n.color} glow={n.glow} />
               ))}

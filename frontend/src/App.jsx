@@ -3,6 +3,7 @@ import Layout from './components/Layout';
 import Home from './pages/Home';
 import ProjectWorkspace from './pages/ProjectWorkspace';
 import ClientSelect from './pages/ClientSelect';
+import Team from './pages/Team';
 import Settings from './pages/Settings';
 import Contact from './pages/Contact';
 import Login from './pages/Login';
@@ -38,6 +39,7 @@ export default function App() {
               <Route path="/home" element={<Navigate to="/clients" replace />} />
               <Route path="/clients" element={<ClientSelect />} />
               <Route path="/projects" element={<RequireClient><Layout><Home /></Layout></RequireClient>} />
+              <Route path="/team" element={<Layout><Team /></Layout>} />
               <Route path="/settings" element={<Layout><Settings /></Layout>} />
               <Route path="/contact" element={<Layout><Contact /></Layout>} />
               <Route path="/project/:projectId/*" element={<RequireClient><ProjectWorkspace /></RequireClient>} />

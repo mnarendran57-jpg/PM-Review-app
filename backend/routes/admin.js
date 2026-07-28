@@ -92,22 +92,32 @@ router.put('/users/:id', requireRole('superadmin', 'admin'), (req, res) => {
   if (req.user.role !== 'superadmin' && user.firm_id !== req.firmId) {
     return res.status(403).json({ error: 'You do not have permission to do that' });
   }
-  // Never let the last active administrator be demoted or disabled — that would lock the
-  // firm out of its own account with no way back in.
+  // Work out the role being moved to, ignoring anything not a real role. A superadmin
+  // keeps that rank unless explicitly changed to another valid one — importantly this is
+  // resolved *before* the lockout check below, which has to reason about the new value.
+  const requested = req.body.role;
+  const validRole = requested && [...ROLES, 'superadmin'].includes(requested);
+  const nextRole = validRole && req.user.role === 'superadmin' ? requested
+    : (requested && ROLES.includes(requested) ? requested : user.role);
+  const nextStatus = req.body.status || user.status;
+
+  // Never let the last administrator be demoted or disabled — that would lock the firm
+  // out of its own account with no way back in. "Administrator" covers superadmin too,
+  // which an earlier version missed, letting the only owner demote themselves.
+  const ADMIN_ROLES = ['admin', 'superadmin'];
   const admins = db.prepare(
     `SELECT COUNT(*) AS c FROM users WHERE firm_id=? AND role IN ('admin','superadmin') AND status='Active'`
   ).get(user.firm_id).c;
-  const losingAdmin = (req.body.role && req.body.role !== 'admin' && user.role === 'admin')
-    || (req.body.status && req.body.status !== 'Active' && user.status === 'Active');
-  if (admins <= 1 && losingAdmin) {
+  const wasAdmin = ADMIN_ROLES.includes(user.role) && user.status === 'Active';
+  const staysAdmin = ADMIN_ROLES.includes(nextRole) && nextStatus === 'Active';
+  if (admins <= 1 && wasAdmin && !staysAdmin) {
     return res.status(400).json({ error: 'This is the firm\'s only administrator — promote someone else first.' });
   }
 
-  const role = req.body.role && ROLES.includes(req.body.role) ? req.body.role : user.role;
   db.prepare(`UPDATE users SET name=?, role=?, status=? WHERE id=?`).run(
     req.body.name ?? user.name,
-    req.user.role === 'superadmin' ? (req.body.role || user.role) : role,
-    req.body.status || user.status,
+    nextRole,
+    nextStatus,
     user.id
   );
   if (req.body.new_password) {
