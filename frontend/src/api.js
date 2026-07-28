@@ -170,6 +170,10 @@ export const payAppReviewApi = {
     const res = await api.get(`/pay-app-review/${id}/report.pdf`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `pay_app_review_${id}.pdf`);
   },
+  downloadMarkedUpPdf: async (id, fileName) => {
+    const res = await api.get(`/pay-app-review/${id}/marked-up.pdf`, { responseType: 'blob', timeout: AI_TIMEOUT });
+    triggerDownload(res.data, fileName || `pay_app_${id}_marked_up.pdf`);
+  },
   downloadMarkdown: async (id, fileName) => {
     const res = await api.get(`/pay-app-review/${id}/report.md`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `pay_app_review_${id}.md`);

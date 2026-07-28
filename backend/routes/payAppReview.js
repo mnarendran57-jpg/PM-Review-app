@@ -6,6 +6,7 @@ const { analyzePayApps } = require('../lib/payAppExtract');
 const { runChecks } = require('../lib/payAppChecks');
 const { buildReport } = require('../lib/payAppReport');
 const { renderPayAppReportPdf } = require('../lib/payAppReportPdf');
+const { annotatePayAppPdf } = require('../lib/payAppAnnotate');
 const { extractContractTerms } = require('../lib/contractExtract');
 const { scanCompliance } = require('../lib/payAppCompliance');
 const { buildSubReconciliation, runMissedItemChecks } = require('../lib/payAppReconcile');
@@ -501,6 +502,35 @@ router.get('/:id/report.json', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Content-Disposition', `attachment; filename="PayApp_${row.application_number || row.id}_${(row.project_name || 'report').replace(/[^a-z0-9]+/gi, '_')}.json"`);
   res.send(JSON.stringify(payload, null, 2));
+});
+
+// The contractor's own application, marked up with the review findings — each problem
+// circled and annotated next to the figure it concerns. Preferred over the standalone
+// report when the reviewer wants the issues in context on the source document.
+router.get('/:id/marked-up.pdf', async (req, res) => {
+  try {
+    const row = db.prepare('SELECT * FROM pay_app_reviews WHERE id=?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+
+    const original = await storage.readFile({ key: row.current_file_key, blob: row.current_file });
+    if (!original) return res.status(404).json({ error: 'The original pay application PDF is not on file for this review.' });
+
+    const results = JSON.parse(row.checks_result);
+    const { buffer, markedCount, unplacedCount } = await annotatePayAppPdf({
+      pdfBuffer: original,
+      results,
+      header: { projectName: row.project_name, applicationNumber: row.application_number },
+    });
+    console.log(`[pay app markup] review=${row.id} marked=${markedCount} unplaced=${unplacedCount}`);
+
+    const safeProject = (row.project_name || 'report').replace(/[^a-z0-9]+/gi, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="PayApp_${row.application_number || row.id}_${safeProject}_MARKED_UP.pdf"`);
+    res.send(buffer);
+  } catch (err) {
+    console.error('Pay app markup error:', err);
+    res.status(500).json({ error: `Could not mark up this pay application (${err.message}).` });
+  }
 });
 
 router.get('/:id/original.pdf', async (req, res) => {

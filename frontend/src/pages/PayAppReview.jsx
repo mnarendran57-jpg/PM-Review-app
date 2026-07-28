@@ -322,6 +322,20 @@ export default function PayAppReview() {
   const [newProjectName, setNewProjectName] = useState('');
   const [creatingProject, setCreatingProject] = useState(false);
 
+  // Marking up re-reads the source PDF's text layer to anchor each finding, so it takes a
+  // moment on a long application — hold the button while it runs.
+  const [markingUp, setMarkingUp] = useState(false);
+  const downloadMarkedUp = async id => {
+    setMarkingUp(true); setError('');
+    try {
+      await payAppReviewApi.downloadMarkedUpPdf(id);
+    } catch (err) {
+      setError(err.friendlyMessage || err.response?.data?.error || 'Could not produce the marked-up PDF.');
+    } finally {
+      setMarkingUp(false);
+    }
+  };
+
   const loadHistory = () => payAppReviewApi.list(routeProjectId ? { project_id: routeProjectId } : undefined).then(setHistory);
   const loadProjects = () => payAppReviewApi.projects().then(setProjects);
   useEffect(() => { loadProjects(); }, []);
@@ -686,7 +700,10 @@ export default function PayAppReview() {
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">Review Result</h2>
                 <div className="flex items-center gap-2">
-                  <button className="btn-primary px-3 py-1.5" onClick={() => payAppReviewApi.downloadPdf(result.id)}>
+                  <button className="btn-primary px-3 py-1.5" onClick={() => downloadMarkedUp(result.id)} disabled={markingUp}>
+                    <PencilSquareIcon className="w-4 h-4" /> {markingUp ? 'Marking up…' : 'Marked-Up PDF'}
+                  </button>
+                  <button className="btn-secondary px-3 py-1.5" onClick={() => payAppReviewApi.downloadPdf(result.id)}>
                     <ArrowDownTrayIcon className="w-4 h-4" /> PDF Report
                   </button>
                   <button className="btn-secondary px-3 py-1.5" onClick={() => payAppReviewApi.downloadMarkdown(result.id)}>
@@ -707,7 +724,10 @@ export default function PayAppReview() {
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">Stored Review</h2>
                 <div className="flex items-center gap-2">
-                  <button className="btn-primary px-3 py-1.5" onClick={() => payAppReviewApi.downloadPdf(viewing.id)}>
+                  <button className="btn-primary px-3 py-1.5" onClick={() => downloadMarkedUp(viewing.id)} disabled={markingUp}>
+                    <PencilSquareIcon className="w-4 h-4" /> {markingUp ? 'Marking up…' : 'Marked-Up PDF'}
+                  </button>
+                  <button className="btn-secondary px-3 py-1.5" onClick={() => payAppReviewApi.downloadPdf(viewing.id)}>
                     <ArrowDownTrayIcon className="w-4 h-4" /> PDF Report
                   </button>
                   <button className="btn-secondary px-3 py-1.5" onClick={() => payAppReviewApi.downloadMarkdown(viewing.id)}>
