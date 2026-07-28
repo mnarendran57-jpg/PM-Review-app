@@ -162,12 +162,13 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
 });
 
 router.get('/', (req, res) => {
-  const { search, intake_type } = req.query;
+  const { search, intake_type, project_name } = req.query;
   let sql = `SELECT id, intake_type, vendor_name, project_name, po_number, proposal_date,
              total_price, change_order_price, original_po_amount, new_total_amount,
              proposal_file_name, po_file_name, merged_file_name, created_by, created_at
              FROM proposal_intakes WHERE 1=1`;
   const params = [];
+  if (project_name) { sql += ' AND project_name = ?'; params.push(project_name); }
   if (intake_type) { sql += ' AND intake_type = ?'; params.push(intake_type); }
   if (search) {
     sql += ' AND (vendor_name LIKE ? OR project_name LIKE ? OR po_number LIKE ?)';

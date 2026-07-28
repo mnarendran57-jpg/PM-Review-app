@@ -48,8 +48,8 @@ export default function PreconReview() {
   const [history, setHistory] = useState([]);
   const [viewing, setViewing] = useState(null); // { id, report }
 
-  const loadHistory = () => preconReviewApi.list().then(setHistory);
-  useEffect(() => { loadHistory(); }, []);
+  const loadHistory = () => preconReviewApi.list(routeProjectName ? { project_name: routeProjectName } : undefined).then(setHistory);
+  useEffect(() => { loadHistory(); }, [routeProjectName]);
 
   const reset = () => {
     setFiles([]); setProjectName(''); setReviewFocus('');

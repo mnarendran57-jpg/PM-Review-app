@@ -61,10 +61,11 @@ router.post('/', upload.array('documents', 100), async (req, res) => {
 });
 
 router.get('/', (req, res) => {
-  const { search } = req.query;
+  const { search, project_name } = req.query;
   let sql = `SELECT id, project_name, review_focus, file_names, insufficient_info, created_by, created_at
              FROM preconstruction_reviews WHERE 1=1`;
   const params = [];
+  if (project_name) { sql += ' AND project_name = ?'; params.push(project_name); }
   if (search) { sql += ' AND project_name LIKE ?'; params.push(`%${search}%`); }
   sql += ' ORDER BY created_at DESC';
   const rows = db.prepare(sql).all(...params);

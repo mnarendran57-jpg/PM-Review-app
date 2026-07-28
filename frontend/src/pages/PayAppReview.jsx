@@ -322,9 +322,10 @@ export default function PayAppReview() {
   const [newProjectName, setNewProjectName] = useState('');
   const [creatingProject, setCreatingProject] = useState(false);
 
-  const loadHistory = () => payAppReviewApi.list().then(setHistory);
+  const loadHistory = () => payAppReviewApi.list(routeProjectId ? { project_id: routeProjectId } : undefined).then(setHistory);
   const loadProjects = () => payAppReviewApi.projects().then(setProjects);
-  useEffect(() => { loadHistory(); loadProjects(); }, []);
+  useEffect(() => { loadProjects(); }, []);
+  useEffect(() => { loadHistory(); }, [routeProjectId]);
 
   // Keep the scoped project in sync if the route changes under us.
   useEffect(() => {

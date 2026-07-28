@@ -413,12 +413,13 @@ router.post('/', upload.fields([
 });
 
 router.get('/', (req, res) => {
-  const { search, project_name } = req.query;
+  const { search, project_name, project_id } = req.query;
   let sql = `SELECT id, project_name, application_number, period_to, contract_sum_to_date,
              total_completed_to_date, current_payment_due, balance_to_finish,
              critical_count, fail_count, created_by, created_at
              FROM pay_app_reviews WHERE 1=1`;
   const params = [];
+  if (project_id) { sql += ' AND project_id = ?'; params.push(project_id); }
   if (project_name) { sql += ' AND project_name = ?'; params.push(project_name); }
   if (search) { sql += ' AND project_name LIKE ?'; params.push(`%${search}%`); }
   sql += ' ORDER BY created_at DESC';

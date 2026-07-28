@@ -74,9 +74,9 @@ export default function ProposalIntake() {
   const [result, setResult] = useState(null);
   const [history, setHistory] = useState([]);
 
-  const loadHistory = () => proposalIntakeApi.list().then(setHistory);
+  const loadHistory = () => proposalIntakeApi.list(routeProjectName ? { project_name: routeProjectName } : undefined).then(setHistory);
+  useEffect(() => { loadHistory(); }, [routeProjectName]);
   useEffect(() => {
-    loadHistory();
     memoTemplatesApi.list().then(list => {
       setTemplates(list);
       const def = list.find(t => t.is_default) || list[0];

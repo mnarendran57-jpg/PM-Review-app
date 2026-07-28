@@ -145,8 +145,9 @@ export default function PcoReview() {
   const [viewing, setViewing] = useState(null); // { id, report }
   const [history, setHistory] = useState([]);
 
-  const loadHistory = () => pcoReviewApi.list().then(setHistory);
-  useEffect(() => { loadHistory(); payAppReviewApi.projects().then(setProjects); }, []);
+  const loadHistory = () => pcoReviewApi.list(routeProjectId ? { project_id: routeProjectId } : undefined).then(setHistory);
+  useEffect(() => { loadHistory(); }, [routeProjectId]);
+  useEffect(() => { payAppReviewApi.projects().then(setProjects); }, []);
 
   useEffect(() => {
     if (routeProjectId) setProjectId(String(routeProjectId));
