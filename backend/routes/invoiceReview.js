@@ -6,6 +6,7 @@ const { analyzeInvoices } = require('../lib/invoiceExtract');
 const { runInvoiceChecks } = require('../lib/invoiceChecks');
 const { buildInvoiceReport } = require('../lib/invoiceReport');
 const { friendlyAiError } = require('../lib/aiErrors');
+const storage = require('../lib/storage');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -67,10 +68,13 @@ router.post('/', upload.array('invoices', 100), async (req, res) => {
     const reviewId = insert.lastInsertRowid;
 
     const insertFile = db.prepare(`
-      INSERT INTO invoice_review_files (review_id, file_name, mime_type, file_blob)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO invoice_review_files (review_id, file_name, mime_type, file_key, file_blob)
+      VALUES (?, ?, ?, ?, ?)
     `);
-    for (const f of files) insertFile.run(reviewId, f.originalname, f.mimetype, f.buffer);
+    for (const f of files) {
+      const { key } = await storage.storeFile('invoice', f.buffer, f.mimetype, f.originalname);
+      insertFile.run(reviewId, f.originalname, f.mimetype, key, key ? Buffer.alloc(0) : f.buffer);
+    }
 
     res.json({ id: reviewId, report, results });
   } catch (err) {
@@ -122,18 +126,23 @@ router.get('/:id/report.md', (req, res) => {
   res.send(row.report_markdown);
 });
 
-router.get('/:id/files/:fileId', (req, res) => {
+router.get('/:id/files/:fileId', async (req, res) => {
   const row = db.prepare(
-    'SELECT file_name, mime_type, file_blob FROM invoice_review_files WHERE id=? AND review_id=?'
+    'SELECT file_name, mime_type, file_key, file_blob FROM invoice_review_files WHERE id=? AND review_id=?'
   ).get(req.params.fileId, req.params.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
+  const bytes = await storage.readFile({ key: row.file_key, blob: row.file_blob });
+  if (!bytes) return res.status(404).json({ error: 'Not found' });
   res.setHeader('Content-Type', row.mime_type || 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${row.file_name}"`);
-  res.send(Buffer.from(row.file_blob));
+  res.send(bytes);
 });
 
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
+  const keys = db.prepare('SELECT file_key FROM invoice_review_files WHERE review_id=? AND file_key IS NOT NULL')
+    .all(req.params.id).map(r => r.file_key);
   db.prepare('DELETE FROM invoice_reviews WHERE id=?').run(req.params.id);
+  await storage.remove(keys);
   res.json({ success: true });
 });
 

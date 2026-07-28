@@ -5,6 +5,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const db = require('../database');
 const { renderMemoPdf, mergePdfBuffers } = require('../lib/pdfGen');
 const { friendlyAiError } = require('../lib/aiErrors');
+const storage = require('../lib/storage');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -131,22 +132,26 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
     const baseName = proposalFile.originalname.replace(/\.pdf$/i, '');
     const mergedFileName = `${baseName}_processed.pdf`;
 
+    const proposalKey = (await storage.storeFile('proposal', proposalFile.buffer, proposalFile.mimetype, proposalFile.originalname)).key;
+    const poKey = poFile ? (await storage.storeFile('proposal', poFile.buffer, poFile.mimetype, poFile.originalname)).key : null;
+    const mergedKey = (await storage.storeFile('proposal', mergedPdf, 'application/pdf', mergedFileName)).key;
+
     const result = db.prepare(`
       INSERT INTO proposal_intakes (
         intake_type, vendor_name, project_name, po_number, proposal_date,
         scope_of_work, total_price, change_order_price, original_po_amount, new_total_amount,
         memo_template_id,
-        proposal_file_name, proposal_file, po_file_name, po_file,
-        merged_file_name, merged_pdf, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        proposal_file_name, proposal_file, proposal_file_key, po_file_name, po_file, po_file_key,
+        merged_file_name, merged_pdf, merged_pdf_key, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       intake_type, fields.vendor_name, fields.project_name, fields.po_number, fields.date,
       fields.scope_of_work, fields.total_price, fields.change_order_price || null,
       fields.original_po_amount || null, fields.new_total_amount || null,
       template.id,
-      proposalFile.originalname, proposalFile.buffer,
-      poFile?.originalname || null, poFile?.buffer || null,
-      mergedFileName, mergedPdf, fields.from_name
+      proposalFile.originalname, proposalKey ? Buffer.alloc(0) : proposalFile.buffer, proposalKey,
+      poFile?.originalname || null, poFile ? (poKey ? Buffer.alloc(0) : poFile.buffer) : null, poKey,
+      mergedFileName, mergedKey ? Buffer.alloc(0) : mergedPdf, mergedKey, fields.from_name
     );
 
     res.json({ id: result.lastInsertRowid, merged_file_name: mergedFileName });
@@ -172,16 +177,20 @@ router.get('/', (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
-router.get('/:id/download', (req, res) => {
-  const row = db.prepare('SELECT merged_file_name, merged_pdf FROM proposal_intakes WHERE id=?').get(req.params.id);
+router.get('/:id/download', async (req, res) => {
+  const row = db.prepare('SELECT merged_file_name, merged_pdf, merged_pdf_key FROM proposal_intakes WHERE id=?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
+  const bytes = await storage.readFile({ key: row.merged_pdf_key, blob: row.merged_pdf });
+  if (!bytes) return res.status(404).json({ error: 'Not found' });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${row.merged_file_name}"`);
-  res.send(Buffer.from(row.merged_pdf));
+  res.send(bytes);
 });
 
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
+  const row = db.prepare('SELECT proposal_file_key, po_file_key, merged_pdf_key FROM proposal_intakes WHERE id=?').get(req.params.id);
   db.prepare('DELETE FROM proposal_intakes WHERE id=?').run(req.params.id);
+  await storage.remove([row?.proposal_file_key, row?.po_file_key, row?.merged_pdf_key]);
   res.json({ success: true });
 });
 

@@ -37,3 +37,14 @@ services:
       # Session signing secret — let Render generate a strong random value.
       - key: JWT_SECRET
         generateValue: true
+      # Optional: Cloudflare R2 object storage for uploaded files. Leave unset to keep
+      # files in the database on the persistent disk above. Set all four to use R2, then
+      # run `node scripts/migrate-blobs-to-r2.js` once to move existing files over.
+      - key: R2_ENDPOINT
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false

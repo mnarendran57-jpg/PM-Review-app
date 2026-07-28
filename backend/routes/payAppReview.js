@@ -13,6 +13,7 @@ const { buildSiteVerificationChecklist } = require('../lib/payAppChecklist');
 const { backfillPayApp } = require('../lib/payAppNormalize');
 const { parseCoLogCsv } = require('../lib/csv');
 const { friendlyAiError } = require('../lib/aiErrors');
+const storage = require('../lib/storage');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -156,11 +157,16 @@ router.post('/project/:id/contract', upload.single('contract_file'), async (req,
 
     // One contract per project: replace any prior upload rather than accumulating
     // versions the reviewer would have to choose between.
+    const oldKeys = db.prepare(`SELECT file_key FROM project_contracts WHERE project_id=? AND file_key IS NOT NULL`)
+      .all(req.params.id).map(r => r.file_key);
     db.prepare(`DELETE FROM project_contracts WHERE project_id = ?`).run(req.params.id);
+    await storage.remove(oldKeys);
+
+    const contractKey = (await storage.storeFile('contract', file.buffer, file.mimetype, file.originalname)).key;
     const result = db.prepare(`
-      INSERT INTO project_contracts (project_id, file_name, file_blob, terms, created_by)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(req.params.id, file.originalname, file.buffer, JSON.stringify(storedTerms), req.body.created_by || null);
+      INSERT INTO project_contracts (project_id, file_name, file_blob, file_key, terms, created_by)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(req.params.id, file.originalname, contractKey ? Buffer.alloc(0) : file.buffer, contractKey, JSON.stringify(storedTerms), req.body.created_by || null);
 
     res.json({ id: result.lastInsertRowid, file_name: file.originalname, terms: storedTerms });
   } catch (err) {
@@ -182,20 +188,25 @@ router.patch('/project/:id/contract', (req, res) => {
   res.json({ success: true });
 });
 
-router.delete('/project/:id/contract', (req, res) => {
+router.delete('/project/:id/contract', async (req, res) => {
+  const keys = db.prepare(`SELECT file_key FROM project_contracts WHERE project_id=? AND file_key IS NOT NULL`)
+    .all(req.params.id).map(r => r.file_key);
   db.prepare(`DELETE FROM project_contracts WHERE project_id=?`).run(req.params.id);
+  await storage.remove(keys);
   res.json({ success: true });
 });
 
-router.get('/project/:id/contract/original.pdf', (req, res) => {
+router.get('/project/:id/contract/original.pdf', async (req, res) => {
   const row = db.prepare(`
-    SELECT file_name, file_blob FROM project_contracts WHERE project_id=?
+    SELECT file_name, file_blob, file_key FROM project_contracts WHERE project_id=?
     ORDER BY created_at DESC LIMIT 1
   `).get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
+  const bytes = await storage.readFile({ key: row.file_key, blob: row.file_blob });
+  if (!bytes) return res.status(404).json({ error: 'Not found' });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${row.file_name}"`);
-  res.send(Buffer.from(row.file_blob));
+  res.send(bytes);
 });
 
 // Look up the most recent stored review for a project, to use as "previous application"
@@ -362,15 +373,17 @@ router.post('/', upload.fields([
     const criticalCount = results.filter(r => r.critical && r.status === 'FAIL').length;
     const failCount = results.filter(r => r.status === 'FAIL').length;
 
+    const currentKey = (await storage.storeFile('pay-app', currentFile.buffer, currentFile.mimetype, currentFile.originalname)).key;
+
     const insertResult = db.prepare(`
       INSERT INTO pay_app_reviews (
         project_name, application_number, period_to, contract_sum_to_date,
         total_completed_to_date, current_payment_due, balance_to_finish,
         extracted_data, checks_result, report_markdown,
-        current_file_name, current_file, previous_review_id,
+        current_file_name, current_file, current_file_key, previous_review_id,
         contract_sum, co_log, critical_count, fail_count, created_by, project_id,
         compliance_findings
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       current.summary.projectName || null,
       current.summary.applicationNumber ?? null,
@@ -382,7 +395,7 @@ router.post('/', upload.fields([
       JSON.stringify({ current, previous }),
       JSON.stringify(results),
       report.markdown,
-      currentFile.originalname, currentFile.buffer,
+      currentFile.originalname, currentKey ? Buffer.alloc(0) : currentFile.buffer, currentKey,
       previousReviewId,
       originalContractSum,
       changeOrderLog ? JSON.stringify(changeOrderLog) : null,
@@ -489,16 +502,20 @@ router.get('/:id/report.json', (req, res) => {
   res.send(JSON.stringify(payload, null, 2));
 });
 
-router.get('/:id/original.pdf', (req, res) => {
-  const row = db.prepare('SELECT current_file_name, current_file FROM pay_app_reviews WHERE id=?').get(req.params.id);
-  if (!row || !row.current_file) return res.status(404).json({ error: 'Not found' });
+router.get('/:id/original.pdf', async (req, res) => {
+  const row = db.prepare('SELECT current_file_name, current_file, current_file_key FROM pay_app_reviews WHERE id=?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  const bytes = await storage.readFile({ key: row.current_file_key, blob: row.current_file });
+  if (!bytes) return res.status(404).json({ error: 'Not found' });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${row.current_file_name}"`);
-  res.send(Buffer.from(row.current_file));
+  res.send(bytes);
 });
 
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
+  const row = db.prepare('SELECT current_file_key FROM pay_app_reviews WHERE id=?').get(req.params.id);
   db.prepare('DELETE FROM pay_app_reviews WHERE id=?').run(req.params.id);
+  await storage.remove([row?.current_file_key]);
   res.json({ success: true });
 });
 

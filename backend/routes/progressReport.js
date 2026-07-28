@@ -5,6 +5,7 @@ const db = require('../database');
 const { analyzeProgress, renderMarkdown } = require('../lib/progressReport');
 const { renderProgressReportPdf } = require('../lib/progressReportPdf');
 const { friendlyAiError } = require('../lib/aiErrors');
+const storage = require('../lib/storage');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -83,10 +84,14 @@ router.post('/', upload.array('images', 100), async (req, res) => {
     const reportId = insert.lastInsertRowid;
 
     const insertFile = db.prepare(`
-      INSERT INTO progress_report_files (report_id, sort_order, file_name, mime_type, caption, file_blob)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO progress_report_files (report_id, sort_order, file_name, mime_type, caption, file_key, file_blob)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
-    files.forEach((f, i) => insertFile.run(reportId, i, f.originalname, f.mimetype, images[i].caption || null, f.buffer));
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const { key } = await storage.storeFile('progress', f.buffer, f.mimetype, f.originalname);
+      insertFile.run(reportId, i, f.originalname, f.mimetype, images[i].caption || null, key, key ? Buffer.alloc(0) : f.buffer);
+    }
 
     res.json({ id: reportId, report, header });
   } catch (err) {
@@ -152,9 +157,14 @@ router.get('/:id/report.pdf', async (req, res) => {
       const proj = db.prepare('SELECT project_name FROM projects WHERE id=?').get(row.project_id);
       header.projectName = proj?.project_name || null;
     }
-    const photos = db.prepare(
-      'SELECT caption, mime_type, file_blob FROM progress_report_files WHERE report_id=? ORDER BY sort_order ASC'
-    ).all(row.id).map(p => ({ caption: p.caption, mimeType: p.mime_type, buffer: Buffer.from(p.file_blob) }));
+    const photoRows = db.prepare(
+      'SELECT caption, mime_type, file_key, file_blob FROM progress_report_files WHERE report_id=? ORDER BY sort_order ASC'
+    ).all(row.id);
+    const photos = [];
+    for (const p of photoRows) {
+      const buffer = await storage.readFile({ key: p.file_key, blob: p.file_blob });
+      if (buffer) photos.push({ caption: p.caption, mimeType: p.mime_type, buffer });
+    }
 
     // Use the same letterhead address the proposal memo prints, so editing it in one
     // place keeps both documents consistent.
@@ -174,18 +184,23 @@ router.get('/:id/report.pdf', async (req, res) => {
   }
 });
 
-router.get('/:id/files/:fileId', (req, res) => {
+router.get('/:id/files/:fileId', async (req, res) => {
   const row = db.prepare(
-    'SELECT file_name, mime_type, file_blob FROM progress_report_files WHERE id=? AND report_id=?'
+    'SELECT file_name, mime_type, file_key, file_blob FROM progress_report_files WHERE id=? AND report_id=?'
   ).get(req.params.fileId, req.params.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
+  const bytes = await storage.readFile({ key: row.file_key, blob: row.file_blob });
+  if (!bytes) return res.status(404).json({ error: 'Not found' });
   res.setHeader('Content-Type', row.mime_type || 'image/jpeg');
   res.setHeader('Content-Disposition', `inline; filename="${row.file_name}"`);
-  res.send(Buffer.from(row.file_blob));
+  res.send(bytes);
 });
 
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
+  const keys = db.prepare('SELECT file_key FROM progress_report_files WHERE report_id=? AND file_key IS NOT NULL')
+    .all(req.params.id).map(r => r.file_key);
   db.prepare('DELETE FROM progress_reports WHERE id=?').run(req.params.id);
+  await storage.remove(keys);
   res.json({ success: true });
 });
 

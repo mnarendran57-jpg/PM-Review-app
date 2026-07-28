@@ -312,6 +312,23 @@ for (const [col, type] of [
   if (!prCols.includes(col)) db.exec(`ALTER TABLE progress_reports ADD COLUMN ${col} ${type}`);
 }
 
+// Object-storage keys. When Cloudflare R2 is configured, the file bytes live in R2 and
+// these columns hold the object key ("claim ticket"); the matching blob column is left
+// empty. When R2 is off, the key is null and the blob holds the bytes (original behavior).
+const addKeyCols = (table, cols) => {
+  const existing = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  for (const col of cols) {
+    if (!existing.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} TEXT`);
+  }
+};
+addKeyCols('proposal_intakes', ['proposal_file_key', 'po_file_key', 'merged_pdf_key']);
+addKeyCols('pay_app_reviews', ['current_file_key']);
+addKeyCols('project_contracts', ['file_key']);
+addKeyCols('pco_reviews', ['pco_file_key', 'reference_file_key']);
+addKeyCols('preconstruction_review_files', ['file_key']);
+addKeyCols('invoice_review_files', ['file_key']);
+addKeyCols('progress_report_files', ['file_key']);
+
 const intakeCols = db.prepare(`PRAGMA table_info(proposal_intakes)`).all().map(c => c.name);
 if (!intakeCols.includes('change_order_price')) {
   db.exec(`ALTER TABLE proposal_intakes ADD COLUMN change_order_price TEXT`);

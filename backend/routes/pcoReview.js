@@ -6,6 +6,7 @@ const { analyzePco } = require('../lib/pcoExtract');
 const { runPcoChecks } = require('../lib/pcoChecks');
 const { buildPcoReport } = require('../lib/pcoReport');
 const { friendlyAiError } = require('../lib/aiErrors');
+const storage = require('../lib/storage');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -58,13 +59,18 @@ router.post('/', upload.fields([
     const criticalCount = results.filter(r => r.critical && r.status === 'FAIL').length;
     const failCount = results.filter(r => r.status === 'FAIL').length;
 
+    const pcoKey = (await storage.storeFile('pco', pcoFile.buffer, pcoFile.mimetype, pcoFile.originalname)).key;
+    const refKey = referenceFile
+      ? (await storage.storeFile('pco', referenceFile.buffer, referenceFile.mimetype, referenceFile.originalname)).key
+      : null;
+
     const insert = db.prepare(`
       INSERT INTO pco_reviews (
         project_id, pco_number, title, contractor, total_amount, is_allowance,
         extracted_data, checks_result, ai_observations, report_markdown,
-        pco_file_name, pco_file, reference_file_name, reference_file,
+        pco_file_name, pco_file, pco_file_key, reference_file_name, reference_file, reference_file_key,
         critical_count, fail_count, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       projectId,
       pco.pcoNumber || null,
@@ -76,8 +82,9 @@ router.post('/', upload.fields([
       JSON.stringify(results),
       JSON.stringify(observations),
       report.markdown,
-      pcoFile.originalname, pcoFile.buffer,
-      referenceFile?.originalname || null, referenceFile?.buffer || null,
+      pcoFile.originalname, pcoKey ? Buffer.alloc(0) : pcoFile.buffer, pcoKey,
+      referenceFile?.originalname || null,
+      referenceFile ? (refKey ? Buffer.alloc(0) : referenceFile.buffer) : null, refKey,
       criticalCount, failCount,
       req.body.created_by || null
     );
@@ -129,16 +136,20 @@ router.get('/:id/report.md', (req, res) => {
   res.send(row.report_markdown);
 });
 
-router.get('/:id/original.pdf', (req, res) => {
-  const row = db.prepare('SELECT pco_file_name, pco_file FROM pco_reviews WHERE id=?').get(req.params.id);
-  if (!row || !row.pco_file) return res.status(404).json({ error: 'Not found' });
+router.get('/:id/original.pdf', async (req, res) => {
+  const row = db.prepare('SELECT pco_file_name, pco_file, pco_file_key FROM pco_reviews WHERE id=?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  const bytes = await storage.readFile({ key: row.pco_file_key, blob: row.pco_file });
+  if (!bytes) return res.status(404).json({ error: 'Not found' });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${row.pco_file_name}"`);
-  res.send(Buffer.from(row.pco_file));
+  res.send(bytes);
 });
 
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
+  const row = db.prepare('SELECT pco_file_key, reference_file_key FROM pco_reviews WHERE id=?').get(req.params.id);
   db.prepare('DELETE FROM pco_reviews WHERE id=?').run(req.params.id);
+  await storage.remove([row?.pco_file_key, row?.reference_file_key]);
   res.json({ success: true });
 });
 
