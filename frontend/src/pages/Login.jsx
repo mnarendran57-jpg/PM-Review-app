@@ -4,6 +4,7 @@ import { LockClosedIcon } from '@heroicons/react/24/outline';
 import { authApi } from '../api';
 
 export default function Login() {
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -13,14 +14,14 @@ export default function Login() {
     e.preventDefault();
     setError(''); setLoading(true);
     try {
-      const { token } = await authApi.login(password);
-      authApi.setToken(token);
-      navigate('/home', { replace: true });
+      await authApi.login(email, password);
+      // Which client to work on is chosen next.
+      navigate('/clients', { replace: true });
     } catch (err) {
       if (err.response) {
         setError(err.response.data?.error || 'Could not log in. Try again.');
       } else {
-        setError('Cannot reach the server. Make sure the backend is running, then try again.');
+        setError(err.friendlyMessage || 'Cannot reach the server. Make sure the backend is running, then try again.');
       }
     } finally {
       setLoading(false);
@@ -38,16 +39,27 @@ export default function Login() {
           </div>
         </div>
 
-        <h1 className="text-xl font-extrabold text-gray-900 mb-1 tracking-tight">Team Login</h1>
-        <p className="text-sm text-gray-400 mb-6">Enter the shared team password to continue.</p>
+        <h1 className="text-xl font-extrabold text-gray-900 mb-1 tracking-tight">Sign in</h1>
+        <p className="text-sm text-gray-400 mb-6">Use the email and password set up for you.</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="label">Email</label>
+            <input
+              type="email"
+              className="input"
+              autoFocus
+              autoComplete="username"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+            />
+          </div>
           <div>
             <label className="label">Password</label>
             <input
               type="password"
               className="input"
-              autoFocus
+              autoComplete="current-password"
               value={password}
               onChange={e => setPassword(e.target.value)}
             />
@@ -59,11 +71,14 @@ export default function Login() {
             </div>
           )}
 
-          <button type="submit" className="btn-primary w-full justify-center" disabled={loading || !password}>
-            {loading ? 'Logging in…' : (
-              <span className="flex items-center gap-2"><LockClosedIcon className="w-4 h-4" /> Log In</span>
+          <button type="submit" className="btn-primary w-full justify-center" disabled={loading || !email || !password}>
+            {loading ? 'Signing in…' : (
+              <span className="flex items-center gap-2"><LockClosedIcon className="w-4 h-4" /> Sign In</span>
             )}
           </button>
+          <p className="text-[11px] text-gray-400 text-center">
+            Forgot your password? Ask your firm's administrator to set a new one.
+          </p>
         </form>
       </div>
     </div>

@@ -4,7 +4,7 @@ import {
   ClipboardDocumentCheckIcon, Squares2X2Icon, ScaleIcon, ArrowLeftIcon,
   Cog6ToothIcon, EnvelopeIcon, FolderIcon, ReceiptPercentIcon, CameraIcon,
 } from '@heroicons/react/24/outline';
-import { authApi } from '../api';
+import { authApi, selectedClient } from '../api';
 import { useProject } from '../context/ProjectContext';
 
 // The tools that operate on a single project. Their routes are built relative to the
@@ -62,6 +62,7 @@ export default function Sidebar() {
   const ctx = useProject();
   const project = ctx?.project;
   const projectId = ctx?.projectId;
+  const client = selectedClient.get();
 
   const handleLogout = () => {
     authApi.logout();
@@ -119,7 +120,20 @@ export default function Sidebar() {
           </>
         ) : (
           <>
-            <div className="px-2 pt-6 pb-2">
+            {/* Which client's work is on screen, and a way back to the picker. */}
+            {client && (
+              <div className="px-2 pt-4 pb-3">
+                <button onClick={() => navigate('/clients')}
+                  className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider mb-2 transition-colors"
+                  style={{ color: 'rgba(255,255,255,0.4)' }}
+                  onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.75)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.4)'; }}>
+                  <ArrowLeftIcon className="w-3.5 h-3.5" /> Switch client
+                </button>
+                <p className="text-white font-bold text-[14px] leading-snug break-words">{client.name}</p>
+              </div>
+            )}
+            <div className="px-2 pt-2 pb-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.12em]"
                 style={{ color: 'rgba(255,255,255,0.25)' }}>Menu</span>
             </div>

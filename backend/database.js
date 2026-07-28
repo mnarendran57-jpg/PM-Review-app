@@ -10,7 +10,44 @@ const db = new DatabaseSync(dbPath);
 db.exec(`PRAGMA journal_mode = WAL`);
 db.exec(`PRAGMA foreign_keys = ON`);
 
+// --- Multi-tenancy -------------------------------------------------------------------
+// The app is sold to PM firms, each of which serves several clients. A firm is the tenant
+// boundary: one firm must never see another's data. The hierarchy is
+//   firm -> clients -> projects -> (reviews, files, ...)
+// Every user belongs to exactly one firm, and every request is filtered by that firm in
+// middleware rather than per route, so isolation can't be forgotten when adding a feature.
+// Roles: 'superadmin' (the vendor — can manage firms), 'admin' (manages their own firm's
+// users), 'member' (ordinary user).
 db.exec(`
+  CREATE TABLE IF NOT EXISTS firms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    status TEXT DEFAULT 'Active',
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    firm_id INTEGER REFERENCES firms(id) ON DELETE CASCADE,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    name TEXT,
+    role TEXT NOT NULL DEFAULT 'member',
+    status TEXT DEFAULT 'Active',
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS clients (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    firm_id INTEGER NOT NULL REFERENCES firms(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    contact_name TEXT,
+    contact_email TEXT,
+    notes TEXT,
+    status TEXT DEFAULT 'Active',
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_name TEXT NOT NULL,
@@ -454,6 +491,72 @@ if (templateCount === 0) {
     '',
     defaultSections
   );
+}
+
+// --- Tenancy migration ---------------------------------------------------------------
+// Every record that a user can reach gets a firm_id, so isolation is a single WHERE
+// clause on any query rather than a chain of joins that a new route might forget.
+const TENANT_TABLES = [
+  'projects', 'proposal_intakes', 'pay_app_reviews', 'pco_reviews', 'invoice_reviews',
+  'progress_reports', 'preconstruction_reviews', 'memo_templates', 'team_members',
+  'document_reviews', 'rfis', 'submittals', 'pay_applications', 'invoices',
+];
+for (const table of TENANT_TABLES) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  if (cols.length && !cols.includes('firm_id')) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN firm_id INTEGER REFERENCES firms(id) ON DELETE CASCADE`);
+  }
+}
+// Projects hang off a client, which is what the user picks after logging in.
+if (!db.prepare(`PRAGMA table_info(projects)`).all().map(c => c.name).includes('client_id')) {
+  db.exec(`ALTER TABLE projects ADD COLUMN client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL`);
+}
+
+// One-time bootstrap: everything already in the database predates tenancy, so it belongs
+// to the first firm. Clients are derived from the client names already typed on projects,
+// so nothing has to be re-entered.
+if (db.prepare(`SELECT COUNT(*) AS c FROM firms`).get().c === 0) {
+  const firmName = process.env.DEFAULT_FIRM_NAME || 'Olivier Inc.';
+  const firmId = db.prepare(`INSERT INTO firms (name) VALUES (?)`).run(firmName).lastInsertRowid;
+
+  for (const table of TENANT_TABLES) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+    if (cols.includes('firm_id')) db.exec(`UPDATE ${table} SET firm_id = ${firmId} WHERE firm_id IS NULL`);
+  }
+
+  // Turn the free-text client names into real client records.
+  const names = db.prepare(`
+    SELECT DISTINCT TRIM(client_name) AS name FROM projects
+    WHERE client_name IS NOT NULL AND TRIM(client_name) <> ''
+  `).all().map(r => r.name);
+  const insertClient = db.prepare(`INSERT INTO clients (firm_id, name) VALUES (?, ?)`);
+  for (const name of names) {
+    const clientId = insertClient.run(firmId, name).lastInsertRowid;
+    db.prepare(`UPDATE projects SET client_id=? WHERE TRIM(client_name)=? AND client_id IS NULL`).run(clientId, name);
+  }
+  // Projects that never had a client name still need somewhere to live.
+  const orphans = db.prepare(`SELECT COUNT(*) AS c FROM projects WHERE client_id IS NULL`).get().c;
+  if (orphans > 0) {
+    const clientId = insertClient.run(firmId, 'Unassigned').lastInsertRowid;
+    db.prepare(`UPDATE projects SET client_id=? WHERE client_id IS NULL`).run(clientId);
+  }
+  console.log(`[tenancy] created firm "${firmName}" and moved existing data into it (${names.length} client(s) derived)`);
+}
+
+// First login: seed a superadmin from the environment. Falls back to the old shared
+// APP_PASSWORD_HASH so an existing deployment can still be logged into after upgrading.
+if (db.prepare(`SELECT COUNT(*) AS c FROM users`).get().c === 0) {
+  const email = (process.env.SUPERADMIN_EMAIL || 'admin@coaster.app').toLowerCase();
+  const hash = process.env.SUPERADMIN_PASSWORD_HASH || process.env.APP_PASSWORD_HASH;
+  if (hash) {
+    const firstFirm = db.prepare(`SELECT id FROM firms ORDER BY id ASC LIMIT 1`).get();
+    db.prepare(`
+      INSERT INTO users (firm_id, email, password_hash, name, role) VALUES (?, ?, ?, ?, 'superadmin')
+    `).run(firstFirm?.id || null, email, hash, 'Administrator');
+    console.log(`[tenancy] seeded superadmin "${email}" (use your existing password)`);
+  } else {
+    console.warn('[tenancy] no users exist and no SUPERADMIN_PASSWORD_HASH/APP_PASSWORD_HASH set — nobody can log in');
+  }
 }
 
 module.exports = db;

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PlusIcon, FolderIcon, ArrowRightIcon, DocumentTextIcon } from '@heroicons/react/24/outline';
-import { projectsApi, payAppReviewApi } from '../api';
+import { projectsApi, payAppReviewApi, selectedClient } from '../api';
 import Modal from '../components/Modal';
 import FileDrop from '../components/FileDrop';
 
@@ -18,7 +18,12 @@ function AddProjectModal({ onClose, onCreated }) {
     setError(''); setSaving(true);
     try {
       setStatus('Creating project…');
-      const { id } = await projectsApi.create({ project_name: name.trim(), client_name: client.trim() || null });
+      const active = selectedClient.get();
+      const { id } = await projectsApi.create({
+        project_name: name.trim(),
+        client_id: active?.id || null,
+        client_name: client.trim() || active?.name || null,
+      });
       if (contract) {
         setStatus('Reading the contract — this can take a moment…');
         const fd = new FormData();
@@ -110,13 +115,19 @@ export default function Home() {
   const [projects, setProjects] = useState(null);
   const [adding, setAdding] = useState(false);
 
-  const load = () => projectsApi.list().then(setProjects).catch(() => setProjects([]));
-  useEffect(() => { load(); }, []);
+  const client = selectedClient.get();
+
+  // Only this client's projects — the firm may serve many, and mixing them would be the
+  // same bleed we just fixed between projects.
+  const load = () => projectsApi.list(client ? { client_id: client.id } : undefined)
+    .then(setProjects).catch(() => setProjects([]));
+  useEffect(() => { load(); }, [client?.id]);
 
   return (
     <div className="p-8">
       <div className="flex items-end justify-between mb-8 animate-fade-up">
         <div>
+          <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-1">{client?.name || 'Client'}</p>
           <h1 className="text-[32px] font-extrabold tracking-tight text-gray-900">Projects</h1>
           <p className="text-gray-500 mt-1 text-[15px]">Open a project to run its reviews, or add a new one to get started.</p>
         </div>

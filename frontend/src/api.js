@@ -37,15 +37,63 @@ api.interceptors.response.use(
   }
 );
 
+const USER_KEY = 'pm_review_user';
+const CLIENT_KEY = 'pm_review_client';
+
 export const authApi = {
-  login: password => api.post('/auth/login', { password }).then(r => r.data),
-  logout: () => localStorage.removeItem(TOKEN_KEY),
+  login: (email, password) => api.post('/auth/login', { email, password }).then(r => {
+    localStorage.setItem(TOKEN_KEY, r.data.token);
+    localStorage.setItem(USER_KEY, JSON.stringify(r.data.user));
+    return r.data;
+  }),
+  me: () => api.get('/auth/me').then(r => {
+    localStorage.setItem(USER_KEY, JSON.stringify(r.data.user));
+    return r.data.user;
+  }),
+  changePassword: data => api.post('/auth/change-password', data).then(r => r.data),
+  logout: () => {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    localStorage.removeItem(CLIENT_KEY);
+  },
   isLoggedIn: () => !!localStorage.getItem(TOKEN_KEY),
   setToken: token => localStorage.setItem(TOKEN_KEY, token),
+  // The signed-in person, as last known. Used to decide which admin screens to show.
+  user: () => {
+    try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch { return null; }
+  },
+};
+
+// Which client the user is currently working on. Chosen after login and remembered so a
+// refresh doesn't send them back to the picker.
+export const selectedClient = {
+  get: () => {
+    try { return JSON.parse(localStorage.getItem(CLIENT_KEY) || 'null'); } catch { return null; }
+  },
+  set: client => localStorage.setItem(CLIENT_KEY, JSON.stringify(client)),
+  clear: () => localStorage.removeItem(CLIENT_KEY),
+};
+
+export const clientsApi = {
+  list: () => api.get('/clients').then(r => r.data),
+  get: id => api.get(`/clients/${id}`).then(r => r.data),
+  create: data => api.post('/clients', data).then(r => r.data),
+  update: (id, data) => api.put(`/clients/${id}`, data).then(r => r.data),
+  delete: id => api.delete(`/clients/${id}`).then(r => r.data),
+};
+
+export const adminApi = {
+  listUsers: params => api.get('/admin/users', { params }).then(r => r.data),
+  createUser: data => api.post('/admin/users', data).then(r => r.data),
+  updateUser: (id, data) => api.put(`/admin/users/${id}`, data).then(r => r.data),
+  deleteUser: id => api.delete(`/admin/users/${id}`).then(r => r.data),
+  listFirms: () => api.get('/admin/firms').then(r => r.data),
+  createFirm: data => api.post('/admin/firms', data).then(r => r.data),
+  updateFirm: (id, data) => api.put(`/admin/firms/${id}`, data).then(r => r.data),
 };
 
 export const projectsApi = {
-  list: () => api.get('/projects').then(r => r.data),
+  list: params => api.get('/projects', { params }).then(r => r.data),
   get: id => api.get(`/projects/${id}`).then(r => r.data),
   create: data => api.post('/projects', data).then(r => r.data),
   update: (id, data) => api.put(`/projects/${id}`, data).then(r => r.data),
