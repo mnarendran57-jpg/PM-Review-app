@@ -52,10 +52,16 @@ export default function ClientSelect() {
   const navigate = useNavigate();
   const [clients, setClients] = useState(null);
   const [adding, setAdding] = useState(false);
-  const user = authApi.user();
+  // Start from the cached user so the header renders immediately, then re-read it from
+  // the server — the firm may have been renamed, or the account's role changed, since
+  // this browser last signed in.
+  const [user, setUser] = useState(authApi.user());
 
   const load = () => clientsApi.list().then(setClients).catch(() => setClients([]));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    authApi.me().then(setUser).catch(() => {});
+  }, []);
 
   const choose = client => {
     selectedClient.set({ id: client.id, name: client.name });

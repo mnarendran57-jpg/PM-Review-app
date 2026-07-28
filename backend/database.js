@@ -516,7 +516,7 @@ if (!db.prepare(`PRAGMA table_info(projects)`).all().map(c => c.name).includes('
 // to the first firm. Clients are derived from the client names already typed on projects,
 // so nothing has to be re-entered.
 if (db.prepare(`SELECT COUNT(*) AS c FROM firms`).get().c === 0) {
-  const firmName = process.env.DEFAULT_FIRM_NAME || 'Olivier Inc.';
+  const firmName = process.env.DEFAULT_FIRM_NAME || 'Coaster';
   const firmId = db.prepare(`INSERT INTO firms (name) VALUES (?)`).run(firmName).lastInsertRowid;
 
   for (const table of TENANT_TABLES) {
