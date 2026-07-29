@@ -658,4 +658,45 @@ if (db.prepare(`SELECT COUNT(*) AS c FROM users`).get().c === 0) {
   }
 }
 
+// --- Break-glass administrator recovery ------------------------------------------------
+// Setting ADMIN_RESET_EMAIL and ADMIN_RESET_PASSWORD creates that account, or resets its
+// password if it already exists, and makes it a platform administrator with Admin rights
+// on the first organization. It runs on boot, so the way to use it is: set the two
+// variables, let the service restart, sign in, then DELETE them and let it restart again.
+//
+// This exists because there is no password-reset email yet, and losing the only
+// administrator would otherwise mean losing the deployment. It is not a backdoor: anyone
+// who can set environment variables on the server already controls it completely.
+const resetEmail = (process.env.ADMIN_RESET_EMAIL || '').trim().toLowerCase();
+const resetPassword = process.env.ADMIN_RESET_PASSWORD || '';
+if (resetEmail && resetPassword) {
+  if (resetPassword.length < 8) {
+    console.warn('[access] ADMIN_RESET_PASSWORD must be at least 8 characters — ignored');
+  } else {
+    const bcrypt = require('bcryptjs');
+    const hash = bcrypt.hashSync(resetPassword, 10);
+    const existing = db.prepare(`SELECT id FROM users WHERE lower(email)=?`).get(resetEmail);
+    const userId = existing
+      ? (db.prepare(`UPDATE users SET password_hash=?, role='superadmin', status='Active' WHERE id=?`)
+           .run(hash, existing.id), existing.id)
+      : db.prepare(`INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, 'superadmin')`)
+          .run(resetEmail, hash, 'Administrator').lastInsertRowid;
+
+    // Guarantee somewhere to land: an organization, a program in it, and Admin rights.
+    let org = db.prepare(`SELECT id FROM organizations ORDER BY id ASC LIMIT 1`).get();
+    if (!org) {
+      const name = process.env.DEFAULT_ORG_NAME || 'Coaster';
+      org = { id: db.prepare(`INSERT INTO organizations (name) VALUES (?)`).run(name).lastInsertRowid };
+      db.prepare(`INSERT INTO programs (org_id, name) VALUES (?, 'Default Program')`).run(org.id);
+    }
+    db.prepare(`INSERT OR IGNORE INTO org_members (org_id, user_id, role) VALUES (?, ?, 'Admin')`)
+      .run(org.id, userId);
+
+    console.warn(
+      `[access] ADMIN RESET APPLIED for "${resetEmail}" (${existing ? 'password reset' : 'account created'}). ` +
+      'Remove ADMIN_RESET_EMAIL and ADMIN_RESET_PASSWORD now.'
+    );
+  }
+}
+
 module.exports = db;
