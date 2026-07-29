@@ -35,8 +35,13 @@ function orgsForUser(user) {
   `).all(user.id, user.id, user.id);
 }
 
+// A platform admin counts as an admin of any organization that exists — but the existence
+// check matters: without it a stale id (a deleted organization still selected in someone's
+// browser) would be accepted, and they would sit in an empty shell the app never corrects.
+const orgExists = orgId => !!db.prepare(`SELECT 1 FROM organizations WHERE id=?`).get(orgId);
+
 function isOrgAdmin(user, orgId) {
-  if (isPlatformAdmin(user)) return true;
+  if (isPlatformAdmin(user)) return orgExists(orgId);
   return !!db.prepare(`
     SELECT 1 FROM org_members WHERE org_id=? AND user_id=? AND role='Admin'
   `).get(orgId, user.id);
@@ -44,7 +49,7 @@ function isOrgAdmin(user, orgId) {
 
 // Any membership at all in the organization — enough to select it and look around.
 function isInOrg(user, orgId) {
-  if (isPlatformAdmin(user)) return true;
+  if (isPlatformAdmin(user)) return orgExists(orgId);
   const direct = db.prepare(`SELECT 1 FROM org_members WHERE org_id=? AND user_id=?`).get(orgId, user.id);
   if (direct) return true;
   return !!db.prepare(`

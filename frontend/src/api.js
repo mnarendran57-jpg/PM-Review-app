@@ -1,6 +1,12 @@
 import axios from 'axios';
 
+// Browser-stored session keys. Declared up front because the interceptors below read
+// them, and keeping the declaration adjacent to its use avoids a temporal-dead-zone trap
+// if anything ever runs during module evaluation.
 const TOKEN_KEY = 'pm_review_token';
+const USER_KEY = 'pm_review_user';
+const ORG_KEY = 'pm_review_org';
+const PROGRAM_KEY = 'pm_review_program';
 const configuredBase = import.meta.env.VITE_API_BASE_URL || '/api';
 const apiBaseUrl = configuredBase.endsWith('/api')
   ? configuredBase.replace(/\/$/, '')
@@ -34,6 +40,16 @@ api.interceptors.response.use(
       localStorage.removeItem(TOKEN_KEY);
       window.location.href = '/login';
     }
+    // The selected organization is no longer valid — it was deleted, or the user's access
+    // to it was revoked. Without this the app would keep showing a stale, empty shell of
+    // an organization the server refuses to answer for, so send them back to the picker.
+    const orgGone = err.response?.status === 400
+      && /no organization selected/i.test(err.response?.data?.error || '');
+    if (orgGone && !window.location.pathname.startsWith('/organizations')) {
+      localStorage.removeItem(ORG_KEY);
+      localStorage.removeItem(PROGRAM_KEY);
+      window.location.href = '/organizations';
+    }
     // Turn a timeout / unreachable-backend failure into a clear, consistent message so
     // callers can surface "can't reach the server" instead of appearing to hang.
     if (!err.response && (err.code === 'ECONNABORTED' || err.code === 'ERR_NETWORK' || err.message === 'Network Error')) {
@@ -42,10 +58,6 @@ api.interceptors.response.use(
     return Promise.reject(err);
   }
 );
-
-const USER_KEY = 'pm_review_user';
-const ORG_KEY = 'pm_review_org';
-const PROGRAM_KEY = 'pm_review_program';
 
 export const authApi = {
   login: (email, password) => api.post('/auth/login', { email, password }).then(r => {
