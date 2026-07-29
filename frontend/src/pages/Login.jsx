@@ -16,7 +16,7 @@ export default function Login() {
     try {
       await authApi.login(email, password);
       // Which client to work on is chosen next.
-      navigate('/clients', { replace: true });
+      navigate('/organizations', { replace: true });
     } catch (err) {
       if (err.response) {
         setError(err.response.data?.error || 'Could not log in. Try again.');

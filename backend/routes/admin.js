@@ -2,124 +2,149 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const db = require('../database');
-const { requireRole } = require('../middleware/auth');
+const access = require('../lib/access');
+const { requireOrgAdmin, requirePlatformAdmin } = require('../middleware/auth');
 
 // Two levels of administration:
-//  - superadmin (the vendor) creates firms and their first admin when a firm signs up.
-//    There is deliberately no public signup — nobody gets an account unless it is made
-//    for them here.
-//  - admin (a firm's own administrator) manages users inside their own firm only.
+//  - platform admin (the vendor) creates customer Organizations and their first Admin.
+//    There is deliberately no public signup.
+//  - Org Admin manages the people inside their own organization.
+//
+// Because a user account is not owned by any organization, "adding someone" means either
+// creating the account (if this is the first time anyone has invited that email) and then
+// attaching a membership, or simply attaching a membership to the account that exists.
 
-const ROLES = ['admin', 'member'];
+const ORG_ROLES = ['Admin', 'Member'];
 
-// --- Firms (vendor only) --------------------------------------------------------------
+// --- Organizations (vendor only) ------------------------------------------------------
 
-router.get('/firms', requireRole('superadmin'), (req, res) => {
+router.get('/organizations', requirePlatformAdmin, (req, res) => {
   res.json(db.prepare(`
-    SELECT f.*,
-      (SELECT COUNT(*) FROM users u WHERE u.firm_id = f.id) AS user_count,
-      (SELECT COUNT(*) FROM clients c WHERE c.firm_id = f.id) AS client_count,
-      (SELECT COUNT(*) FROM projects p WHERE p.firm_id = f.id) AS project_count
-    FROM firms f ORDER BY f.name ASC
+    SELECT o.*,
+      (SELECT COUNT(*) FROM org_members m WHERE m.org_id = o.id) AS member_count,
+      (SELECT COUNT(*) FROM programs p WHERE p.org_id = o.id) AS program_count,
+      (SELECT COUNT(*) FROM projects pr WHERE pr.org_id = o.id) AS project_count
+    FROM organizations o ORDER BY o.name ASC
   `).all());
 });
 
-// Creates the firm and its first administrator together — a firm with no way to log in
-// would be useless, and this is the moment the vendor onboards a new customer.
-router.post('/firms', requireRole('superadmin'), (req, res) => {
+// Creates the organization, its first program (every organization always has at least
+// one), and its first administrator — an organization nobody can sign into is useless.
+router.post('/organizations', requirePlatformAdmin, (req, res) => {
   const name = String(req.body.name || '').trim();
   const email = String(req.body.admin_email || '').trim().toLowerCase();
   const password = String(req.body.admin_password || '');
-  if (!name) return res.status(400).json({ error: 'Firm name is required' });
-  if (!email || !password) return res.status(400).json({ error: 'An admin email and password are required' });
-  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
-  if (db.prepare(`SELECT id FROM users WHERE lower(email)=?`).get(email)) {
-    return res.status(400).json({ error: 'That email address is already in use' });
+  if (!name) return res.status(400).json({ error: 'Organization name is required' });
+  if (!email) return res.status(400).json({ error: 'An administrator email is required' });
+
+  const existingUser = db.prepare(`SELECT * FROM users WHERE lower(email)=?`).get(email);
+  if (!existingUser && password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
   }
 
-  const firmId = db.prepare(`INSERT INTO firms (name) VALUES (?)`).run(name).lastInsertRowid;
-  const userId = db.prepare(`
-    INSERT INTO users (firm_id, email, password_hash, name, role) VALUES (?, ?, ?, ?, 'admin')
-  `).run(firmId, email, bcrypt.hashSync(password, 10), req.body.admin_name || null).lastInsertRowid;
-  res.json({ id: firmId, admin_user_id: userId });
+  const orgId = db.prepare(`INSERT INTO organizations (name) VALUES (?)`).run(name).lastInsertRowid;
+  db.prepare(`INSERT INTO programs (org_id, name) VALUES (?, ?)`)
+    .run(orgId, String(req.body.program_name || 'Default Program').trim() || 'Default Program');
+
+  // An existing person can administer another organization on the same account.
+  const userId = existingUser
+    ? existingUser.id
+    : db.prepare(`INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)`)
+        .run(email, bcrypt.hashSync(password, 10), req.body.admin_name || null).lastInsertRowid;
+
+  db.prepare(`INSERT OR IGNORE INTO org_members (org_id, user_id, role) VALUES (?, ?, 'Admin')`)
+    .run(orgId, userId);
+  res.json({ id: orgId, admin_user_id: userId, reused_existing_account: !!existingUser });
 });
 
-router.put('/firms/:id', requireRole('superadmin'), (req, res) => {
+router.put('/organizations/:id', requirePlatformAdmin, (req, res) => {
   const name = String(req.body.name || '').trim();
-  if (!name) return res.status(400).json({ error: 'Firm name is required' });
-  db.prepare(`UPDATE firms SET name=?, status=? WHERE id=?`)
+  if (!name) return res.status(400).json({ error: 'Organization name is required' });
+  db.prepare(`UPDATE organizations SET name=?, status=? WHERE id=?`)
     .run(name, req.body.status || 'Active', req.params.id);
   res.json({ success: true });
 });
 
-// --- Users --------------------------------------------------------------------------
+// --- People in the active organization ------------------------------------------------
 
-// A firm admin sees only their own firm; the vendor can look at any firm.
-function targetFirmId(req) {
-  if (req.user.role === 'superadmin' && req.query.firm_id) return Number(req.query.firm_id);
-  return req.firmId;
-}
-
-router.get('/users', requireRole('superadmin', 'admin'), (req, res) => {
+router.get('/members', requireOrgAdmin, (req, res) => {
   res.json(db.prepare(`
-    SELECT id, firm_id, email, name, role, status, created_at FROM users
-    WHERE firm_id = ? ORDER BY name IS NULL, name ASC, email ASC
-  `).all(targetFirmId(req)));
+    SELECT m.id, m.role, m.created_at, u.id AS user_id, u.email, u.name, u.status,
+      (u.role = 'superadmin') AS is_platform_admin,
+      (SELECT COUNT(*) FROM project_members pm
+         JOIN projects p ON p.id = pm.project_id
+        WHERE pm.user_id = u.id AND p.org_id = m.org_id) AS project_count
+    FROM org_members m JOIN users u ON u.id = m.user_id
+    WHERE m.org_id = ? ORDER BY u.name IS NULL, u.name ASC, u.email ASC
+  `).all(req.orgId));
 });
 
-router.post('/users', requireRole('superadmin', 'admin'), (req, res) => {
+// Everyone who can reach this organization, including people who are only on a project
+// within it — those have no org_members row, so the members list alone would miss them.
+router.get('/people', requireOrgAdmin, (req, res) => {
+  res.json(db.prepare(`
+    SELECT DISTINCT u.id, u.email, u.name, u.status,
+      (SELECT role FROM org_members m WHERE m.org_id=? AND m.user_id=u.id LIMIT 1) AS org_role
+    FROM users u
+    WHERE EXISTS (SELECT 1 FROM org_members m WHERE m.org_id=? AND m.user_id=u.id)
+       OR EXISTS (SELECT 1 FROM project_members pm JOIN projects p ON p.id=pm.project_id
+                  WHERE pm.user_id=u.id AND p.org_id=?)
+    ORDER BY u.name IS NULL, u.name ASC, u.email ASC
+  `).all(req.orgId, req.orgId, req.orgId));
+});
+
+// Adds someone to this organization. If no account exists for that email one is created,
+// which is how a brand-new person is onboarded; if it does, the same single account gains
+// another membership rather than a duplicate login.
+router.post('/members', requireOrgAdmin, (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase();
-  const password = String(req.body.password || '');
-  const role = ROLES.includes(req.body.role) ? req.body.role : 'member';
-  if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
-  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
-  if (db.prepare(`SELECT id FROM users WHERE lower(email)=?`).get(email)) {
-    return res.status(400).json({ error: 'That email address is already in use' });
+  const role = ORG_ROLES.includes(req.body.role) ? req.body.role : 'Member';
+  if (!email) return res.status(400).json({ error: 'Email is required' });
+
+  let user = db.prepare(`SELECT * FROM users WHERE lower(email)=?`).get(email);
+  if (!user) {
+    const password = String(req.body.password || '');
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'This is a new person — set a starting password of at least 8 characters.' });
+    }
+    const id = db.prepare(`INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)`)
+      .run(email, bcrypt.hashSync(password, 10), req.body.name || null).lastInsertRowid;
+    user = db.prepare(`SELECT * FROM users WHERE id=?`).get(id);
+  } else if (req.body.name && !user.name) {
+    db.prepare(`UPDATE users SET name=? WHERE id=?`).run(req.body.name, user.id);
   }
 
-  const result = db.prepare(`
-    INSERT INTO users (firm_id, email, password_hash, name, role) VALUES (?, ?, ?, ?, ?)
-  `).run(targetFirmId(req), email, bcrypt.hashSync(password, 10), req.body.name || null, role);
-  res.json({ id: result.lastInsertRowid });
+  db.prepare(`INSERT OR IGNORE INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)`)
+    .run(req.orgId, user.id, role);
+  res.json({ user_id: user.id, existed: !!user });
 });
 
-// Used both to rename/redesignate someone and to reset a forgotten password, since there
-// is no self-service email reset yet.
-router.put('/users/:id', requireRole('superadmin', 'admin'), (req, res) => {
-  const user = db.prepare(`SELECT * FROM users WHERE id=?`).get(req.params.id);
+// Changes someone's role in this organization, or resets their password. Guards against
+// an organization being left with nobody able to administer it.
+router.put('/members/:userId', requireOrgAdmin, (req, res) => {
+  const user = db.prepare(`SELECT * FROM users WHERE id=?`).get(req.params.userId);
   if (!user) return res.status(404).json({ error: 'Not found' });
-  // An admin may only touch their own firm's people.
-  if (req.user.role !== 'superadmin' && user.firm_id !== req.firmId) {
-    return res.status(403).json({ error: 'You do not have permission to do that' });
-  }
-  // Work out the role being moved to, ignoring anything not a real role. A superadmin
-  // keeps that rank unless explicitly changed to another valid one — importantly this is
-  // resolved *before* the lockout check below, which has to reason about the new value.
-  const requested = req.body.role;
-  const validRole = requested && [...ROLES, 'superadmin'].includes(requested);
-  const nextRole = validRole && req.user.role === 'superadmin' ? requested
-    : (requested && ROLES.includes(requested) ? requested : user.role);
-  const nextStatus = req.body.status || user.status;
+  const membership = db.prepare(`SELECT * FROM org_members WHERE org_id=? AND user_id=?`)
+    .get(req.orgId, user.id);
+  if (!membership) return res.status(404).json({ error: 'They are not a member of this organization' });
 
-  // Never let the last administrator be demoted or disabled — that would lock the firm
-  // out of its own account with no way back in. "Administrator" covers superadmin too,
-  // which an earlier version missed, letting the only owner demote themselves.
-  const ADMIN_ROLES = ['admin', 'superadmin'];
-  const admins = db.prepare(
-    `SELECT COUNT(*) AS c FROM users WHERE firm_id=? AND role IN ('admin','superadmin') AND status='Active'`
-  ).get(user.firm_id).c;
-  const wasAdmin = ADMIN_ROLES.includes(user.role) && user.status === 'Active';
-  const staysAdmin = ADMIN_ROLES.includes(nextRole) && nextStatus === 'Active';
-  if (admins <= 1 && wasAdmin && !staysAdmin) {
-    return res.status(400).json({ error: 'This is the firm\'s only administrator — promote someone else first.' });
+  if (req.body.role && ORG_ROLES.includes(req.body.role) && req.body.role !== membership.role) {
+    const admins = db.prepare(`
+      SELECT COUNT(*) AS c FROM org_members m JOIN users u ON u.id = m.user_id
+      WHERE m.org_id=? AND m.role='Admin' AND u.status='Active'
+    `).get(req.orgId).c;
+    if (admins <= 1 && membership.role === 'Admin' && req.body.role !== 'Admin') {
+      return res.status(400).json({ error: 'This is the organization\'s only administrator — promote someone else first.' });
+    }
+    db.prepare(`UPDATE org_members SET role=? WHERE id=?`).run(req.body.role, membership.id);
   }
 
-  db.prepare(`UPDATE users SET name=?, role=?, status=? WHERE id=?`).run(
-    req.body.name ?? user.name,
-    nextRole,
-    nextStatus,
-    user.id
-  );
+  if (req.body.name !== undefined) {
+    db.prepare(`UPDATE users SET name=? WHERE id=?`).run(req.body.name || null, user.id);
+  }
+  if (req.body.status) {
+    db.prepare(`UPDATE users SET status=? WHERE id=?`).run(req.body.status, user.id);
+  }
   if (req.body.new_password) {
     if (String(req.body.new_password).length < 8) {
       return res.status(400).json({ error: 'Password must be at least 8 characters' });
@@ -130,21 +155,28 @@ router.put('/users/:id', requireRole('superadmin', 'admin'), (req, res) => {
   res.json({ success: true });
 });
 
-router.delete('/users/:id', requireRole('superadmin', 'admin'), (req, res) => {
-  const user = db.prepare(`SELECT * FROM users WHERE id=?`).get(req.params.id);
+// Removes someone from this organization only — their account and any work with other
+// organizations is untouched, which is the point of accounts not belonging to one.
+router.delete('/members/:userId', requireOrgAdmin, (req, res) => {
+  const user = db.prepare(`SELECT * FROM users WHERE id=?`).get(req.params.userId);
   if (!user) return res.status(404).json({ error: 'Not found' });
-  if (req.user.role !== 'superadmin' && user.firm_id !== req.firmId) {
-    return res.status(403).json({ error: 'You do not have permission to do that' });
-  }
-  if (user.id === req.user.id) return res.status(400).json({ error: 'You cannot remove your own account' });
+  if (user.id === req.user.id) return res.status(400).json({ error: 'You cannot remove your own access' });
 
-  const admins = db.prepare(
-    `SELECT COUNT(*) AS c FROM users WHERE firm_id=? AND role IN ('admin','superadmin') AND status='Active'`
-  ).get(user.firm_id).c;
-  if (admins <= 1 && ['admin', 'superadmin'].includes(user.role)) {
-    return res.status(400).json({ error: 'This is the firm\'s only administrator — promote someone else first.' });
+  const membership = db.prepare(`SELECT * FROM org_members WHERE org_id=? AND user_id=?`).get(req.orgId, user.id);
+  if (membership?.role === 'Admin') {
+    const admins = db.prepare(`
+      SELECT COUNT(*) AS c FROM org_members m JOIN users u ON u.id = m.user_id
+      WHERE m.org_id=? AND m.role='Admin' AND u.status='Active'
+    `).get(req.orgId).c;
+    if (admins <= 1) {
+      return res.status(400).json({ error: 'This is the organization\'s only administrator — promote someone else first.' });
+    }
   }
-  db.prepare(`DELETE FROM users WHERE id=?`).run(user.id);
+
+  db.prepare(`DELETE FROM org_members WHERE org_id=? AND user_id=?`).run(req.orgId, user.id);
+  db.prepare(`
+    DELETE FROM project_members WHERE user_id=? AND project_id IN (SELECT id FROM projects WHERE org_id=?)
+  `).run(user.id, req.orgId);
   res.json({ success: true });
 });
 

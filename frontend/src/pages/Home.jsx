@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PlusIcon, FolderIcon, ArrowRightIcon, DocumentTextIcon } from '@heroicons/react/24/outline';
-import { projectsApi, payAppReviewApi, selectedClient } from '../api';
+import { projectsApi, payAppReviewApi, selectedOrg, selectedProgram } from '../api';
 import Modal from '../components/Modal';
 import FileDrop from '../components/FileDrop';
 
@@ -18,11 +18,11 @@ function AddProjectModal({ onClose, onCreated }) {
     setError(''); setSaving(true);
     try {
       setStatus('Creating project…');
-      const active = selectedClient.get();
+      const program = selectedProgram.get();
       const { id } = await projectsApi.create({
         project_name: name.trim(),
-        client_id: active?.id || null,
-        client_name: client.trim() || active?.name || null,
+        program_id: program?.id || null,
+        client_name: client.trim() || null,
       });
       if (contract) {
         setStatus('Reading the contract — this can take a moment…');
@@ -115,19 +115,22 @@ export default function Home() {
   const [projects, setProjects] = useState(null);
   const [adding, setAdding] = useState(false);
 
-  const client = selectedClient.get();
+  const org = selectedOrg.get();
+  const program = selectedProgram.get();
 
-  // Only this client's projects — the firm may serve many, and mixing them would be the
-  // same bleed we just fixed between projects.
-  const load = () => projectsApi.list(client ? { client_id: client.id } : undefined)
+  // Only this program's projects, and only the ones this user may see — the server applies
+  // the access rules, so an ordinary member gets just the projects they're a member of.
+  const load = () => projectsApi.list(program ? { program_id: program.id } : undefined)
     .then(setProjects).catch(() => setProjects([]));
-  useEffect(() => { load(); }, [client?.id]);
+  useEffect(() => { load(); }, [program?.id]);
 
   return (
     <div className="p-8">
       <div className="flex items-end justify-between mb-8 animate-fade-up">
         <div>
-          <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-1">{client?.name || 'Client'}</p>
+          <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-1">
+            {org?.name}{program?.name ? ` · ${program.name}` : ''}
+          </p>
           <h1 className="text-[32px] font-extrabold tracking-tight text-gray-900">Projects</h1>
           <p className="text-gray-500 mt-1 text-[15px]">Open a project to run its reviews, or add a new one to get started.</p>
         </div>

@@ -3,19 +3,19 @@ import {
   UserGroupIcon, PlusIcon, PencilIcon, TrashIcon, KeyIcon,
   BuildingOffice2Icon, CheckCircleIcon,
 } from '@heroicons/react/24/outline';
-import { adminApi, authApi } from '../api';
+import { adminApi, authApi, selectedOrg } from '../api';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 
-const ROLE_LABEL = { superadmin: 'Owner', admin: 'Administrator', member: 'Member' };
+const ROLE_LABEL = { Admin: 'Administrator', Member: 'Member' };
 const ROLE_HELP = {
-  admin: 'Can add and remove people, and reset their passwords.',
-  member: 'Can use the tools, but cannot manage people.',
+  Admin: 'Sees every program and project in this organization, and manages its people.',
+  Member: 'Sees only the projects they are added to individually.',
 };
 
 function RoleBadge({ role }) {
-  const style = role === 'superadmin'
-    ? { background: 'rgba(249,115,22,0.1)', color: '#c2410c' }
+  const style = role === 'Admin'
+    ? { background: 'rgba(37,99,235,0.1)', color: '#1d4ed8' }
     : role === 'admin'
       ? { background: 'rgba(37,99,235,0.1)', color: '#1d4ed8' }
       : { background: '#f1f5f9', color: '#64748b' };
@@ -32,7 +32,7 @@ function PersonModal({ person, onClose, onSaved }) {
   const editing = !!person;
   const [name, setName] = useState(person?.name || '');
   const [email, setEmail] = useState(person?.email || '');
-  const [role, setRole] = useState(person?.role === 'superadmin' ? 'admin' : (person?.role || 'member'));
+  const [role, setRole] = useState(person?.role === 'Admin' ? 'Admin' : 'Member');
   const [status, setStatus] = useState(person?.status || 'Active');
   const [password, setPassword] = useState('');
   const [saving, setSaving] = useState(false);
@@ -45,12 +45,12 @@ function PersonModal({ person, onClose, onSaved }) {
     setSaving(true);
     try {
       if (editing) {
-        await adminApi.updateUser(person.id, {
+        await adminApi.updateMember(person.user_id, {
           name: name.trim() || null, role, status,
           ...(password ? { new_password: password } : {}),
         });
       } else {
-        await adminApi.createUser({ name: name.trim() || null, email: email.trim(), role, password });
+        await adminApi.addMember({ name: name.trim() || null, email: email.trim(), role, password });
       }
       onSaved();
     } catch (e) {
@@ -76,8 +76,8 @@ function PersonModal({ person, onClose, onSaved }) {
         <div>
           <label className="label">Role</label>
           <select className="input" value={role} onChange={e => setRole(e.target.value)}>
-            <option value="member">Member</option>
-            <option value="admin">Administrator</option>
+            <option value="Member">Member</option>
+            <option value="Admin">Administrator</option>
           </select>
           <p className="text-[11px] text-gray-400 mt-1">{ROLE_HELP[role]}</p>
         </div>
@@ -123,23 +123,23 @@ function FirmModal({ onClose, onSaved }) {
   const submit = async () => {
     setError('');
     if (!form.name.trim() || !form.admin_email.trim() || !form.admin_password) {
-      setError('Firm name, admin email and admin password are all required.'); return;
+      setError('Organization name, admin email and admin password are all required.'); return;
     }
     if (form.admin_password.length < 8) { setError('Password must be at least 8 characters.'); return; }
     setSaving(true);
-    try { await adminApi.createFirm(form); onSaved(); }
-    catch (e) { setError(e?.response?.data?.error || 'Could not create this firm.'); setSaving(false); }
+    try { await adminApi.createOrganization(form); onSaved(); }
+    catch (e) { setError(e?.response?.data?.error || 'Could not create this organization.'); setSaving(false); }
   };
 
   return (
-    <Modal title="Add a firm" onClose={saving ? () => {} : onClose}>
+    <Modal title="Add an organization" onClose={saving ? () => {} : onClose}>
       <div className="space-y-4">
         <div>
-          <label className="label">Firm Name *</label>
+          <label className="label">Organization Name *</label>
           <input className="input" autoFocus value={form.name} onChange={set('name')} placeholder="e.g. Smith PM Group" />
         </div>
         <p className="text-[11px] text-gray-400 -mt-1">
-          Their data is completely separate from every other firm's.
+          Their data is completely separate from every other organization's.
         </p>
         <div style={{ borderTop: '1px solid #f3f4f6' }} className="pt-3">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Their administrator</p>
@@ -152,7 +152,7 @@ function FirmModal({ onClose, onSaved }) {
         {error && <p className="text-sm" style={{ color: '#dc2626' }}>{error}</p>}
         <div className="flex justify-end gap-2 pt-1">
           <button className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
-          <button className="btn-primary" onClick={submit} disabled={saving}>{saving ? 'Creating…' : 'Create firm'}</button>
+          <button className="btn-primary" onClick={submit} disabled={saving}>{saving ? 'Creating…' : 'Create organization'}</button>
         </div>
       </div>
     </Modal>
@@ -205,23 +205,23 @@ function ChangeMyPassword() {
 
 export default function Team() {
   const me = authApi.user();
-  const isSuperadmin = me?.role === 'superadmin';
+  const isSuperadmin = me?.isPlatformAdmin;
   const [people, setPeople] = useState(null);
-  const [firms, setFirms] = useState(null);
+  const [orgs, setOrgs] = useState(null);
   const [editing, setEditing] = useState(undefined); // undefined = closed, null = new
-  const [addingFirm, setAddingFirm] = useState(false);
+  const [addingOrg, setAddingOrg] = useState(false);
   const [error, setError] = useState('');
 
   const load = () => {
-    adminApi.listUsers().then(setPeople).catch(() => setPeople([]));
-    if (isSuperadmin) adminApi.listFirms().then(setFirms).catch(() => setFirms([]));
+    adminApi.listMembers().then(setPeople).catch(() => setPeople([]));
+    if (isSuperadmin) adminApi.listOrganizations().then(setOrgs).catch(() => setOrgs([]));
   };
   useEffect(() => { load(); }, []);
 
   const remove = async person => {
     if (!confirm(`Remove ${person.name || person.email}? They will no longer be able to sign in.`)) return;
     setError('');
-    try { await adminApi.deleteUser(person.id); load(); }
+    try { await adminApi.removeMember(person.user_id); load(); }
     catch (e) { setError(e?.response?.data?.error || 'Could not remove this person.'); }
   };
 
@@ -231,7 +231,7 @@ export default function Team() {
         icon={UserGroupIcon}
         accent="blue"
         title="Team"
-        subtitle="Everyone here can sign in and work on your firm's clients and projects"
+        subtitle="People who can reach this organization, and what they can see"
       />
 
       {error && (
@@ -274,7 +274,7 @@ export default function Team() {
                   <tr key={p.id} className="table-tr">
                     <td className="table-td">
                       <span className="font-medium text-gray-900">{p.name || '—'}</span>
-                      {p.id === me?.id && <span className="ml-2 text-[11px] text-gray-400">(you)</span>}
+                      {p.user_id === me?.id && <span className="ml-2 text-[11px] text-gray-400">(you)</span>}
                       {p.status !== 'Active' && (
                         <span className="ml-2 text-[11px] font-semibold" style={{ color: '#b91c1c' }}>disabled</span>
                       )}
@@ -286,7 +286,7 @@ export default function Team() {
                         <button className="btn-secondary px-2 py-1" title="Edit / reset password" onClick={() => setEditing(p)}>
                           <PencilIcon className="w-4 h-4" />
                         </button>
-                        {p.id !== me?.id && (
+                        {p.user_id !== me?.id && (
                           <button className="btn-danger" title="Remove" onClick={() => remove(p)}>
                             <TrashIcon className="w-4 h-4" />
                           </button>
@@ -305,32 +305,32 @@ export default function Team() {
               <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid #f3f4f6', background: '#fafbfc' }}>
                 <div className="flex items-center gap-2">
                   <BuildingOffice2Icon className="w-4 h-4 text-gray-400" />
-                  <h2 className="text-sm font-semibold text-gray-900">Firms using Coaster</h2>
+                  <h2 className="text-sm font-semibold text-gray-900">Organizations using Coaster</h2>
                 </div>
-                <button className="btn-primary" onClick={() => setAddingFirm(true)}>
-                  <PlusIcon className="w-4 h-4" /> Add Firm
+                <button className="btn-primary" onClick={() => setAddingOrg(true)}>
+                  <PlusIcon className="w-4 h-4" /> Add Organization
                 </button>
               </div>
               <table className="w-full">
                 <thead style={{ borderBottom: '1px solid #f3f4f6', background: '#fafbfc' }}>
                   <tr>
-                    <th className="table-th">Firm</th>
+                    <th className="table-th">Organization</th>
                     <th className="table-th">People</th>
-                    <th className="table-th">Clients</th>
+                    <th className="table-th">Programs</th>
                     <th className="table-th">Projects</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {firms?.map(f => (
+                  {orgs?.map(f => (
                     <tr key={f.id} className="table-tr">
                       <td className="table-td font-medium text-gray-900">{f.name}</td>
-                      <td className="table-td text-gray-500 text-sm">{f.user_count}</td>
-                      <td className="table-td text-gray-500 text-sm">{f.client_count}</td>
+                      <td className="table-td text-gray-500 text-sm">{f.member_count}</td>
+                      <td className="table-td text-gray-500 text-sm">{f.program_count}</td>
                       <td className="table-td text-gray-500 text-sm">{f.project_count}</td>
                     </tr>
                   ))}
-                  {firms?.length === 0 && (
-                    <tr><td colSpan={4} className="table-td text-center text-gray-400 py-8">No firms yet.</td></tr>
+                  {orgs?.length === 0 && (
+                    <tr><td colSpan={4} className="table-td text-center text-gray-400 py-8">No organizations yet.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -343,8 +343,8 @@ export default function Team() {
           <div className="card p-5">
             <h3 className="text-sm font-semibold text-gray-900 mb-2">How access works</h3>
             <p className="text-xs text-gray-500 leading-relaxed">
-              Everyone listed here belongs to <span className="font-medium text-gray-700">{me?.firmName || 'your firm'}</span> and
-              sees the same clients and projects. Nobody outside your firm can see any of it.
+              Everyone listed here belongs to <span className="font-medium text-gray-700">{selectedOrg.get()?.name || 'this organization'}</span> and
+              Administrators see everything in it; members see only the projects they're added to.
             </p>
             <p className="text-xs text-gray-500 leading-relaxed mt-2">
               There's no "forgot password" email yet — if someone is locked out, edit them here and set a new password.
@@ -360,8 +360,8 @@ export default function Team() {
           onSaved={() => { setEditing(undefined); load(); }}
         />
       )}
-      {addingFirm && (
-        <FirmModal onClose={() => setAddingFirm(false)} onSaved={() => { setAddingFirm(false); load(); }} />
+      {addingOrg && (
+        <FirmModal onClose={() => setAddingOrg(false)} onSaved={() => { setAddingOrg(false); load(); }} />
       )}
     </div>
   );

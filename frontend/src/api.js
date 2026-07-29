@@ -17,6 +17,12 @@ const api = axios.create({ baseURL: apiBaseUrl, timeout: DEFAULT_TIMEOUT });
 api.interceptors.request.use(config => {
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  // Which organization the user is working in travels with every request. The server
+  // always re-checks their membership of it, so this is a convenience, not a grant.
+  const org = localStorage.getItem(ORG_KEY);
+  if (org) {
+    try { config.headers['X-Org-Id'] = String(JSON.parse(org).id); } catch { /* ignore */ }
+  }
   return config;
 });
 
@@ -38,7 +44,8 @@ api.interceptors.response.use(
 );
 
 const USER_KEY = 'pm_review_user';
-const CLIENT_KEY = 'pm_review_client';
+const ORG_KEY = 'pm_review_org';
+const PROGRAM_KEY = 'pm_review_program';
 
 export const authApi = {
   login: (email, password) => api.post('/auth/login', { email, password }).then(r => {
@@ -48,13 +55,11 @@ export const authApi = {
   }),
   me: () => api.get('/auth/me').then(r => {
     localStorage.setItem(USER_KEY, JSON.stringify(r.data.user));
-    return r.data.user;
+    return r.data;
   }),
   changePassword: data => api.post('/auth/change-password', data).then(r => r.data),
   logout: () => {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
-    localStorage.removeItem(CLIENT_KEY);
+    [TOKEN_KEY, USER_KEY, ORG_KEY, PROGRAM_KEY].forEach(k => localStorage.removeItem(k));
   },
   isLoggedIn: () => !!localStorage.getItem(TOKEN_KEY),
   setToken: token => localStorage.setItem(TOKEN_KEY, token),
@@ -64,32 +69,59 @@ export const authApi = {
   },
 };
 
-// Which client the user is currently working on. Chosen after login and remembered so a
-// refresh doesn't send them back to the picker.
-export const selectedClient = {
-  get: () => {
-    try { return JSON.parse(localStorage.getItem(CLIENT_KEY) || 'null'); } catch { return null; }
-  },
-  set: client => localStorage.setItem(CLIENT_KEY, JSON.stringify(client)),
-  clear: () => localStorage.removeItem(CLIENT_KEY),
+function stored(key) {
+  return {
+    get: () => {
+      try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
+    },
+    set: value => localStorage.setItem(key, JSON.stringify(value)),
+    clear: () => localStorage.removeItem(key),
+  };
+}
+
+// The organization the user picked after signing in — one account can reach several, so
+// this is what scopes everything below it. Changing it clears the chosen program, since
+// programs belong to an organization.
+const orgStore = stored(ORG_KEY);
+export const selectedOrg = {
+  ...orgStore,
+  set: org => { orgStore.set(org); localStorage.removeItem(PROGRAM_KEY); },
+  clear: () => { orgStore.clear(); localStorage.removeItem(PROGRAM_KEY); },
 };
 
-export const clientsApi = {
-  list: () => api.get('/clients').then(r => r.data),
-  get: id => api.get(`/clients/${id}`).then(r => r.data),
-  create: data => api.post('/clients', data).then(r => r.data),
-  update: (id, data) => api.put(`/clients/${id}`, data).then(r => r.data),
-  delete: id => api.delete(`/clients/${id}`).then(r => r.data),
+// The program within that organization.
+export const selectedProgram = stored(PROGRAM_KEY);
+
+export const orgsApi = {
+  // Organizations this user can reach, straight from the server.
+  mine: () => api.get('/auth/me').then(r => r.data.organizations || []),
+};
+
+export const programsApi = {
+  list: () => api.get('/programs').then(r => r.data),
+  get: id => api.get(`/programs/${id}`).then(r => r.data),
+  create: data => api.post('/programs', data).then(r => r.data),
+  update: (id, data) => api.put(`/programs/${id}`, data).then(r => r.data),
+  delete: id => api.delete(`/programs/${id}`).then(r => r.data),
 };
 
 export const adminApi = {
-  listUsers: params => api.get('/admin/users', { params }).then(r => r.data),
-  createUser: data => api.post('/admin/users', data).then(r => r.data),
-  updateUser: (id, data) => api.put(`/admin/users/${id}`, data).then(r => r.data),
-  deleteUser: id => api.delete(`/admin/users/${id}`).then(r => r.data),
-  listFirms: () => api.get('/admin/firms').then(r => r.data),
-  createFirm: data => api.post('/admin/firms', data).then(r => r.data),
-  updateFirm: (id, data) => api.put(`/admin/firms/${id}`, data).then(r => r.data),
+  // People in the active organization.
+  listMembers: () => api.get('/admin/members').then(r => r.data),
+  listPeople: () => api.get('/admin/people').then(r => r.data),
+  addMember: data => api.post('/admin/members', data).then(r => r.data),
+  updateMember: (userId, data) => api.put(`/admin/members/${userId}`, data).then(r => r.data),
+  removeMember: userId => api.delete(`/admin/members/${userId}`).then(r => r.data),
+  // Vendor-only: customer organizations.
+  listOrganizations: () => api.get('/admin/organizations').then(r => r.data),
+  createOrganization: data => api.post('/admin/organizations', data).then(r => r.data),
+  updateOrganization: (id, data) => api.put(`/admin/organizations/${id}`, data).then(r => r.data),
+};
+
+export const projectMembersApi = {
+  list: projectId => api.get(`/projects/${projectId}/members`).then(r => r.data),
+  add: (projectId, data) => api.post(`/projects/${projectId}/members`, data).then(r => r.data),
+  remove: (projectId, memberId) => api.delete(`/projects/${projectId}/members/${memberId}`).then(r => r.data),
 };
 
 export const projectsApi = {

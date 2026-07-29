@@ -10,16 +10,58 @@ const db = new DatabaseSync(dbPath);
 db.exec(`PRAGMA journal_mode = WAL`);
 db.exec(`PRAGMA foreign_keys = ON`);
 
-// --- Multi-tenancy -------------------------------------------------------------------
-// The app is sold to PM firms, each of which serves several clients. A firm is the tenant
-// boundary: one firm must never see another's data. The hierarchy is
-//   firm -> clients -> projects -> (reviews, files, ...)
-// Every user belongs to exactly one firm, and every request is filtered by that firm in
-// middleware rather than per route, so isolation can't be forgotten when adding a feature.
-// Roles: 'superadmin' (the vendor — can manage firms), 'admin' (manages their own firm's
-// users), 'member' (ordinary user).
+// --- Organization / Program / Project access model ------------------------------------
+// The hierarchy is always three levels, with no null cases:
+//   Organization -> Program -> Project
+// An Organization is a customer (an ISD, a PM firm — whoever signs up). A Program groups
+// related projects; organizations that don't think in programs still get a default one, so
+// a Project always has a Program and a Program always has an Organization.
+//
+// Users sit OUTSIDE the hierarchy: one account is one person, not tied to any organization,
+// because the same consultant often works for several customers and must not need a second
+// login. Access is granted by two many-to-many membership tables instead:
+//   org_members     — a user on an Organization (role Admin) sees every Program and
+//                     Project underneath it automatically.
+//   project_members — a user on an individual Project (Owner, GC, Sub, PM, ...). This is
+//                     how most day-to-day access works, and those projects may span
+//                     different Programs or even different Organizations.
+// There is deliberately no Program-level access tier: broad access is Org Admin, otherwise
+// people are added per project. A user may hold several roles on the same project, so the
+// membership tables allow multiple rows per user/target.
+const tableExists = name =>
+  !!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(name);
+const columnsOf = table =>
+  db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+
+// Earlier versions modelled this as firm -> client -> project. Rename in place so the
+// existing rows (and their foreign keys) carry over rather than being rebuilt.
+if (tableExists('firms') && !tableExists('organizations')) {
+  db.exec(`ALTER TABLE firms RENAME TO organizations`);
+}
+if (tableExists('clients') && !tableExists('programs')) {
+  db.exec(`ALTER TABLE clients RENAME TO programs`);
+}
+// Renaming a column has to cope with a half-applied migration (an earlier crash, or a
+// server that restarted mid-run), where both the old and new column already exist. In
+// that case the values are carried across and the stale column dropped, so running this
+// twice is always safe.
+function renameColumn(table, from, to) {
+  if (!tableExists(table)) return;
+  const cols = columnsOf(table);
+  if (!cols.includes(from)) return;
+  if (cols.includes(to)) {
+    db.exec(`UPDATE ${table} SET ${to} = ${from} WHERE ${to} IS NULL AND ${from} IS NOT NULL`);
+    try { db.exec(`ALTER TABLE ${table} DROP COLUMN ${from}`); } catch { /* left in place, unused */ }
+  } else {
+    db.exec(`ALTER TABLE ${table} RENAME COLUMN ${from} TO ${to}`);
+  }
+}
+
+renameColumn('programs', 'firm_id', 'org_id');
+renameColumn('projects', 'client_id', 'program_id');
+
 db.exec(`
-  CREATE TABLE IF NOT EXISTS firms (
+  CREATE TABLE IF NOT EXISTS organizations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     status TEXT DEFAULT 'Active',
@@ -28,7 +70,6 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    firm_id INTEGER REFERENCES firms(id) ON DELETE CASCADE,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     name TEXT,
@@ -37,15 +78,33 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
-  CREATE TABLE IF NOT EXISTS clients (
+  CREATE TABLE IF NOT EXISTS programs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    firm_id INTEGER NOT NULL REFERENCES firms(id) ON DELETE CASCADE,
+    org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     contact_name TEXT,
     contact_email TEXT,
     notes TEXT,
     status TEXT DEFAULT 'Active',
     created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS org_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'Admin',
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE (org_id, user_id, role)
+  );
+
+  CREATE TABLE IF NOT EXISTS project_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'PM',
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE (project_id, user_id, role)
   );
 
   CREATE TABLE IF NOT EXISTS projects (
@@ -494,68 +553,108 @@ if (templateCount === 0) {
 }
 
 // --- Tenancy migration ---------------------------------------------------------------
-// Every record that a user can reach gets a firm_id, so isolation is a single WHERE
-// clause on any query rather than a chain of joins that a new route might forget.
+// Every record a user can reach carries an org_id, so a query can be constrained to one
+// organization with a single WHERE clause rather than a chain of joins that a newly added
+// route might forget to write.
 const TENANT_TABLES = [
   'projects', 'proposal_intakes', 'pay_app_reviews', 'pco_reviews', 'invoice_reviews',
   'progress_reports', 'preconstruction_reviews', 'memo_templates', 'team_members',
   'document_reviews', 'rfis', 'submittals', 'pay_applications', 'invoices',
 ];
 for (const table of TENANT_TABLES) {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
-  if (cols.length && !cols.includes('firm_id')) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN firm_id INTEGER REFERENCES firms(id) ON DELETE CASCADE`);
+  if (!columnsOf(table).length) continue;
+  renameColumn(table, 'firm_id', 'org_id');
+  if (!columnsOf(table).includes('org_id')) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN org_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE`);
   }
 }
-// Projects hang off a client, which is what the user picks after logging in.
-if (!db.prepare(`PRAGMA table_info(projects)`).all().map(c => c.name).includes('client_id')) {
-  db.exec(`ALTER TABLE projects ADD COLUMN client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL`);
+// A project always belongs to a program; the column may predate that rule.
+if (!columnsOf('projects').includes('program_id')) {
+  db.exec(`ALTER TABLE projects ADD COLUMN program_id INTEGER REFERENCES programs(id) ON DELETE SET NULL`);
 }
 
-// One-time bootstrap: everything already in the database predates tenancy, so it belongs
-// to the first firm. Clients are derived from the client names already typed on projects,
-// so nothing has to be re-entered.
-if (db.prepare(`SELECT COUNT(*) AS c FROM firms`).get().c === 0) {
-  const firmName = process.env.DEFAULT_FIRM_NAME || 'Coaster';
-  const firmId = db.prepare(`INSERT INTO firms (name) VALUES (?)`).run(firmName).lastInsertRowid;
+// One-time bootstrap for a database that predates organizations entirely.
+if (db.prepare(`SELECT COUNT(*) AS c FROM organizations`).get().c === 0) {
+  const orgName = process.env.DEFAULT_ORG_NAME || process.env.DEFAULT_FIRM_NAME || 'Coaster';
+  const orgId = db.prepare(`INSERT INTO organizations (name) VALUES (?)`).run(orgName).lastInsertRowid;
 
   for (const table of TENANT_TABLES) {
-    const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
-    if (cols.includes('firm_id')) db.exec(`UPDATE ${table} SET firm_id = ${firmId} WHERE firm_id IS NULL`);
+    if (columnsOf(table).includes('org_id')) {
+      db.exec(`UPDATE ${table} SET org_id = ${orgId} WHERE org_id IS NULL`);
+    }
   }
-
-  // Turn the free-text client names into real client records.
+  // Programs are derived from the client names already typed onto projects.
   const names = db.prepare(`
     SELECT DISTINCT TRIM(client_name) AS name FROM projects
     WHERE client_name IS NOT NULL AND TRIM(client_name) <> ''
   `).all().map(r => r.name);
-  const insertClient = db.prepare(`INSERT INTO clients (firm_id, name) VALUES (?, ?)`);
+  const insertProgram = db.prepare(`INSERT INTO programs (org_id, name) VALUES (?, ?)`);
   for (const name of names) {
-    const clientId = insertClient.run(firmId, name).lastInsertRowid;
-    db.prepare(`UPDATE projects SET client_id=? WHERE TRIM(client_name)=? AND client_id IS NULL`).run(clientId, name);
+    const programId = insertProgram.run(orgId, name).lastInsertRowid;
+    db.prepare(`UPDATE projects SET program_id=? WHERE TRIM(client_name)=? AND program_id IS NULL`).run(programId, name);
   }
-  // Projects that never had a client name still need somewhere to live.
-  const orphans = db.prepare(`SELECT COUNT(*) AS c FROM projects WHERE client_id IS NULL`).get().c;
-  if (orphans > 0) {
-    const clientId = insertClient.run(firmId, 'Unassigned').lastInsertRowid;
-    db.prepare(`UPDATE projects SET client_id=? WHERE client_id IS NULL`).run(clientId);
-  }
-  console.log(`[tenancy] created firm "${firmName}" and moved existing data into it (${names.length} client(s) derived)`);
+  console.log(`[access] created organization "${orgName}" and moved existing data into it (${names.length} program(s) derived)`);
 }
 
-// First login: seed a superadmin from the environment. Falls back to the old shared
-// APP_PASSWORD_HASH so an existing deployment can still be logged into after upgrading.
+// Users used to belong to exactly one firm. That column is replaced by org_members, so
+// each existing user becomes a member of the organization they were tied to — an Admin if
+// they administered it, otherwise an ordinary member.
+if (columnsOf('users').includes('firm_id')) {
+  const legacy = db.prepare(`SELECT id, firm_id, role FROM users WHERE firm_id IS NOT NULL`).all();
+  const addMember = db.prepare(`
+    INSERT OR IGNORE INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)
+  `);
+  for (const u of legacy) {
+    addMember.run(u.firm_id, u.id, ['admin', 'superadmin'].includes(u.role) ? 'Admin' : 'Member');
+  }
+  try {
+    db.exec(`ALTER TABLE users DROP COLUMN firm_id`);
+  } catch {
+    // Older SQLite without DROP COLUMN — harmless, the column is simply ignored from here.
+  }
+  // Anyone left with no membership at all (e.g. a user whose firm was already gone) still
+  // needs a way in, so attach them to the first organization.
+  const firstOrg = db.prepare(`SELECT id FROM organizations ORDER BY id ASC LIMIT 1`).get();
+  if (firstOrg) {
+    for (const u of db.prepare(`
+      SELECT id, role FROM users WHERE id NOT IN (SELECT user_id FROM org_members)
+    `).all()) {
+      addMember.run(firstOrg.id, u.id, ['admin', 'superadmin'].includes(u.role) ? 'Admin' : 'Member');
+    }
+  }
+  if (legacy.length) console.log(`[access] converted ${legacy.length} user(s) to organization memberships`);
+}
+
+// Every organization is guaranteed at least one program, and every project is guaranteed
+// to sit in one, so nothing downstream has to cope with a missing level.
+for (const org of db.prepare(`SELECT id FROM organizations`).all()) {
+  const has = db.prepare(`SELECT COUNT(*) AS c FROM programs WHERE org_id=?`).get(org.id).c;
+  if (has === 0) db.prepare(`INSERT INTO programs (org_id, name) VALUES (?, 'Default Program')`).run(org.id);
+}
+const strays = db.prepare(`SELECT id, org_id FROM projects WHERE program_id IS NULL AND org_id IS NOT NULL`).all();
+for (const p of strays) {
+  const program = db.prepare(`SELECT id FROM programs WHERE org_id=? ORDER BY id ASC LIMIT 1`).get(p.org_id);
+  if (program) db.prepare(`UPDATE projects SET program_id=? WHERE id=?`).run(program.id, p.id);
+}
+
+// First login: seed a platform administrator from the environment, and make them an Admin
+// of the first organization so there is a way in. Falls back to the old shared password
+// hash so an existing deployment can still be signed into after upgrading.
 if (db.prepare(`SELECT COUNT(*) AS c FROM users`).get().c === 0) {
   const email = (process.env.SUPERADMIN_EMAIL || 'admin@coaster.app').toLowerCase();
   const hash = process.env.SUPERADMIN_PASSWORD_HASH || process.env.APP_PASSWORD_HASH;
   if (hash) {
-    const firstFirm = db.prepare(`SELECT id FROM firms ORDER BY id ASC LIMIT 1`).get();
-    db.prepare(`
-      INSERT INTO users (firm_id, email, password_hash, name, role) VALUES (?, ?, ?, ?, 'superadmin')
-    `).run(firstFirm?.id || null, email, hash, 'Administrator');
-    console.log(`[tenancy] seeded superadmin "${email}" (use your existing password)`);
+    const userId = db.prepare(`
+      INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, 'superadmin')
+    `).run(email, hash, 'Administrator').lastInsertRowid;
+    const firstOrg = db.prepare(`SELECT id FROM organizations ORDER BY id ASC LIMIT 1`).get();
+    if (firstOrg) {
+      db.prepare(`INSERT OR IGNORE INTO org_members (org_id, user_id, role) VALUES (?, ?, 'Admin')`)
+        .run(firstOrg.id, userId);
+    }
+    console.log(`[access] seeded platform admin "${email}" (use your existing password)`);
   } else {
-    console.warn('[tenancy] no users exist and no SUPERADMIN_PASSWORD_HASH/APP_PASSWORD_HASH set — nobody can log in');
+    console.warn('[access] no users exist and no SUPERADMIN_PASSWORD_HASH/APP_PASSWORD_HASH set — nobody can sign in');
   }
 }
 

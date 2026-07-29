@@ -2,27 +2,34 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Home from './pages/Home';
 import ProjectWorkspace from './pages/ProjectWorkspace';
-import ClientSelect from './pages/ClientSelect';
+import OrgSelect from './pages/OrgSelect';
+import ProgramSelect from './pages/ProgramSelect';
 import Team from './pages/Team';
 import Settings from './pages/Settings';
 import Contact from './pages/Contact';
 import Login from './pages/Login';
-import { authApi, selectedClient } from './api';
+import { authApi, selectedOrg, selectedProgram } from './api';
 
-// The app is sold to PM firms, so it is organised firm -> client -> project:
-//   sign in -> /clients (pick who you're working for) -> /projects (their projects)
-//   -> /project/:projectId/* (the tools for one project, see ProjectWorkspace).
-// Settings and Contact are firm-level pages.
+// The hierarchy is always Organization -> Program -> Project, so navigation mirrors it:
+//   sign in -> /organizations -> /programs -> /projects -> /project/:id/* (the tools)
+// A user account belongs to no organization; which one they are in is chosen here and
+// travels with every request.
 
 function RequireAuth({ children }) {
   if (!authApi.isLoggedIn()) return <Navigate to="/login" replace />;
   return children;
 }
 
-// Pages below the client picker are meaningless without a client chosen — send the user
-// back to choose one (e.g. after a fresh sign-in, or if they cleared the selection).
-function RequireClient({ children }) {
-  if (!selectedClient.get()) return <Navigate to="/clients" replace />;
+// Each level is meaningless without the one above it, so send the user back to whichever
+// choice is missing rather than rendering an empty screen.
+function RequireOrg({ children }) {
+  if (!selectedOrg.get()) return <Navigate to="/organizations" replace />;
+  return children;
+}
+
+function RequireProgram({ children }) {
+  if (!selectedOrg.get()) return <Navigate to="/organizations" replace />;
+  if (!selectedProgram.get()) return <Navigate to="/programs" replace />;
   return children;
 }
 
@@ -35,14 +42,16 @@ export default function App() {
         element={
           <RequireAuth>
             <Routes>
-              <Route path="/" element={<Navigate to="/clients" replace />} />
-              <Route path="/home" element={<Navigate to="/clients" replace />} />
-              <Route path="/clients" element={<ClientSelect />} />
-              <Route path="/projects" element={<RequireClient><Layout><Home /></Layout></RequireClient>} />
-              <Route path="/team" element={<Layout><Team /></Layout>} />
-              <Route path="/settings" element={<Layout><Settings /></Layout>} />
+              <Route path="/" element={<Navigate to="/organizations" replace />} />
+              <Route path="/home" element={<Navigate to="/organizations" replace />} />
+              <Route path="/clients" element={<Navigate to="/organizations" replace />} />
+              <Route path="/organizations" element={<OrgSelect />} />
+              <Route path="/programs" element={<RequireOrg><ProgramSelect /></RequireOrg>} />
+              <Route path="/projects" element={<RequireProgram><Layout><Home /></Layout></RequireProgram>} />
+              <Route path="/team" element={<RequireOrg><Layout><Team /></Layout></RequireOrg>} />
+              <Route path="/settings" element={<RequireOrg><Layout><Settings /></Layout></RequireOrg>} />
               <Route path="/contact" element={<Layout><Contact /></Layout>} />
-              <Route path="/project/:projectId/*" element={<RequireClient><ProjectWorkspace /></RequireClient>} />
+              <Route path="/project/:projectId/*" element={<RequireOrg><ProjectWorkspace /></RequireOrg>} />
             </Routes>
           </RequireAuth>
         }

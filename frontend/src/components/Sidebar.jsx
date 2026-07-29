@@ -4,7 +4,7 @@ import {
   ClipboardDocumentCheckIcon, Squares2X2Icon, ScaleIcon, ArrowLeftIcon,
   Cog6ToothIcon, EnvelopeIcon, FolderIcon, ReceiptPercentIcon, CameraIcon, UserGroupIcon,
 } from '@heroicons/react/24/outline';
-import { authApi, selectedClient } from '../api';
+import { authApi, selectedOrg, selectedProgram } from '../api';
 import { useProject } from '../context/ProjectContext';
 
 // The tools that operate on a single project. Their routes are built relative to the
@@ -64,8 +64,11 @@ export default function Sidebar() {
   const ctx = useProject();
   const project = ctx?.project;
   const projectId = ctx?.projectId;
-  const client = selectedClient.get();
-  const isAdmin = ['admin', 'superadmin'].includes(authApi.user()?.role);
+  const org = selectedOrg.get();
+  const program = selectedProgram.get();
+  // Org-level admin rights are recorded on the organization the user picked; a platform
+  // admin (the vendor) counts as an admin everywhere.
+  const isAdmin = authApi.user()?.isPlatformAdmin || !!org?.is_admin;
 
   const handleLogout = () => {
     authApi.logout();
@@ -123,17 +126,26 @@ export default function Sidebar() {
           </>
         ) : (
           <>
-            {/* Which client's work is on screen, and a way back to the picker. */}
-            {client && (
+            {/* Where the user currently is in the hierarchy, and a way back up it. */}
+            {org && (
               <div className="px-2 pt-4 pb-3">
-                <button onClick={() => navigate('/clients')}
+                <button onClick={() => navigate('/organizations')}
                   className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider mb-2 transition-colors"
                   style={{ color: 'rgba(255,255,255,0.4)' }}
                   onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.75)'; }}
                   onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.4)'; }}>
-                  <ArrowLeftIcon className="w-3.5 h-3.5" /> Switch client
+                  <ArrowLeftIcon className="w-3.5 h-3.5" /> Switch organization
                 </button>
-                <p className="text-white font-bold text-[14px] leading-snug break-words">{client.name}</p>
+                <p className="text-white font-bold text-[14px] leading-snug break-words">{org.name}</p>
+                {program && (
+                  <button onClick={() => navigate('/programs')}
+                    className="text-[11px] mt-0.5 text-left transition-colors"
+                    style={{ color: 'rgba(255,255,255,0.4)' }}
+                    onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.75)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.4)'; }}>
+                    {program.name} · change
+                  </button>
+                )}
               </div>
             )}
             <div className="px-2 pt-2 pb-2">

@@ -3,21 +3,23 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../database');
+const access = require('../lib/access');
 
-// Individual accounts, one per person, each belonging to exactly one firm. The token
-// carries the firm so every later request can be filtered to it — see middleware/auth.js.
+// One account is one person. Deliberately not tied to an organization: the same
+// consultant often works for several customers and must not need a second login. Which
+// organization they are working in is chosen after sign-in and travels per request.
 function issueToken(user) {
   return jwt.sign(
-    { uid: user.id, firmId: user.firm_id, role: user.role },
+    { uid: user.id, role: user.role },
     process.env.JWT_SECRET,
     { expiresIn: '30d' }
   );
 }
 
-function publicUser(user, firmName) {
+function publicUser(user) {
   return {
     id: user.id, email: user.email, name: user.name,
-    role: user.role, firmId: user.firm_id, firmName: firmName || null,
+    role: user.role, isPlatformAdmin: user.role === 'superadmin',
   };
 }
 
@@ -45,8 +47,13 @@ router.post('/login', async (req, res) => {
   const ok = user && user.status === 'Active' && await bcrypt.compare(password, user.password_hash || '');
   if (!ok) return res.status(401).json({ error: 'Incorrect email or password' });
 
-  const firm = user.firm_id ? db.prepare(`SELECT name FROM firms WHERE id=?`).get(user.firm_id) : null;
-  res.json({ token: issueToken(user), user: publicUser(user, firm?.name) });
+  // The organizations they can reach come back with the login so the app can go straight
+  // to the picker (or skip it when there is only one).
+  res.json({
+    token: issueToken(user),
+    user: publicUser(user),
+    organizations: access.orgsForUser(user),
+  });
 });
 
 // Who am I — the frontend calls this on load to restore the session and decide which
@@ -54,8 +61,7 @@ router.post('/login', async (req, res) => {
 router.get('/me', (req, res) => {
   const user = userFromToken(req);
   if (!user) return res.status(401).json({ error: 'Login required' });
-  const firm = user.firm_id ? db.prepare(`SELECT name FROM firms WHERE id=?`).get(user.firm_id) : null;
-  res.json({ user: publicUser(user, firm?.name) });
+  res.json({ user: publicUser(user), organizations: access.orgsForUser(user) });
 });
 
 // Changing your own password requires proving you know the current one.

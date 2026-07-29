@@ -18,7 +18,7 @@ app.use('/api/auth', require('./routes/auth'));
 // Everything below requires a valid login session
 app.use('/api', requireAuth);
 
-app.use('/api/clients', require('./routes/clients'));
+app.use('/api/programs', require('./routes/programs'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/projects', require('./routes/projects'));
 app.use('/api/rfis', require('./routes/rfis'));
