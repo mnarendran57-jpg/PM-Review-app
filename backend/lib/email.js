@@ -2,15 +2,40 @@
 // provider is configured the caller simply hands the admin a link to pass on themselves,
 // which is why every function here reports whether it actually sent rather than throwing.
 //
-// Configure with RESEND_API_KEY and EMAIL_FROM (e.g. "Coaster <invites@yourdomain.com>").
-const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const EMAIL_FROM = process.env.EMAIL_FROM;
+// Two ways to configure it, whichever suits the deployment:
+//   SMTP     — SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, EMAIL_FROM
+//              (for Gmail: smtp.gmail.com / 465, and an App Password, not the account
+//               password — Google blocks the latter for SMTP)
+//   Resend   — RESEND_API_KEY, EMAIL_FROM
+// SMTP wins if both are present, since it is the more deliberate choice.
+const { RESEND_API_KEY, EMAIL_FROM, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
 
-const isConfigured = () => !!(RESEND_API_KEY && EMAIL_FROM);
+const hasSmtp = () => !!(SMTP_HOST && SMTP_USER && SMTP_PASS && EMAIL_FROM);
+const hasResend = () => !!(RESEND_API_KEY && EMAIL_FROM);
+const isConfigured = () => hasSmtp() || hasResend();
+
+let transport = null;
+function smtpTransport() {
+  if (!transport) {
+    const nodemailer = require('nodemailer');
+    const port = Number(SMTP_PORT) || 587;
+    transport = nodemailer.createTransport({
+      host: SMTP_HOST,
+      port,
+      secure: port === 465, // 465 is implicit TLS; 587 upgrades via STARTTLS
+      auth: { user: SMTP_USER, pass: SMTP_PASS },
+    });
+  }
+  return transport;
+}
 
 async function send({ to, subject, html, text }) {
   if (!isConfigured()) return { sent: false, reason: 'not-configured' };
   try {
+    if (hasSmtp()) {
+      await smtpTransport().sendMail({ from: EMAIL_FROM, to, subject, html, text });
+      return { sent: true, via: 'smtp' };
+    }
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
@@ -18,15 +43,15 @@ async function send({ to, subject, html, text }) {
     });
     if (!res.ok) {
       const body = await res.text();
-      console.error('[email] send failed:', res.status, body.slice(0, 200));
+      console.error('[email] resend failed:', res.status, body.slice(0, 200));
       return { sent: false, reason: `provider-error-${res.status}` };
     }
-    return { sent: true };
+    return { sent: true, via: 'resend' };
   } catch (err) {
     // A failed send must never fail the request that triggered it — the invitation still
     // exists and its link can be copied by hand.
-    console.error('[email] send threw:', err.message);
-    return { sent: false, reason: 'exception' };
+    console.error('[email] send failed:', err.message);
+    return { sent: false, reason: err.message };
   }
 }
 

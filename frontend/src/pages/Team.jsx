@@ -150,7 +150,9 @@ function InviteModal({ onClose, onSent }) {
             <p className="text-sm text-gray-700">
               {result.emailed
                 ? <>An invitation email has been sent to <strong>{result.email}</strong>.</>
-                : <>Email sending isn't set up, so <strong>send this link to {result.email} yourself</strong>. They'll set their own password.</>}
+                : result.emailConfigured
+                  ? <>The invitation was created, but the email <strong>could not be sent</strong> ({result.emailError}). Send this link to {result.email} yourself, and check the email settings.</>
+                  : <>Email sending isn't set up, so <strong>send this link to {result.email} yourself</strong>. They'll set their own password.</>}
             </p>
           </div>
           <div>

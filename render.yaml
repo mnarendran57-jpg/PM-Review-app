@@ -40,8 +40,17 @@ services:
       # Public URL of the Netlify frontend — invitation links are built from it.
       - key: APP_BASE_URL
         sync: false
-      # Optional: automatic invitation emails (resend.com). Invitations work without these;
-      # the admin just copies the link and sends it themselves.
+      # Optional: automatic invitation emails. Invitations work without these — the admin
+      # just copies the link and sends it themselves. Use EITHER SMTP (your own mailbox;
+      # for Gmail an App Password is required) OR a Resend API key.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM

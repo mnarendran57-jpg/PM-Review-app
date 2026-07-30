@@ -235,7 +235,14 @@ router.post('/invitations', requireOrgAdmin, async (req, res) => {
     inviterName: req.user.name, role, link,
   });
 
-  res.json({ id, email: address, role, link, emailed: delivery.sent, expires_at: expires });
+  res.json({
+    id, email: address, role, link, expires_at: expires,
+    emailed: delivery.sent,
+    // Distinguishes "no email provider set up" from "it was set up and failed", so a
+    // broken SMTP password doesn't look like an intentional copy-the-link flow.
+    emailConfigured: email.isConfigured(),
+    emailError: delivery.sent ? null : delivery.reason,
+  });
 });
 
 router.delete('/invitations/:id', requireOrgAdmin, (req, res) => {
