@@ -6,6 +6,7 @@ import {
 import { adminApi, authApi, selectedOrg } from '../api';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
+import { useConfirm } from '../components/ConfirmDialog';
 
 const ROLE_LABEL = { Admin: 'Administrator', Member: 'Member' };
 const ROLE_HELP = {
@@ -302,6 +303,7 @@ export default function Team() {
   const [inviting, setInviting] = useState(false);
   const [addingOrg, setAddingOrg] = useState(false);
   const [error, setError] = useState('');
+  const [confirm, confirmDialog] = useConfirm();
 
   const load = () => {
     adminApi.listMembers().then(setPeople).catch(() => setPeople([]));
@@ -311,14 +313,24 @@ export default function Team() {
   useEffect(() => { load(); }, []);
 
   const revokeInvite = async inv => {
-    if (!confirm(`Cancel the invitation to ${inv.email}? Their link will stop working.`)) return;
+    const ok = await confirm({
+      title: 'Cancel invitation',
+      message: `Cancel the invitation to ${inv.email}? Their link will stop working immediately.`,
+      confirmLabel: 'Cancel invitation',
+    });
+    if (!ok) return;
     setError('');
     try { await adminApi.revokeInvitation(inv.id); load(); }
     catch (e) { setError(e?.response?.data?.error || 'Could not cancel this invitation.'); }
   };
 
   const remove = async person => {
-    if (!confirm(`Remove ${person.name || person.email}? They will no longer be able to sign in.`)) return;
+    const ok = await confirm({
+      title: 'Remove person',
+      message: `Remove ${person.name || person.email} from this organization? They keep their account and any access to other organizations.`,
+      confirmLabel: 'Remove',
+    });
+    if (!ok) return;
     setError('');
     try { await adminApi.removeMember(person.user_id); load(); }
     catch (e) { setError(e?.response?.data?.error || 'Could not remove this person.'); }
@@ -491,6 +503,7 @@ export default function Team() {
         </div>
       </div>
 
+      {confirmDialog}
       {inviting && (
         <InviteModal onClose={() => setInviting(false)} onSent={load} />
       )}

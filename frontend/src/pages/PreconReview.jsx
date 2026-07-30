@@ -6,6 +6,7 @@ import {
 import { preconReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
+import { useConfirm } from '../components/ConfirmDialog';
 import MultiFileDrop from '../components/MultiFileDrop';
 import PreconReviewView from '../components/PreconReviewView';
 
@@ -89,14 +90,17 @@ export default function PreconReview() {
   };
 
   const handleDelete = async id => {
-    if (!confirm('Delete this pre-construction review from history?')) return;
+    if (!(await confirm('Delete this pre-construction review from history? The uploaded documents are removed too.'))) return;
     await preconReviewApi.delete(id);
     if (viewing?.id === id) setViewing(null);
     loadHistory();
   };
 
+  const [confirm, confirmDialog] = useConfirm();
+
   return (
     <div className="p-8">
+      {confirmDialog}
       <PageHeader
         title="Pre-Construction Document Review"
         subtitle="Upload drawings, specs, proposals, or narratives to get a risk, cost, and change-order review before construction starts"

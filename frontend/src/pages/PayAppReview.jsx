@@ -6,6 +6,7 @@ import {
 import { payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
+import { useConfirm } from '../components/ConfirmDialog';
 import FileDrop from '../components/FileDrop';
 import PayAppReportView from '../components/PayAppReportView';
 
@@ -471,7 +472,7 @@ export default function PayAppReview() {
   };
 
   const handleDelete = async id => {
-    if (!confirm('Delete this pay app review from history?')) return;
+    if (!(await confirm('Delete this pay app review from history? The original PDF is removed too.'))) return;
     await payAppReviewApi.delete(id);
     if (viewing?.id === id) setViewing(null);
     loadHistory();
@@ -483,8 +484,11 @@ export default function PayAppReview() {
     setContractSum(''); setCoLogCsv(''); setRetainageRate(''); setRetainageMilestonePct(''); setRetainageReducedRate('');
   };
 
+  const [confirm, confirmDialog] = useConfirm();
+
   return (
     <div className="p-8">
+      {confirmDialog}
       <PageHeader
         title="Pay Application Review"
         subtitle="Upload the previous and current pay application — get math checks and a site verification checklist in one step"

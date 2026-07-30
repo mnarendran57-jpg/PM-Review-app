@@ -7,6 +7,7 @@ import {
 import { proposalIntakeApi, memoTemplatesApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
+import { useConfirm } from '../components/ConfirmDialog';
 import MemoTemplateEditor from '../components/MemoTemplateEditor';
 import FileDrop from '../components/FileDrop';
 
@@ -156,7 +157,7 @@ export default function ProposalIntake() {
   };
 
   const handleDelete = async id => {
-    if (!confirm('Remove this processed memo from history? This does not affect the original files.')) return;
+    if (!(await confirm('Remove this processed memo from history? This does not affect the original files.'))) return;
     await proposalIntakeApi.delete(id);
     loadHistory();
   };
@@ -166,8 +167,11 @@ export default function ProposalIntake() {
     setFields(null); setResult(null); setError('');
   };
 
+  const [confirm, confirmDialog] = useConfirm();
+
   return (
     <div className="p-8">
+      {confirmDialog}
       <PageHeader
         title="Proposal Intake"
         subtitle="Turn an incoming vendor proposal into a signed-ready memo package"
