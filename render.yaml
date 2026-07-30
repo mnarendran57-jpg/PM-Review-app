@@ -37,6 +37,15 @@ services:
       # Session signing secret — let Render generate a strong random value.
       - key: JWT_SECRET
         generateValue: true
+      # Public URL of the Netlify frontend — invitation links are built from it.
+      - key: APP_BASE_URL
+        sync: false
+      # Optional: automatic invitation emails (resend.com). Invitations work without these;
+      # the admin just copies the link and sends it themselves.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
       # Optional: Cloudflare R2 object storage for uploaded files. Leave unset to keep
       # files in the database on the persistent disk above. Set all four to use R2, then
       # run `node scripts/migrate-blobs-to-r2.js` once to move existing files over.

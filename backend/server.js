@@ -14,6 +14,8 @@ app.use(express.urlencoded({ extended: true, limit: '500mb' }));
 // Public — no login required
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 app.use('/api/auth', require('./routes/auth'));
+// Accepting an invitation necessarily happens before the invitee has a login.
+app.use('/api/invitations', require('./routes/invitations'));
 
 // Everything below requires a valid login session
 app.use('/api', requireAuth);

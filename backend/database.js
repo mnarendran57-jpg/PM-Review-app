@@ -637,6 +637,25 @@ for (const p of strays) {
   if (program) db.prepare(`UPDATE projects SET program_id=? WHERE id=?`).run(program.id, p.id);
 }
 
+// Invitations. An admin invites someone by email rather than choosing a password on their
+// behalf: the invitee follows a one-time link and sets their own. The token is the secret,
+// so it is random and expires; accepting it is what creates the account.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS invitations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'Member',
+    token TEXT NOT NULL UNIQUE,
+    invited_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    expires_at TEXT NOT NULL,
+    accepted_at TEXT,
+    revoked_at TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_invitations_token ON invitations(token);
+`);
+
 // First login: seed a platform administrator from the environment, and make them an Admin
 // of the first organization so there is a way in. Falls back to the old shared password
 // hash so an existing deployment can still be signed into after upgrading.

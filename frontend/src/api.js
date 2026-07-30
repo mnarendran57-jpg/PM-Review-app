@@ -75,6 +75,12 @@ export const authApi = {
   },
   isLoggedIn: () => !!localStorage.getItem(TOKEN_KEY),
   setToken: token => localStorage.setItem(TOKEN_KEY, token),
+  // Takes a freshly-issued session (e.g. straight after accepting an invitation) and
+  // stores it as though the user had just signed in.
+  adopt: ({ token, user }) => {
+    localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(USER_KEY, JSON.stringify(user));
+  },
   // The signed-in person, as last known. Used to decide which admin screens to show.
   user: () => {
     try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch { return null; }
@@ -124,10 +130,20 @@ export const adminApi = {
   addMember: data => api.post('/admin/members', data).then(r => r.data),
   updateMember: (userId, data) => api.put(`/admin/members/${userId}`, data).then(r => r.data),
   removeMember: userId => api.delete(`/admin/members/${userId}`).then(r => r.data),
+  // Invitations — the preferred way to add someone, since they set their own password.
+  listInvitations: () => api.get('/admin/invitations').then(r => r.data),
+  invite: data => api.post('/admin/invitations', data).then(r => r.data),
+  revokeInvitation: id => api.delete(`/admin/invitations/${id}`).then(r => r.data),
   // Vendor-only: customer organizations.
   listOrganizations: () => api.get('/admin/organizations').then(r => r.data),
   createOrganization: data => api.post('/admin/organizations', data).then(r => r.data),
   updateOrganization: (id, data) => api.put(`/admin/organizations/${id}`, data).then(r => r.data),
+};
+
+// Public: used by someone who has an invitation link but no account yet.
+export const invitationsApi = {
+  get: token => api.get(`/invitations/${token}`).then(r => r.data),
+  accept: (token, data) => api.post(`/invitations/${token}/accept`, data).then(r => r.data),
 };
 
 export const projectMembersApi = {

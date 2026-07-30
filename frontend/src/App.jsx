@@ -8,6 +8,7 @@ import Team from './pages/Team';
 import Settings from './pages/Settings';
 import Contact from './pages/Contact';
 import Login from './pages/Login';
+import InviteAccept from './pages/InviteAccept';
 import { authApi, selectedOrg, selectedProgram } from './api';
 
 // The hierarchy is always Organization -> Program -> Project, so navigation mirrors it:
@@ -37,6 +38,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      {/* Public: an invitee has no account yet, so this must sit outside RequireAuth. */}
+      <Route path="/invite/:token" element={<InviteAccept />} />
       <Route
         path="/*"
         element={

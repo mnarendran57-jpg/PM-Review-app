@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   UserGroupIcon, PlusIcon, PencilIcon, TrashIcon, KeyIcon,
-  BuildingOffice2Icon, CheckCircleIcon,
+  BuildingOffice2Icon, CheckCircleIcon, EnvelopeIcon, XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { adminApi, authApi, selectedOrg } from '../api';
 import PageHeader from '../components/PageHeader';
@@ -113,6 +113,93 @@ function PersonModal({ person, onClose, onSaved }) {
   );
 }
 
+// Inviting is the preferred route: the invitee sets their own password, so it is never
+// known to the admin or sent anywhere in plain text. The link is always shown here so the
+// invitation works whether or not outbound email is configured.
+function InviteModal({ onClose, onSent }) {
+  const [address, setAddress] = useState('');
+  const [role, setRole] = useState('Member');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  const submit = async () => {
+    setError('');
+    if (!address.trim()) { setError('Enter an email address.'); return; }
+    setSaving(true);
+    try { setResult(await adminApi.invite({ email: address.trim(), role })); onSent(); }
+    catch (e) { setError(e?.response?.data?.error || 'Could not send this invitation.'); }
+    finally { setSaving(false); }
+  };
+
+  const copy = () => {
+    navigator.clipboard.writeText(result.link).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  };
+
+  if (result) {
+    return (
+      <Modal title="Invitation created" onClose={onClose}>
+        <div className="space-y-4">
+          <div className="p-3 rounded-xl flex items-start gap-2"
+            style={{ background: result.emailed ? '#f6faf7' : '#fff7ed', border: `1px solid ${result.emailed ? '#dcf0e2' : '#fed7aa'}` }}>
+            <CheckCircleIcon className="w-5 h-5 flex-shrink-0" style={{ color: result.emailed ? '#059669' : '#c2410c' }} />
+            <p className="text-sm text-gray-700">
+              {result.emailed
+                ? <>An invitation email has been sent to <strong>{result.email}</strong>.</>
+                : <>Email sending isn't set up, so <strong>send this link to {result.email} yourself</strong>. They'll set their own password.</>}
+            </p>
+          </div>
+          <div>
+            <label className="label">Invitation link</label>
+            <textarea className="input text-xs" rows={3} readOnly value={result.link}
+              onFocus={e => e.target.select()} style={{ background: '#f9fafb' }} />
+            <button className="btn-secondary w-full justify-center mt-2" onClick={copy}>
+              {copied ? 'Copied' : 'Copy link'}
+            </button>
+            <p className="text-[11px] text-gray-400 mt-2">
+              Valid for 7 days and usable once. Anyone with this link can join as {result.role} — treat it like a password.
+            </p>
+          </div>
+          <div className="flex justify-end pt-1">
+            <button className="btn-primary" onClick={onClose}>Done</button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal title="Invite a person" onClose={saving ? () => {} : onClose}>
+      <div className="space-y-4">
+        <div>
+          <label className="label">Email address *</label>
+          <input className="input" type="email" autoFocus value={address}
+            onChange={e => setAddress(e.target.value)} placeholder="name@company.com"
+            onKeyDown={e => { if (e.key === 'Enter') submit(); }} />
+          <p className="text-[11px] text-gray-400 mt-1">They'll choose their own password — you never see it.</p>
+        </div>
+        <div>
+          <label className="label">Role</label>
+          <select className="input" value={role} onChange={e => setRole(e.target.value)}>
+            <option value="Member">Member</option>
+            <option value="Admin">Administrator</option>
+          </select>
+          <p className="text-[11px] text-gray-400 mt-1">{ROLE_HELP[role]}</p>
+        </div>
+        {error && <p className="text-sm" style={{ color: '#dc2626' }}>{error}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="btn-primary" onClick={submit} disabled={saving}>{saving ? 'Inviting…' : 'Send invitation'}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // Vendor-only: onboarding a new customer firm together with the person who will run it.
 function FirmModal({ onClose, onSaved }) {
   const [form, setForm] = useState({ name: '', admin_name: '', admin_email: '', admin_password: '' });
@@ -208,15 +295,25 @@ export default function Team() {
   const isSuperadmin = me?.isPlatformAdmin;
   const [people, setPeople] = useState(null);
   const [orgs, setOrgs] = useState(null);
+  const [invites, setInvites] = useState(null);
   const [editing, setEditing] = useState(undefined); // undefined = closed, null = new
+  const [inviting, setInviting] = useState(false);
   const [addingOrg, setAddingOrg] = useState(false);
   const [error, setError] = useState('');
 
   const load = () => {
     adminApi.listMembers().then(setPeople).catch(() => setPeople([]));
+    adminApi.listInvitations().then(setInvites).catch(() => setInvites([]));
     if (isSuperadmin) adminApi.listOrganizations().then(setOrgs).catch(() => setOrgs([]));
   };
   useEffect(() => { load(); }, []);
+
+  const revokeInvite = async inv => {
+    if (!confirm(`Cancel the invitation to ${inv.email}? Their link will stop working.`)) return;
+    setError('');
+    try { await adminApi.revokeInvitation(inv.id); load(); }
+    catch (e) { setError(e?.response?.data?.error || 'Could not cancel this invitation.'); }
+  };
 
   const remove = async person => {
     if (!confirm(`Remove ${person.name || person.email}? They will no longer be able to sign in.`)) return;
@@ -250,9 +347,14 @@ export default function Team() {
                   {people?.length ?? '·'}
                 </span>
               </div>
-              <button className="btn-primary" onClick={() => setEditing(null)}>
-                <PlusIcon className="w-4 h-4" /> Add Person
-              </button>
+              <div className="flex items-center gap-2">
+                <button className="btn-secondary" onClick={() => setEditing(null)} title="Create the account yourself with a password you choose">
+                  <PlusIcon className="w-4 h-4" /> Add directly
+                </button>
+                <button className="btn-primary" onClick={() => setInviting(true)}>
+                  <EnvelopeIcon className="w-4 h-4" /> Invite
+                </button>
+              </div>
             </div>
             <table className="w-full">
               <thead style={{ borderBottom: '1px solid #f3f4f6', background: '#fafbfc' }}>
@@ -298,6 +400,40 @@ export default function Team() {
               </tbody>
             </table>
           </div>
+
+          {/* Invitations that haven't been accepted yet. */}
+          {invites?.length > 0 && (
+            <div className="card overflow-hidden">
+              <div className="px-5 py-4 flex items-center gap-2" style={{ borderBottom: '1px solid #f3f4f6', background: '#fafbfc' }}>
+                <EnvelopeIcon className="w-4 h-4 text-gray-400" />
+                <h2 className="text-sm font-semibold text-gray-900">Pending invitations</h2>
+                <span className="px-2 py-0.5 rounded-full text-xs font-semibold" style={{ background: '#fff7ed', color: '#c2410c' }}>
+                  {invites.length}
+                </span>
+              </div>
+              <div className="divide-y" style={{ borderColor: '#f3f4f6' }}>
+                {invites.map(inv => (
+                  <div key={inv.id} className="px-5 py-3 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{inv.email}</p>
+                      <p className="text-xs text-gray-400">
+                        Invited as {inv.role} · expires {new Date(inv.expires_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button className="btn-secondary px-2.5 py-1 text-xs"
+                        onClick={() => navigator.clipboard.writeText(`${window.location.origin}/invite/${inv.token}`)}>
+                        Copy link
+                      </button>
+                      <button className="btn-danger" title="Cancel invitation" onClick={() => revokeInvite(inv)}>
+                        <XMarkIcon className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Vendor-only: the list of customer firms. */}
           {isSuperadmin && (
@@ -353,6 +489,9 @@ export default function Team() {
         </div>
       </div>
 
+      {inviting && (
+        <InviteModal onClose={() => setInviting(false)} onSent={load} />
+      )}
       {editing !== undefined && (
         <PersonModal
           person={editing}

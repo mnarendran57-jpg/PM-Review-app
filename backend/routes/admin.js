@@ -1,8 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const db = require('../database');
 const access = require('../lib/access');
+const email = require('../lib/email');
 const { requireOrgAdmin, requirePlatformAdmin } = require('../middleware/auth');
 
 // Two levels of administration:
@@ -177,6 +179,69 @@ router.delete('/members/:userId', requireOrgAdmin, (req, res) => {
   db.prepare(`
     DELETE FROM project_members WHERE user_id=? AND project_id IN (SELECT id FROM projects WHERE org_id=?)
   `).run(user.id, req.orgId);
+  res.json({ success: true });
+});
+
+// --- Invitations ----------------------------------------------------------------------
+// Inviting is preferred over creating someone's account for them: the invitee sets their
+// own password, so nobody else ever knows it. The link is returned to the admin as well as
+// emailed, so this works whether or not an email provider is configured.
+
+const INVITE_DAYS = 7;
+
+router.get('/invitations', requireOrgAdmin, (req, res) => {
+  res.json(db.prepare(`
+    SELECT i.id, i.email, i.role, i.token, i.expires_at, i.created_at, u.name AS invited_by_name
+    FROM invitations i LEFT JOIN users u ON u.id = i.invited_by
+    WHERE i.org_id = ? AND i.accepted_at IS NULL AND i.revoked_at IS NULL
+      AND i.expires_at > datetime('now')
+    ORDER BY i.created_at DESC
+  `).all(req.orgId));
+});
+
+router.post('/invitations', requireOrgAdmin, async (req, res) => {
+  const address = String(req.body.email || '').trim().toLowerCase();
+  const role = ORG_ROLES.includes(req.body.role) ? req.body.role : 'Member';
+  if (!address || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) {
+    return res.status(400).json({ error: 'Enter a valid email address' });
+  }
+
+  // Already a member here? Nothing to invite them to.
+  const already = db.prepare(`
+    SELECT 1 FROM org_members m JOIN users u ON u.id = m.user_id
+    WHERE m.org_id=? AND lower(u.email)=?
+  `).get(req.orgId, address);
+  if (already) return res.status(400).json({ error: 'That person is already in this organization' });
+
+  // Re-inviting replaces any outstanding invitation rather than piling them up.
+  db.prepare(`
+    UPDATE invitations SET revoked_at = datetime('now')
+    WHERE org_id=? AND lower(email)=? AND accepted_at IS NULL AND revoked_at IS NULL
+  `).run(req.orgId, address);
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const expires = new Date(Date.now() + INVITE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const id = db.prepare(`
+    INSERT INTO invitations (org_id, email, role, token, invited_by, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(req.orgId, address, role, token, req.user.id, expires).lastInsertRowid;
+
+  const base = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '');
+  const link = `${base}/invite/${token}`;
+  const org = db.prepare(`SELECT name FROM organizations WHERE id=?`).get(req.orgId);
+
+  const delivery = await email.sendInvitation({
+    to: address, orgName: org?.name || 'your organization',
+    inviterName: req.user.name, role, link,
+  });
+
+  res.json({ id, email: address, role, link, emailed: delivery.sent, expires_at: expires });
+});
+
+router.delete('/invitations/:id', requireOrgAdmin, (req, res) => {
+  const invite = db.prepare(`SELECT * FROM invitations WHERE id=? AND org_id=?`).get(req.params.id, req.orgId);
+  if (!invite) return res.status(404).json({ error: 'Not found' });
+  db.prepare(`UPDATE invitations SET revoked_at = datetime('now') WHERE id=?`).run(invite.id);
   res.json({ success: true });
 });
 
