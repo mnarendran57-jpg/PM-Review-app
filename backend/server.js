@@ -23,12 +23,12 @@ app.use('/api', requireAuth);
 app.use('/api/programs', require('./routes/programs'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/projects', require('./routes/projects'));
-app.use('/api/rfis', require('./routes/rfis'));
-app.use('/api/submittals', require('./routes/submittals'));
-app.use('/api/finance', require('./routes/finance'));
-app.use('/api/reviews', require('./routes/reviews'));
-app.use('/api/team', require('./routes/team'));
 app.use('/api/settings', require('./routes/settings'));
+
+// Not mounted: rfis, submittals, finance, reviews, team. Their pages are not routed in the
+// frontend, so these endpoints were unreachable by the app but still served any logged-in
+// caller — an authorization gap with no upside. The route files are kept for when those
+// features are revived, at which point they need the same org scoping as everything below.
 app.use('/api/proposal-intake', require('./routes/proposalIntake'));
 app.use('/api/memo-templates', require('./routes/memoTemplates'));
 app.use('/api/pay-app-review', require('./routes/payAppReview'));

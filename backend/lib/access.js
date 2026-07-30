@@ -121,7 +121,46 @@ function rolesOnProject(user, projectId) {
   return roles;
 }
 
+// --- Record-level scoping for the document tools ---------------------------------------
+// Every tool table carries org_id, and most also carry project_id. These two helpers are
+// what those routes use so the rule lives in one place rather than being restated (and
+// eventually mis-stated) in each of them.
+
+// A WHERE fragment limiting rows to what this user may see inside one organization.
+// Admins see the whole organization; everyone else sees only rows belonging to a project
+// they are a member of. Rows with no project are administrative, so members never see them.
+function visibilityClause(user, orgId, { alias = '', projectColumn = 'project_id' } = {}) {
+  const p = alias ? `${alias}.` : '';
+  if (isOrgAdmin(user, orgId)) {
+    return { sql: `${p}org_id = ?`, params: [orgId] };
+  }
+  if (!projectColumn) {
+    // No project to scope by and not an admin — nothing is visible.
+    return { sql: '1 = 0', params: [] };
+  }
+  return {
+    sql: `${p}org_id = ? AND ${p}${projectColumn} IN (SELECT project_id FROM project_members WHERE user_id = ?)`,
+    params: [orgId, user.id],
+  };
+}
+
+// The same rule for a single already-loaded row. Callers turn false into a 404 rather than
+// a 403 so record ids cannot be probed for existence.
+function recordVisible(user, row, { projectColumn = 'project_id' } = {}) {
+  if (!row) return false;
+  // Rows predating organizations belong to nobody; only the vendor can reach them.
+  if (row.org_id == null) return isPlatformAdmin(user);
+  if (!isInOrg(user, row.org_id)) return false;
+  if (isOrgAdmin(user, row.org_id)) return true;
+  const projectId = projectColumn ? row[projectColumn] : null;
+  if (!projectId) return false;
+  return !!db.prepare(
+    `SELECT 1 FROM project_members WHERE project_id=? AND user_id=?`
+  ).get(projectId, user.id);
+}
+
 module.exports = {
   isPlatformAdmin, orgsForUser, isOrgAdmin, isInOrg,
   programsForUser, projectsForUser, projectForUser, rolesOnProject,
+  visibilityClause, recordVisible,
 };

@@ -8,6 +8,22 @@ const { buildPcoReport } = require('../lib/pcoReport');
 const { friendlyAiError } = require('../lib/aiErrors');
 const storage = require('../lib/storage');
 
+
+const access = require('../lib/access');
+const { requireOrg } = require('../middleware/auth');
+
+// Scoped to one organization; within it a member sees only projects they belong to.
+// Applied to the whole router so a new endpoint cannot silently skip it.
+router.use(requireOrg);
+
+// Loads a row only if the caller may see it, else null -> the caller answers 404 rather
+// than 403 so ids cannot be probed. Always selects the whole row, because the check needs
+// org_id and project_id.
+function visibleRow(req) {
+  const row = db.prepare(`SELECT * FROM pco_reviews WHERE id=?`).get(req.params.id);
+  return access.recordVisible(req.user, row) ? row : null;
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 500 * 1024 * 1024 },
@@ -66,13 +82,13 @@ router.post('/', upload.fields([
 
     const insert = db.prepare(`
       INSERT INTO pco_reviews (
-        project_id, pco_number, title, contractor, total_amount, is_allowance,
+        org_id, project_id, pco_number, title, contractor, total_amount, is_allowance,
         extracted_data, checks_result, ai_observations, report_markdown,
         pco_file_name, pco_file, pco_file_key, reference_file_name, reference_file, reference_file_key,
         critical_count, fail_count, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      projectId,
+      req.orgId, projectId,
       pco.pcoNumber || null,
       pco.title || null,
       pco.contractor || null,
@@ -98,10 +114,11 @@ router.post('/', upload.fields([
 
 router.get('/', (req, res) => {
   const { project_id, search } = req.query;
+  const scope = access.visibilityClause(req.user, req.orgId);
   let sql = `SELECT id, project_id, pco_number, title, contractor, total_amount, is_allowance,
              critical_count, fail_count, created_by, created_at
-             FROM pco_reviews WHERE 1=1`;
-  const params = [];
+             FROM pco_reviews WHERE ${scope.sql}`;
+  const params = [...scope.params];
   if (project_id) { sql += ' AND project_id = ?'; params.push(project_id); }
   if (search) { sql += ' AND (title LIKE ? OR pco_number LIKE ? OR contractor LIKE ?)'; params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
   sql += ' ORDER BY created_at DESC';
@@ -109,7 +126,7 @@ router.get('/', (req, res) => {
 });
 
 router.get('/:id', (req, res) => {
-  const row = db.prepare('SELECT * FROM pco_reviews WHERE id=?').get(req.params.id);
+  const row = visibleRow(req);
   if (!row) return res.status(404).json({ error: 'Not found' });
   const extracted = JSON.parse(row.extracted_data);
   const results = JSON.parse(row.checks_result);
@@ -129,7 +146,7 @@ router.get('/:id', (req, res) => {
 });
 
 router.get('/:id/report.md', (req, res) => {
-  const row = db.prepare('SELECT pco_number, report_markdown FROM pco_reviews WHERE id=?').get(req.params.id);
+  const row = visibleRow(req);
   if (!row) return res.status(404).json({ error: 'Not found' });
   res.setHeader('Content-Type', 'text/markdown');
   res.setHeader('Content-Disposition', `attachment; filename="PCO_${(row.pco_number || req.params.id).toString().replace(/[^a-z0-9]+/gi, '_')}_Review.md"`);
@@ -137,7 +154,7 @@ router.get('/:id/report.md', (req, res) => {
 });
 
 router.get('/:id/original.pdf', async (req, res) => {
-  const row = db.prepare('SELECT pco_file_name, pco_file, pco_file_key FROM pco_reviews WHERE id=?').get(req.params.id);
+  const row = visibleRow(req);
   if (!row) return res.status(404).json({ error: 'Not found' });
   const bytes = await storage.readFile({ key: row.pco_file_key, blob: row.pco_file });
   if (!bytes) return res.status(404).json({ error: 'Not found' });
@@ -147,7 +164,8 @@ router.get('/:id/original.pdf', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
-  const row = db.prepare('SELECT pco_file_key, reference_file_key FROM pco_reviews WHERE id=?').get(req.params.id);
+  const row = visibleRow(req);
+  if (!row) return res.status(404).json({ error: 'Not found' });
   db.prepare('DELETE FROM pco_reviews WHERE id=?').run(req.params.id);
   await storage.remove([row?.pco_file_key, row?.reference_file_key]);
   res.json({ success: true });

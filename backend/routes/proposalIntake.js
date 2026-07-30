@@ -7,6 +7,22 @@ const { renderMemoPdf, mergePdfBuffers } = require('../lib/pdfGen');
 const { friendlyAiError } = require('../lib/aiErrors');
 const storage = require('../lib/storage');
 
+
+const access = require('../lib/access');
+const { requireOrg } = require('../middleware/auth');
+
+// Scoped to one organization; within it a member sees only projects they belong to.
+// Applied to the whole router so a new endpoint cannot silently skip it.
+router.use(requireOrg);
+
+// Loads a row only if the caller may see it, else null -> the caller answers 404 rather
+// than 403 so ids cannot be probed. Always selects the whole row, because the check needs
+// org_id.
+function visibleRow(req) {
+  const row = db.prepare(`SELECT * FROM proposal_intakes WHERE id=?`).get(req.params.id);
+  return access.recordVisible(req.user, row, { projectColumn: null }) ? row : null;
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 500 * 1024 * 1024 }
@@ -138,13 +154,14 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
 
     const result = db.prepare(`
       INSERT INTO proposal_intakes (
-        intake_type, vendor_name, project_name, po_number, proposal_date,
+        org_id, intake_type, vendor_name, project_name, po_number, proposal_date,
         scope_of_work, total_price, change_order_price, original_po_amount, new_total_amount,
         memo_template_id,
         proposal_file_name, proposal_file, proposal_file_key, po_file_name, po_file, po_file_key,
         merged_file_name, merged_pdf, merged_pdf_key, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
+      req.orgId,
       intake_type, fields.vendor_name, fields.project_name, fields.po_number, fields.date,
       fields.scope_of_work, fields.total_price, fields.change_order_price || null,
       fields.original_po_amount || null, fields.new_total_amount || null,
@@ -163,11 +180,12 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
 
 router.get('/', (req, res) => {
   const { search, intake_type, project_name } = req.query;
+  const scope = access.visibilityClause(req.user, req.orgId, { projectColumn: null });
   let sql = `SELECT id, intake_type, vendor_name, project_name, po_number, proposal_date,
              total_price, change_order_price, original_po_amount, new_total_amount,
              proposal_file_name, po_file_name, merged_file_name, created_by, created_at
-             FROM proposal_intakes WHERE 1=1`;
-  const params = [];
+             FROM proposal_intakes WHERE ${scope.sql}`;
+  const params = [...scope.params];
   if (project_name) { sql += ' AND project_name = ?'; params.push(project_name); }
   if (intake_type) { sql += ' AND intake_type = ?'; params.push(intake_type); }
   if (search) {
@@ -179,7 +197,7 @@ router.get('/', (req, res) => {
 });
 
 router.get('/:id/download', async (req, res) => {
-  const row = db.prepare('SELECT merged_file_name, merged_pdf, merged_pdf_key FROM proposal_intakes WHERE id=?').get(req.params.id);
+  const row = visibleRow(req);
   if (!row) return res.status(404).json({ error: 'Not found' });
   const bytes = await storage.readFile({ key: row.merged_pdf_key, blob: row.merged_pdf });
   if (!bytes) return res.status(404).json({ error: 'Not found' });
@@ -189,7 +207,8 @@ router.get('/:id/download', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
-  const row = db.prepare('SELECT proposal_file_key, po_file_key, merged_pdf_key FROM proposal_intakes WHERE id=?').get(req.params.id);
+  const row = visibleRow(req);
+  if (!row) return res.status(404).json({ error: 'Not found' });
   db.prepare('DELETE FROM proposal_intakes WHERE id=?').run(req.params.id);
   await storage.remove([row?.proposal_file_key, row?.po_file_key, row?.merged_pdf_key]);
   res.json({ success: true });

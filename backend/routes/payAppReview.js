@@ -16,6 +16,24 @@ const { parseCoLogCsv } = require('../lib/csv');
 const { friendlyAiError } = require('../lib/aiErrors');
 const storage = require('../lib/storage');
 
+const access = require('../lib/access');
+const { requireOrg } = require('../middleware/auth');
+
+// Scoped to one organization; within it a member sees only projects they belong to.
+router.use(requireOrg);
+
+// A review the caller may see, else null -> 404 (not 403) so ids cannot be probed.
+function visibleReview(req) {
+  const row = db.prepare('SELECT * FROM pay_app_reviews WHERE id=?').get(req.params.id);
+  return access.recordVisible(req.user, row) ? row : null;
+}
+
+// A project in the active organization that the caller may use, else null.
+function visibleProject(req, id) {
+  const project = access.projectForUser(req.user, id);
+  return project && project.org_id === req.orgId ? project : null;
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 500 * 1024 * 1024 }
@@ -54,10 +72,10 @@ router.get('/projects', (req, res) => {
            MAX(r.created_at)          AS last_reviewed_at
     FROM projects p
     LEFT JOIN pay_app_reviews r ON r.project_id = p.id
-    WHERE p.status = 'Active'
+    WHERE p.status = 'Active' AND p.org_id = ?
     GROUP BY p.id
     ORDER BY (last_reviewed_at IS NULL), last_reviewed_at DESC, p.project_name ASC
-  `).all());
+  `).all(req.orgId));
 });
 
 // Create a project up front. Projects are also created implicitly when a pay app names a
@@ -68,7 +86,7 @@ router.post('/projects', (req, res) => {
   const name = (req.body.project_name || '').trim();
   if (!name) return res.status(400).json({ error: 'Project name is required' });
 
-  const existing = db.prepare(`SELECT id, project_name, status FROM projects WHERE project_name = ?`).get(name);
+  const existing = db.prepare(`SELECT id, project_name, status FROM projects WHERE project_name = ? AND org_id = ?`).get(name, req.orgId);
   if (existing) {
     // Re-selecting an existing project is the sane outcome here; a duplicate-name error
     // would just make the reviewer guess at what is already on file.
@@ -79,9 +97,9 @@ router.post('/projects', (req, res) => {
   }
 
   const result = db.prepare(`
-    INSERT INTO projects (project_name, project_number, client_name, status)
-    VALUES (?, ?, ?, 'Active')
-  `).run(name, req.body.project_number || null, req.body.client_name || null);
+    INSERT INTO projects (org_id, project_name, project_number, client_name, status)
+    VALUES (?, ?, ?, ?, 'Active')
+  `).run(req.orgId, name, req.body.project_number || null, req.body.client_name || null);
   res.json({ id: result.lastInsertRowid, project_name: name, existed: false });
 });
 
@@ -89,7 +107,7 @@ router.post('/projects', (req, res) => {
 // period-over-period movement. This is what makes a new application legible in context —
 // "is this pace normal for this job?" — rather than as an isolated document.
 router.get('/project/:id/history', (req, res) => {
-  const project = db.prepare(`SELECT id, project_name, project_number, client_name, contract_value FROM projects WHERE id=?`).get(req.params.id);
+  const project = visibleProject(req, req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
   const rows = db.prepare(`
@@ -132,6 +150,7 @@ router.get('/project/:id/history', (req, res) => {
 // keeps a long contract from being re-billed to the API every period.
 
 router.get('/project/:id/contract', (req, res) => {
+  if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
   const row = db.prepare(`
     SELECT id, project_id, file_name, terms, terms_edited, created_at, updated_at
     FROM project_contracts WHERE project_id = ?
@@ -147,7 +166,7 @@ router.post('/project/:id/contract', upload.single('contract_file'), async (req,
     if (!file) return res.status(400).json({ error: 'Contract PDF is required' });
     if (file.mimetype !== 'application/pdf') return res.status(400).json({ error: 'Contract must be a PDF' });
 
-    const project = db.prepare(`SELECT id FROM projects WHERE id=?`).get(req.params.id);
+    const project = visibleProject(req, req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
     const terms = await extractContractTerms(file.buffer);
@@ -179,6 +198,7 @@ router.post('/project/:id/contract', upload.single('contract_file'), async (req,
 // The extraction is a model reading a legal document — it can be wrong. Let the PM
 // correct the terms once, rather than re-litigating a bad flag every month.
 router.patch('/project/:id/contract', (req, res) => {
+  if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
   const row = db.prepare(`SELECT id FROM project_contracts WHERE project_id=? ORDER BY created_at DESC LIMIT 1`).get(req.params.id);
   if (!row) return res.status(404).json({ error: 'No contract on file for this project' });
   if (!req.body.terms) return res.status(400).json({ error: 'terms is required' });
@@ -190,6 +210,7 @@ router.patch('/project/:id/contract', (req, res) => {
 });
 
 router.delete('/project/:id/contract', async (req, res) => {
+  if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
   const keys = db.prepare(`SELECT file_key FROM project_contracts WHERE project_id=? AND file_key IS NOT NULL`)
     .all(req.params.id).map(r => r.file_key);
   db.prepare(`DELETE FROM project_contracts WHERE project_id=?`).run(req.params.id);
@@ -198,6 +219,7 @@ router.delete('/project/:id/contract', async (req, res) => {
 });
 
 router.get('/project/:id/contract/original.pdf', async (req, res) => {
+  if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
   const row = db.prepare(`
     SELECT file_name, file_blob, file_key FROM project_contracts WHERE project_id=?
     ORDER BY created_at DESC LIMIT 1
@@ -378,14 +400,15 @@ router.post('/', upload.fields([
 
     const insertResult = db.prepare(`
       INSERT INTO pay_app_reviews (
-        project_name, application_number, period_to, contract_sum_to_date,
+        org_id, project_name, application_number, period_to, contract_sum_to_date,
         total_completed_to_date, current_payment_due, balance_to_finish,
         extracted_data, checks_result, report_markdown,
         current_file_name, current_file, current_file_key, previous_review_id,
         contract_sum, co_log, critical_count, fail_count, created_by, project_id,
         compliance_findings
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
+      req.orgId,
       current.summary.projectName || null,
       current.summary.applicationNumber ?? null,
       current.summary.periodTo || null,
@@ -415,11 +438,12 @@ router.post('/', upload.fields([
 
 router.get('/', (req, res) => {
   const { search, project_name, project_id } = req.query;
+  const scope = access.visibilityClause(req.user, req.orgId);
   let sql = `SELECT id, project_name, application_number, period_to, contract_sum_to_date,
              total_completed_to_date, current_payment_due, balance_to_finish,
              critical_count, fail_count, created_by, created_at
-             FROM pay_app_reviews WHERE 1=1`;
-  const params = [];
+             FROM pay_app_reviews WHERE ${scope.sql}`;
+  const params = [...scope.params];
   if (project_id) { sql += ' AND project_id = ?'; params.push(project_id); }
   if (project_name) { sql += ' AND project_name = ?'; params.push(project_name); }
   if (search) { sql += ' AND project_name LIKE ?'; params.push(`%${search}%`); }
@@ -428,7 +452,7 @@ router.get('/', (req, res) => {
 });
 
 router.get('/:id', (req, res) => {
-  const row = db.prepare('SELECT * FROM pay_app_reviews WHERE id=?').get(req.params.id);
+  const row = visibleReview(req);
   if (!row) return res.status(404).json({ error: 'Not found' });
   const extractedData = JSON.parse(row.extracted_data);
   const results = JSON.parse(row.checks_result);
@@ -453,7 +477,7 @@ router.get('/:id', (req, res) => {
 });
 
 router.get('/:id/report.md', (req, res) => {
-  const row = db.prepare('SELECT project_name, application_number, report_markdown FROM pay_app_reviews WHERE id=?').get(req.params.id);
+  const row = visibleReview(req);
   if (!row) return res.status(404).json({ error: 'Not found' });
   res.setHeader('Content-Type', 'text/markdown');
   res.setHeader('Content-Disposition', `attachment; filename="PayApp_${row.application_number || row.id}_${(row.project_name || 'report').replace(/[^a-z0-9]+/gi, '_')}.md"`);
@@ -465,7 +489,7 @@ router.get('/:id/report.md', (req, res) => {
 // the reviewer saw on screen. No AI call — pure rendering.
 router.get('/:id/report.pdf', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM pay_app_reviews WHERE id=?').get(req.params.id);
+    const row = visibleReview(req);
     if (!row) return res.status(404).json({ error: 'Not found' });
 
     const data = JSON.parse(row.extracted_data);
@@ -488,7 +512,7 @@ router.get('/:id/report.pdf', async (req, res) => {
 });
 
 router.get('/:id/report.json', (req, res) => {
-  const row = db.prepare('SELECT * FROM pay_app_reviews WHERE id=?').get(req.params.id);
+  const row = visibleReview(req);
   if (!row) return res.status(404).json({ error: 'Not found' });
   const extractedData = JSON.parse(row.extracted_data);
   const payload = {
@@ -509,7 +533,7 @@ router.get('/:id/report.json', (req, res) => {
 // report when the reviewer wants the issues in context on the source document.
 router.get('/:id/marked-up.pdf', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM pay_app_reviews WHERE id=?').get(req.params.id);
+    const row = visibleReview(req);
     if (!row) return res.status(404).json({ error: 'Not found' });
 
     const original = await storage.readFile({ key: row.current_file_key, blob: row.current_file });
@@ -534,7 +558,7 @@ router.get('/:id/marked-up.pdf', async (req, res) => {
 });
 
 router.get('/:id/original.pdf', async (req, res) => {
-  const row = db.prepare('SELECT current_file_name, current_file, current_file_key FROM pay_app_reviews WHERE id=?').get(req.params.id);
+  const row = visibleReview(req);
   if (!row) return res.status(404).json({ error: 'Not found' });
   const bytes = await storage.readFile({ key: row.current_file_key, blob: row.current_file });
   if (!bytes) return res.status(404).json({ error: 'Not found' });
@@ -544,7 +568,7 @@ router.get('/:id/original.pdf', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
-  const row = db.prepare('SELECT current_file_key FROM pay_app_reviews WHERE id=?').get(req.params.id);
+  const row = visibleReview(req);
   db.prepare('DELETE FROM pay_app_reviews WHERE id=?').run(req.params.id);
   await storage.remove([row?.current_file_key]);
   res.json({ success: true });
