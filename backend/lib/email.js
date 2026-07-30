@@ -82,4 +82,32 @@ function sendInvitation({ to, orgName, inviterName, role, link }) {
   return send({ to, subject, html, text });
 }
 
-module.exports = { isConfigured, send, sendInvitation };
+function sendPasswordReset({ to, name, link, minutes }) {
+  const greeting = name ? `Hi ${name},` : 'Hi,';
+  const subject = 'Reset your Coaster password';
+  const text =
+    `${greeting}\n\nSomeone asked to reset the password for this Coaster account.\n\n` +
+    `Choose a new one here:\n${link}\n\n` +
+    `This link is valid for ${minutes} minutes and can only be used once.\n` +
+    `If you didn't ask for this, ignore this email — your password has not changed.`;
+  const html = `
+    <div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:520px">
+      <h2 style="margin:0 0 12px">Reset your password</h2>
+      <p style="color:#374151;line-height:1.6">
+        ${greeting} someone asked to reset the password for this Coaster account.
+      </p>
+      <p style="margin:24px 0">
+        <a href="${link}" style="background:#2563eb;color:#fff;padding:12px 20px;border-radius:10px;
+           text-decoration:none;font-weight:600;display:inline-block">Choose a new password</a>
+      </p>
+      <p style="color:#6b7280;font-size:13px;line-height:1.6">
+        This link is valid for ${minutes} minutes and can only be used once.<br>
+        If you didn't ask for this, you can ignore this email — your password has not changed.<br><br>
+        If the button doesn't work, paste this into your browser:<br>
+        <span style="color:#2563eb;word-break:break-all">${link}</span>
+      </p>
+    </div>`;
+  return send({ to, subject, html, text });
+}
+
+module.exports = { isConfigured, send, sendInvitation, sendPasswordReset };

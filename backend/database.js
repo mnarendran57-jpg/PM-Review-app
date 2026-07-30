@@ -656,6 +656,30 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_invitations_token ON invitations(token);
 `);
 
+// Password resets. Same shape as an invitation and for the same reason — the emailed token
+// is the only credential, so it is random, single-use and short-lived (an hour, against an
+// invitation's week, because this one can take over an existing account).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS password_resets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    requested_ip TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets(token);
+  CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);
+`);
+
+// Sign-in tokens last 30 days and are stateless, so changing a password would otherwise
+// leave anyone already signed in as that user signed in — exactly the person a reset is
+// usually meant to lock out. Tokens issued before this moment are refused.
+if (!columnsOf('users').includes('sessions_valid_from')) {
+  db.exec(`ALTER TABLE users ADD COLUMN sessions_valid_from TEXT`);
+}
+
 // First login: seed a platform administrator from the environment, and make them an Admin
 // of the first organization so there is a way in. Falls back to the old shared password
 // hash so an existing deployment can still be signed into after upgrading.

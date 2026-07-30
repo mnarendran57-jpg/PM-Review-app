@@ -70,6 +70,11 @@ export const authApi = {
     return r.data;
   }),
   changePassword: data => api.post('/auth/change-password', data).then(r => r.data),
+  // Public: no session yet. The link itself is only ever emailed, never returned here.
+  forgotPassword: email => api.post('/auth/forgot-password', { email }).then(r => r.data),
+  getReset: token => api.get(`/auth/reset-password/${token}`).then(r => r.data),
+  resetPassword: (token, password) =>
+    api.post(`/auth/reset-password/${token}`, { password }).then(r => r.data),
   logout: () => {
     [TOKEN_KEY, USER_KEY, ORG_KEY, PROGRAM_KEY].forEach(k => localStorage.removeItem(k));
   },

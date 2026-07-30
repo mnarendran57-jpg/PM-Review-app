@@ -9,6 +9,8 @@ import Settings from './pages/Settings';
 import Contact from './pages/Contact';
 import Login from './pages/Login';
 import InviteAccept from './pages/InviteAccept';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 import { authApi, selectedOrg, selectedProgram } from './api';
 
 // The hierarchy is always Organization -> Program -> Project, so navigation mirrors it:
@@ -40,6 +42,9 @@ export default function App() {
       <Route path="/login" element={<Login />} />
       {/* Public: an invitee has no account yet, so this must sit outside RequireAuth. */}
       <Route path="/invite/:token" element={<InviteAccept />} />
+      {/* Public for the same reason — someone locked out cannot sign in to get here. */}
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password/:token" element={<ResetPassword />} />
       <Route
         path="/*"
         element={

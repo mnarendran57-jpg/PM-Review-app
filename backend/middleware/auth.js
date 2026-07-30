@@ -18,9 +18,12 @@ function requireAuth(req, res, next) {
 
   // Re-read the user each request so deactivating an account takes effect immediately
   // rather than whenever their 30-day token happens to expire.
-  const user = db.prepare(`SELECT id, email, name, role, status FROM users WHERE id=?`).get(claims.uid);
+  const user = db.prepare(`SELECT id, email, name, role, status, sessions_valid_from FROM users WHERE id=?`).get(claims.uid);
   if (!user || user.status !== 'Active') {
     return res.status(401).json({ error: 'This account is no longer active' });
+  }
+  if (!access.tokenStillValid(user, claims)) {
+    return res.status(401).json({ error: 'Your password was changed, please log in again' });
   }
 
   req.user = user;

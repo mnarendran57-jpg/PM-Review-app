@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { LockClosedIcon } from '@heroicons/react/24/outline';
 import { authApi } from '../api';
 
@@ -76,9 +76,9 @@ export default function Login() {
               <span className="flex items-center gap-2"><LockClosedIcon className="w-4 h-4" /> Sign In</span>
             )}
           </button>
-          <p className="text-[11px] text-gray-400 text-center">
-            Forgot your password? Ask your firm's administrator to set a new one.
-          </p>
+          <Link to="/forgot-password" className="block text-center text-xs text-gray-400 hover:text-gray-600">
+            Forgot your password?
+          </Link>
         </form>
       </div>
     </div>

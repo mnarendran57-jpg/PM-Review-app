@@ -497,7 +497,8 @@ export default function Team() {
               Administrators see everything in it; members see only the projects they're added to.
             </p>
             <p className="text-xs text-gray-500 leading-relaxed mt-2">
-              There's no "forgot password" email yet — if someone is locked out, edit them here and set a new password.
+              Locked out? They can reset it themselves from "Forgot your password?" on the sign-in page, once
+              email sending is set up. Until then, edit them here and set a new password.
             </p>
           </div>
         </div>

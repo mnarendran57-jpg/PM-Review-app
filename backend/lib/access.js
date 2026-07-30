@@ -159,8 +159,18 @@ function recordVisible(user, row, { projectColumn = 'project_id' } = {}) {
   ).get(projectId, user.id);
 }
 
+// Sign-in tokens are stateless and last 30 days, so resetting a password has to reject the
+// ones handed out before it — otherwise whoever prompted the reset stays signed in. Both
+// sides are whole seconds (a JWT's iat is, and so is SQLite's datetime('now')), so a token
+// minted in the same second as the reset — the one we hand back to the person resetting —
+// compares equal and survives.
+function tokenStillValid(user, claims) {
+  if (!user?.sessions_valid_from || !claims?.iat) return true;
+  return claims.iat * 1000 >= Date.parse(`${user.sessions_valid_from.replace(' ', 'T')}Z`);
+}
+
 module.exports = {
   isPlatformAdmin, orgsForUser, isOrgAdmin, isInOrg,
   programsForUser, projectsForUser, projectForUser, rolesOnProject,
-  visibilityClause, recordVisible,
+  visibilityClause, recordVisible, tokenStillValid,
 };
