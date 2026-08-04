@@ -8,11 +8,14 @@ const { friendlyAiError } = require('../lib/aiErrors');
 const storage = require('../lib/storage');
 const access = require('../lib/access');
 const { requireOrg } = require('../middleware/auth');
+const { requireFeature } = require('../lib/plans');
 
 // Everything here belongs to one organization, and within it a member sees only the
 // projects they are on. Applied to the whole router so a new endpoint cannot be added
 // without it.
 router.use(requireOrg);
+// Gated by the customer's Coaster plan — see lib/plans.js.
+router.use(requireFeature('progress-report'));
 
 // Loads a report only if the caller may see it; otherwise null, which callers turn into a
 // 404 rather than a 403 so ids cannot be probed. Always selects the whole row: the

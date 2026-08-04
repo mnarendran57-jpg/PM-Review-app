@@ -7,6 +7,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
+import { usePlanFeatures } from '../hooks/usePlanFeatures';
 import FileDrop from '../components/FileDrop';
 
 const TOOLS = [
@@ -112,6 +113,7 @@ export default function ProjectHome() {
   const ctx = useProject();
   const project = ctx?.project;
   const projectId = ctx?.projectId;
+  const { has: hasFeature } = usePlanFeatures();
 
   return (
     <div className="p-8">
@@ -126,7 +128,7 @@ export default function ProjectHome() {
       <div className="grid grid-cols-3 gap-6 items-start">
         {/* Tools */}
         <div className="col-span-2 grid grid-cols-2 gap-5">
-          {TOOLS.map((tool, i) => {
+          {TOOLS.filter(tool => hasFeature(tool.slug)).map((tool, i) => {
             const Icon = tool.icon;
             return (
               <button key={tool.slug} onClick={() => navigate(`/project/${projectId}/${tool.slug}`)}

@@ -18,9 +18,12 @@ const storage = require('../lib/storage');
 
 const access = require('../lib/access');
 const { requireOrg } = require('../middleware/auth');
+const { requireFeature } = require('../lib/plans');
 
 // Scoped to one organization; within it a member sees only projects they belong to.
 router.use(requireOrg);
+// Gated by the customer's Coaster plan — see lib/plans.js.
+router.use(requireFeature('pay-app-review'));
 
 // A review the caller may see, else null -> 404 (not 403) so ids cannot be probed.
 function visibleReview(req) {
@@ -144,62 +147,190 @@ router.get('/project/:id/history', (req, res) => {
   });
 });
 
-// --- Executed contract, stored per project -----------------------------------------
-// The contract is signed once, so it is uploaded once and its terms extracted once.
-// Later pay app reviews read the stored terms instead of re-sending the PDF, which
-// keeps a long contract from being re-billed to the API every period.
+// --- Shared Documents, stored per project -------------------------------------------
+// A project has several agreements — the architect's, the general contractor's, often an
+// engineer's — plus files that are not agreements at all (schedule, estimate). Each is
+// uploaded once and, if it is a contract, its terms are extracted once; later reviews read
+// the stored terms instead of re-sending a long PDF to the API every period.
+//
+// doc_type 'contract' has terms and can be reviewed against. 'reference' is storage for the
+// team: downloadable, never sent to the model.
+
+const DOC_TYPES = ['contract', 'reference'];
+
+// Falls back to the filename so a document is never nameless in a dropdown.
+const docLabel = (label, fileName) =>
+  (label || '').trim() || fileName.replace(/\.pdf$/i, '');
+
+function listDocuments(projectId) {
+  return db.prepare(`
+    SELECT id, project_id, file_name, label, doc_type, is_primary, terms_edited, created_at, updated_at
+    FROM project_contracts WHERE project_id = ?
+    ORDER BY doc_type ASC, is_primary DESC, created_at ASC
+  `).all(projectId);
+}
+
+router.get('/project/:id/documents', (req, res) => {
+  if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
+  res.json(listDocuments(req.params.id));
+});
+
+async function addDocument(req, res) {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'A PDF is required' });
+    if (file.mimetype !== 'application/pdf') return res.status(400).json({ error: 'The document must be a PDF' });
+    if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
+
+    const docType = DOC_TYPES.includes(req.body.doc_type) ? req.body.doc_type : 'contract';
+    const label = docLabel(req.body.label, file.originalname);
+
+    // Only an agreement is worth reading: extracting "terms" from a schedule or an estimate
+    // would spend tokens to produce nonsense.
+    let storedTerms = {};
+    if (docType === 'contract') {
+      const terms = await extractContractTerms(file.buffer);
+      const { usage, ...rest } = terms;
+      storedTerms = rest;
+      if (usage) {
+        console.log(`[contract extract] project=${req.params.id} in=${usage.inputTokens} out=${usage.outputTokens} tokens`);
+      }
+    }
+
+    // The first contract on a project becomes its primary, which is what Pay App Review and
+    // Change Order Review read. Existing projects keep the contract they already had.
+    const hasPrimary = db.prepare(
+      `SELECT 1 FROM project_contracts WHERE project_id=? AND doc_type='contract' AND is_primary=1`
+    ).get(req.params.id);
+    const isPrimary = docType === 'contract' && !hasPrimary ? 1 : 0;
+
+    const key = (await storage.storeFile('contract', file.buffer, file.mimetype, file.originalname)).key;
+    const result = db.prepare(`
+      INSERT INTO project_contracts
+        (project_id, file_name, label, doc_type, is_primary, file_blob, file_key, terms, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      req.params.id, file.originalname, label, docType, isPrimary,
+      key ? Buffer.alloc(0) : file.buffer, key, JSON.stringify(storedTerms),
+      req.body.created_by || null,
+    );
+
+    res.json({
+      id: result.lastInsertRowid, file_name: file.originalname,
+      label, doc_type: docType, is_primary: isPrimary, terms: storedTerms,
+    });
+  } catch (err) {
+    console.error('Shared document error:', err);
+    res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });
+  }
+}
+
+router.post('/project/:id/documents', upload.single('file'), addDocument);
+
+// One document's stored terms — what a review compares an invoice against.
+router.get('/project/:id/documents/:docId', (req, res) => {
+  if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
+  const row = db.prepare(`SELECT * FROM project_contracts WHERE id=? AND project_id=?`)
+    .get(req.params.docId, req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  res.json({ ...row, file_blob: undefined, terms: JSON.parse(row.terms || '{}') });
+});
+
+// Rename, or make this the contract the other tabs read.
+router.patch('/project/:id/documents/:docId', (req, res) => {
+  if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
+  const row = db.prepare(`SELECT * FROM project_contracts WHERE id=? AND project_id=?`)
+    .get(req.params.docId, req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+
+  if (req.body.label !== undefined) {
+    db.prepare(`UPDATE project_contracts SET label=?, updated_at=datetime('now') WHERE id=?`)
+      .run(docLabel(req.body.label, row.file_name), row.id);
+  }
+  if (req.body.terms) {
+    // The extraction is a model reading a legal document — it can be wrong. Let the PM
+    // correct it once rather than re-litigating a bad flag every month.
+    db.prepare(`UPDATE project_contracts SET terms=?, terms_edited=1, updated_at=datetime('now') WHERE id=?`)
+      .run(JSON.stringify(req.body.terms), row.id);
+  }
+  if (req.body.is_primary && row.doc_type === 'contract') {
+    db.prepare(`UPDATE project_contracts SET is_primary=0 WHERE project_id=?`).run(req.params.id);
+    db.prepare(`UPDATE project_contracts SET is_primary=1 WHERE id=?`).run(row.id);
+  }
+  res.json({ success: true });
+});
+
+router.delete('/project/:id/documents/:docId', async (req, res) => {
+  if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
+  const row = db.prepare(`SELECT * FROM project_contracts WHERE id=? AND project_id=?`)
+    .get(req.params.docId, req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+
+  db.prepare(`DELETE FROM project_contracts WHERE id=?`).run(row.id);
+  if (row.file_key) await storage.remove([row.file_key]);
+
+  // Never leave a project with contracts but no primary — the other tabs read it.
+  if (row.is_primary) {
+    const next = db.prepare(
+      `SELECT id FROM project_contracts WHERE project_id=? AND doc_type='contract' ORDER BY created_at ASC LIMIT 1`
+    ).get(req.params.id);
+    if (next) db.prepare(`UPDATE project_contracts SET is_primary=1 WHERE id=?`).run(next.id);
+  }
+  res.json({ success: true });
+});
+
+router.get('/project/:id/documents/:docId/file.pdf', async (req, res) => {
+  if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
+  const row = db.prepare(`SELECT file_name, file_blob, file_key FROM project_contracts WHERE id=? AND project_id=?`)
+    .get(req.params.docId, req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  const bytes = await storage.readFile({ key: row.file_key, blob: row.file_blob });
+  if (!bytes) return res.status(404).json({ error: 'Not found' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${row.file_name}"`);
+  res.send(bytes);
+});
+
+// --- The project's primary contract --------------------------------------------------
+// Pay App Review and Change Order Review still work against a single contract. These read
+// the one flagged primary, so which contract they use stays deterministic and visible rather
+// than following whatever happened to be uploaded last.
+
+const primaryContract = projectId => db.prepare(`
+  SELECT * FROM project_contracts WHERE project_id = ? AND doc_type = 'contract'
+  ORDER BY is_primary DESC, created_at ASC LIMIT 1
+`).get(projectId);
 
 router.get('/project/:id/contract', (req, res) => {
   if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
-  const row = db.prepare(`
-    SELECT id, project_id, file_name, terms, terms_edited, created_at, updated_at
-    FROM project_contracts WHERE project_id = ?
-    ORDER BY created_at DESC LIMIT 1
-  `).get(req.params.id);
+  const row = primaryContract(req.params.id);
   if (!row) return res.json(null);
-  res.json({ ...row, terms: JSON.parse(row.terms) });
+  res.json({ ...row, file_blob: undefined, terms: JSON.parse(row.terms || '{}') });
 });
 
-router.post('/project/:id/contract', upload.single('contract_file'), async (req, res) => {
-  try {
-    const file = req.file;
-    if (!file) return res.status(400).json({ error: 'Contract PDF is required' });
-    if (file.mimetype !== 'application/pdf') return res.status(400).json({ error: 'Contract must be a PDF' });
-
-    const project = visibleProject(req, req.params.id);
-    if (!project) return res.status(404).json({ error: 'Project not found' });
-
-    const terms = await extractContractTerms(file.buffer);
-    const { usage, ...storedTerms } = terms;
-    if (usage) {
-      console.log(`[contract extract] project=${req.params.id} in=${usage.inputTokens} out=${usage.outputTokens} tokens`);
-    }
-
-    // One contract per project: replace any prior upload rather than accumulating
-    // versions the reviewer would have to choose between.
-    const oldKeys = db.prepare(`SELECT file_key FROM project_contracts WHERE project_id=? AND file_key IS NOT NULL`)
-      .all(req.params.id).map(r => r.file_key);
-    db.prepare(`DELETE FROM project_contracts WHERE project_id = ?`).run(req.params.id);
-    await storage.remove(oldKeys);
-
-    const contractKey = (await storage.storeFile('contract', file.buffer, file.mimetype, file.originalname)).key;
-    const result = db.prepare(`
-      INSERT INTO project_contracts (project_id, file_name, file_blob, file_key, terms, created_by)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(req.params.id, file.originalname, contractKey ? Buffer.alloc(0) : file.buffer, contractKey, JSON.stringify(storedTerms), req.body.created_by || null);
-
-    res.json({ id: result.lastInsertRowid, file_name: file.originalname, terms: storedTerms });
-  } catch (err) {
-    console.error('Contract extract error:', err);
-    res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });
-  }
+// Kept so the original upload box keeps working; a contract added here joins the others
+// rather than replacing them.
+router.post('/project/:id/contract', upload.single('contract_file'), (req, res) => {
+  req.body.doc_type = 'contract';
+  return addDocument(req, res);
 });
 
-// The extraction is a model reading a legal document — it can be wrong. Let the PM
-// correct the terms once, rather than re-litigating a bad flag every month.
+router.delete('/project/:id/contract', async (req, res) => {
+  if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
+  const row = primaryContract(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  db.prepare(`DELETE FROM project_contracts WHERE id=?`).run(row.id);
+  if (row.file_key) await storage.remove([row.file_key]);
+  const next = db.prepare(
+    `SELECT id FROM project_contracts WHERE project_id=? AND doc_type='contract' ORDER BY created_at ASC LIMIT 1`
+  ).get(req.params.id);
+  if (next) db.prepare(`UPDATE project_contracts SET is_primary=1 WHERE id=?`).run(next.id);
+  res.json({ success: true });
+});
+
 router.patch('/project/:id/contract', (req, res) => {
   if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
-  const row = db.prepare(`SELECT id FROM project_contracts WHERE project_id=? ORDER BY created_at DESC LIMIT 1`).get(req.params.id);
+  const row = primaryContract(req.params.id);
   if (!row) return res.status(404).json({ error: 'No contract on file for this project' });
   if (!req.body.terms) return res.status(400).json({ error: 'terms is required' });
 
@@ -209,21 +340,9 @@ router.patch('/project/:id/contract', (req, res) => {
   res.json({ success: true });
 });
 
-router.delete('/project/:id/contract', async (req, res) => {
-  if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
-  const keys = db.prepare(`SELECT file_key FROM project_contracts WHERE project_id=? AND file_key IS NOT NULL`)
-    .all(req.params.id).map(r => r.file_key);
-  db.prepare(`DELETE FROM project_contracts WHERE project_id=?`).run(req.params.id);
-  await storage.remove(keys);
-  res.json({ success: true });
-});
-
 router.get('/project/:id/contract/original.pdf', async (req, res) => {
   if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
-  const row = db.prepare(`
-    SELECT file_name, file_blob, file_key FROM project_contracts WHERE project_id=?
-    ORDER BY created_at DESC LIMIT 1
-  `).get(req.params.id);
+  const row = primaryContract(req.params.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
   const bytes = await storage.readFile({ key: row.file_key, blob: row.file_blob });
   if (!bytes) return res.status(404).json({ error: 'Not found' });

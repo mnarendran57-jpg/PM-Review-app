@@ -3,12 +3,13 @@ import { CheckIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 import { settingsApi } from '../api';
 import PageHeader from '../components/PageHeader';
 import MemoTemplateEditor from '../components/MemoTemplateEditor';
+import OrgSwitcher from '../components/OrgSwitcher';
 
 export default function Settings() {
   const [settings, setSettings] = useState({ rfi_response_days: '10', submittal_review_days: '14' });
   const [saved, setSaved] = useState(false);
 
-  useEffect(() => { settingsApi.get().then(setSettings); }, []);
+  useEffect(() => { settingsApi.get().then(setSettings).catch(() => {}); }, []);
 
   const saveSettings = async () => {
     await settingsApi.update(settings);
@@ -18,7 +19,11 @@ export default function Settings() {
 
   return (
     <div className="p-8">
-      <PageHeader title="Settings" subtitle="Default configuration and document templates" />
+      <PageHeader
+        title="Settings"
+        subtitle="Default configuration and document templates"
+        actions={<OrgSwitcher />}
+      />
 
       {/* People are managed in one place only — the Team tab. A second directory here
           duplicated it without granting any access, which was purely confusing. */}

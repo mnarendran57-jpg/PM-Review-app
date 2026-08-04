@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BuildingOffice2Icon, ArrowRightIcon, ArrowRightOnRectangleIcon } from '@heroicons/react/24/outline';
+import {
+  BuildingOffice2Icon, ArrowRightIcon, ArrowRightOnRectangleIcon,
+  UserGroupIcon, Cog6ToothIcon, EnvelopeIcon,
+} from '@heroicons/react/24/outline';
 import { authApi, selectedOrg } from '../api';
 
 // Step one after signing in. A user account isn't tied to an organization — a consultant
@@ -41,6 +44,27 @@ export default function OrgSelect() {
 
   const logout = () => { authApi.logout(); navigate('/login', { replace: true }); };
 
+  // Team and Settings belong to one organization, so reaching them used to mean opening an
+  // organization first. Rather than send the user back out to do that, pick one on their
+  // behalf — an administered one where possible — and let them change it on the page
+  // itself, which is what the switcher there is for.
+  const openAdminPage = path => {
+    if (!selectedOrg.get()) {
+      const target = (orgs || []).find(o => o.is_admin) || (orgs || [])[0];
+      if (!target) return;
+      selectedOrg.set({ id: target.id, name: target.name, is_admin: !!target.is_admin });
+    }
+    navigate(path);
+  };
+
+  // A platform admin administers every organization; anyone else needs it on at least one.
+  const canAdminister = user?.isPlatformAdmin || (orgs || []).some(o => o.is_admin);
+  const shortcuts = [
+    { label: 'Team', icon: UserGroupIcon, onClick: () => openAdminPage('/team'), show: canAdminister && (orgs || []).length > 0 },
+    { label: 'Settings', icon: Cog6ToothIcon, onClick: () => openAdminPage('/settings'), show: (orgs || []).length > 0 },
+    { label: 'Contact Us', icon: EnvelopeIcon, onClick: () => navigate('/contact'), show: true },
+  ].filter(s => s.show);
+
   return (
     <div className="min-h-screen relative" style={{ background: '#f4f6fb' }}>
       <div className="bg-mesh" />
@@ -53,9 +77,16 @@ export default function OrgSelect() {
               <p className="text-sm text-gray-500">Signed in as {user?.name || user?.email}</p>
             </div>
           </div>
-          <button className="btn-secondary" onClick={logout}>
-            <ArrowRightOnRectangleIcon className="w-4 h-4" /> Sign out
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {shortcuts.map(s => (
+              <button key={s.label} className="btn-secondary" onClick={s.onClick}>
+                <s.icon className="w-4 h-4" /> {s.label}
+              </button>
+            ))}
+            <button className="btn-secondary" onClick={logout}>
+              <ArrowRightOnRectangleIcon className="w-4 h-4" /> Sign out
+            </button>
+          </div>
         </div>
 
         <div className="mb-6 animate-fade-up">

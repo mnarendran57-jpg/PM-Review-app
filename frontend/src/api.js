@@ -135,10 +135,18 @@ export const adminApi = {
   addMember: data => api.post('/admin/members', data).then(r => r.data),
   updateMember: (userId, data) => api.put(`/admin/members/${userId}`, data).then(r => r.data),
   removeMember: userId => api.delete(`/admin/members/${userId}`).then(r => r.data),
+  // What one person can reach in the active organization, and rewriting it wholesale.
+  getMemberAccess: userId => api.get(`/admin/members/${userId}/access`).then(r => r.data),
+  setMemberAccess: (userId, data) => api.put(`/admin/members/${userId}/access`, data).then(r => r.data),
   // Invitations — the preferred way to add someone, since they set their own password.
   listInvitations: () => api.get('/admin/invitations').then(r => r.data),
   invite: data => api.post('/admin/invitations', data).then(r => r.data),
   revokeInvitation: id => api.delete(`/admin/invitations/${id}`).then(r => r.data),
+  // Coaster plans. Reading and setting a customer's plan is vendor-only; "my plan" is what
+  // the signed-in user's own organization includes, used to hide tools they haven't bought.
+  listPlans: () => api.get('/admin/plans').then(r => r.data),
+  setOrgPlan: (orgId, data) => api.put(`/admin/organizations/${orgId}/plan`, data).then(r => r.data),
+  myPlan: () => api.get('/admin/my-plan').then(r => r.data),
   // Vendor-only: customer organizations.
   listOrganizations: () => api.get('/admin/organizations').then(r => r.data),
   createOrganization: data => api.post('/admin/organizations', data).then(r => r.data),
@@ -275,6 +283,22 @@ export const payAppReviewApi = {
   updateContractTerms: (projectId, terms) =>
     api.patch(`/pay-app-review/project/${projectId}/contract`, { terms }).then(r => r.data),
   deleteContract: projectId => api.delete(`/pay-app-review/project/${projectId}/contract`).then(r => r.data),
+
+  // Shared Documents: every contract and reference file on a project. A 'contract' has its
+  // terms read and can be reviewed against; a 'reference' (schedule, estimate) is stored for
+  // the team and never sent to the AI.
+  listDocuments: projectId =>
+    api.get(`/pay-app-review/project/${projectId}/documents`).then(r => r.data),
+  addDocument: (projectId, formData) =>
+    api.post(`/pay-app-review/project/${projectId}/documents`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+    }).then(r => r.data),
+  updateDocument: (projectId, docId, data) =>
+    api.patch(`/pay-app-review/project/${projectId}/documents/${docId}`, data).then(r => r.data),
+  deleteDocument: (projectId, docId) =>
+    api.delete(`/pay-app-review/project/${projectId}/documents/${docId}`).then(r => r.data),
+  documentFileUrl: (projectId, docId) =>
+    `${apiBaseUrl}/pay-app-review/project/${projectId}/documents/${docId}/file.pdf`,
   latestForProject: ({ projectId, projectName }) =>
     api.get('/pay-app-review/latest-for-project', {
       params: projectId ? { project_id: projectId } : { project_name: projectName },

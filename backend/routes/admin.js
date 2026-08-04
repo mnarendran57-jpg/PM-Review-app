@@ -5,7 +5,8 @@ const crypto = require('crypto');
 const db = require('../database');
 const access = require('../lib/access');
 const email = require('../lib/email');
-const { requireOrgAdmin, requirePlatformAdmin } = require('../middleware/auth');
+const plans = require('../lib/plans');
+const { requireOrg, requireOrgAdmin, requirePlatformAdmin } = require('../middleware/auth');
 
 // Two levels of administration:
 //  - platform admin (the vendor) creates customer Organizations and their first Admin.
@@ -21,13 +22,20 @@ const ORG_ROLES = ['Admin', 'Member'];
 // --- Organizations (vendor only) ------------------------------------------------------
 
 router.get('/organizations', requirePlatformAdmin, (req, res) => {
-  res.json(db.prepare(`
+  const rows = db.prepare(`
     SELECT o.*,
       (SELECT COUNT(*) FROM org_members m WHERE m.org_id = o.id) AS member_count,
       (SELECT COUNT(*) FROM programs p WHERE p.org_id = o.id) AS program_count,
       (SELECT COUNT(*) FROM projects pr WHERE pr.org_id = o.id) AS project_count
     FROM organizations o ORDER BY o.name ASC
-  `).all());
+  `).all();
+  // The resolved feature list travels with each row so the owner sees what a customer can
+  // actually reach, not just the plan name — the two differ for a custom deal.
+  res.json(rows.map(o => ({
+    ...o,
+    planName: o.plan ? (plans.planByKey(o.plan)?.name || o.plan) : 'All features',
+    features: plans.featuresForOrg(o.id),
+  })));
 });
 
 // Creates the organization, its first program (every organization always has at least
@@ -67,12 +75,56 @@ router.put('/organizations/:id', requirePlatformAdmin, (req, res) => {
   res.json({ success: true });
 });
 
+// --- Plans (vendor only) ---------------------------------------------------------------
+// Which Coaster plan each customer is on. Owner-only: a customer administrator can see what
+// their own organization includes (below) but cannot change what they are paying for.
+
+router.get('/plans', requirePlatformAdmin, (req, res) => {
+  res.json({ plans: plans.PLANS, features: plans.FEATURES });
+});
+
+router.put('/organizations/:id/plan', requirePlatformAdmin, (req, res) => {
+  const org = db.prepare(`SELECT * FROM organizations WHERE id=?`).get(req.params.id);
+  if (!org) return res.status(404).json({ error: 'Not found' });
+
+  const plan = String(req.body.plan || '');
+  if (!plans.PLAN_KEYS.includes(plan)) {
+    return res.status(400).json({ error: `Unknown plan. Choose one of: ${plans.PLAN_KEYS.join(', ')}` });
+  }
+
+  // Only a custom deal stores its own feature list; the named tiers read from lib/plans.js so
+  // that editing a tier updates every customer on it.
+  let features = null;
+  if (plan === 'custom') {
+    const wanted = Array.isArray(req.body.features) ? req.body.features.map(String) : [];
+    const unknown = wanted.filter(k => !plans.FEATURE_KEYS.includes(k));
+    if (unknown.length) return res.status(400).json({ error: `Unknown feature: ${unknown.join(', ')}` });
+    features = JSON.stringify([...new Set(wanted)]);
+  }
+
+  db.prepare(`UPDATE organizations SET plan=?, plan_features=? WHERE id=?`).run(plan, features, org.id);
+  res.json({ plan, features: plans.featuresForOrg(org.id) });
+});
+
+// What the signed-in user's own organization includes. Available to anyone in it — the app
+// uses this to hide tools the customer has not bought, and it is not sensitive.
+router.get('/my-plan', requireOrg, (req, res) => {
+  const org = db.prepare(`SELECT plan FROM organizations WHERE id=?`).get(req.orgId);
+  res.json({
+    plan: org?.plan || null,
+    planName: org?.plan ? (plans.planByKey(org.plan)?.name || org.plan) : 'All features',
+    features: plans.featuresForOrg(req.orgId),
+  });
+});
+
 // --- People in the active organization ------------------------------------------------
 
 router.get('/members', requireOrgAdmin, (req, res) => {
   res.json(db.prepare(`
     SELECT m.id, m.role, m.created_at, u.id AS user_id, u.email, u.name, u.status,
       (u.role = 'superadmin') AS is_platform_admin,
+      -- Also works with another customer, so their account details are the owner's to change.
+      EXISTS (SELECT 1 FROM org_members o WHERE o.user_id = u.id AND o.org_id <> m.org_id) AS shared_account,
       (SELECT COUNT(*) FROM project_members pm
          JOIN projects p ON p.id = pm.project_id
         WHERE pm.user_id = u.id AND p.org_id = m.org_id) AS project_count
@@ -123,12 +175,35 @@ router.post('/members', requireOrgAdmin, (req, res) => {
 
 // Changes someone's role in this organization, or resets their password. Guards against
 // an organization being left with nobody able to administer it.
+// One person has one account, so a consultant working for two customers is one login. Their
+// name, password and active/disabled state therefore belong to the account, not to either
+// organization — an org admin changing them would reach into a customer they have no
+// relationship with. Those fields are reserved to the platform owner once an account is
+// shared. What an org admin always keeps is control of that person *inside their own
+// organization*: their role, their projects, and removing them entirely.
+function accountIsShared(userId, orgId) {
+  return !!db.prepare(`SELECT 1 FROM org_members WHERE user_id=? AND org_id<>?`).get(userId, orgId);
+}
+
 router.put('/members/:userId', requireOrgAdmin, (req, res) => {
   const user = db.prepare(`SELECT * FROM users WHERE id=?`).get(req.params.userId);
   if (!user) return res.status(404).json({ error: 'Not found' });
   const membership = db.prepare(`SELECT * FROM org_members WHERE org_id=? AND user_id=?`)
     .get(req.orgId, user.id);
   if (!membership) return res.status(404).json({ error: 'They are not a member of this organization' });
+
+  const touchesAccount = req.body.new_password !== undefined
+    || req.body.status !== undefined
+    || req.body.name !== undefined;
+  if (touchesAccount
+      && !access.isPlatformAdmin(req.user)
+      && accountIsShared(user.id, req.orgId)) {
+    return res.status(403).json({
+      error: 'This person also works with another organization on Coaster, so their name, password '
+        + 'and access are managed centrally. You can still change their role here, set which programs '
+        + 'and projects they see, or remove them from this organization.',
+    });
+  }
 
   if (req.body.role && ORG_ROLES.includes(req.body.role) && req.body.role !== membership.role) {
     const admins = db.prepare(`
@@ -164,8 +239,13 @@ router.delete('/members/:userId', requireOrgAdmin, (req, res) => {
   if (!user) return res.status(404).json({ error: 'Not found' });
   if (user.id === req.user.id) return res.status(400).json({ error: 'You cannot remove your own access' });
 
+  // Not in this organization is not this administrator's business — answer exactly as if the
+  // account did not exist, matching the edit route, so an id cannot be probed by watching
+  // which ones come back as success.
   const membership = db.prepare(`SELECT * FROM org_members WHERE org_id=? AND user_id=?`).get(req.orgId, user.id);
-  if (membership?.role === 'Admin') {
+  if (!membership) return res.status(404).json({ error: 'Not found' });
+
+  if (membership.role === 'Admin') {
     const admins = db.prepare(`
       SELECT COUNT(*) AS c FROM org_members m JOIN users u ON u.id = m.user_id
       WHERE m.org_id=? AND m.role='Admin' AND u.status='Active'
@@ -188,6 +268,81 @@ router.delete('/members/:userId', requireOrgAdmin, (req, res) => {
 // emailed, so this works whether or not an email provider is configured.
 
 const INVITE_DAYS = 7;
+
+// --- One person's programs and projects ------------------------------------------------
+// Read and rewrite what a single member can reach inside the active organization. Org
+// Admins already reach everything, so these routes describe and change grants for everyone
+// else; the UI says as much rather than showing an admin a set of boxes that do nothing.
+
+// The person must belong to this organization, else an admin of one customer could read or
+// write grants for a stranger by guessing a user id.
+function memberInOrg(userId, orgId) {
+  return db.prepare(`
+    SELECT u.id, u.name, u.email, m.role
+    FROM users u JOIN org_members m ON m.user_id = u.id AND m.org_id = ?
+    WHERE u.id = ?
+  `).get(orgId, userId) || null;
+}
+
+router.get('/members/:userId/access', requireOrgAdmin, (req, res) => {
+  const person = memberInOrg(Number(req.params.userId), req.orgId);
+  if (!person) return res.status(404).json({ error: 'Not found' });
+
+  const programs = db.prepare(`
+    SELECT g.id, g.name,
+      EXISTS (SELECT 1 FROM program_members gm WHERE gm.program_id = g.id AND gm.user_id = ?) AS granted
+    FROM programs g WHERE g.org_id = ? ORDER BY g.name ASC
+  `).all(person.id, req.orgId);
+
+  const projects = db.prepare(`
+    SELECT p.id, p.project_name AS name, p.program_id,
+      EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = ?) AS granted
+    FROM projects p WHERE p.org_id = ? ORDER BY p.project_name ASC
+  `).all(person.id, req.orgId);
+
+  res.json({
+    user: { id: person.id, name: person.name, email: person.email, role: person.role },
+    // An admin's access does not come from these rows, so the UI must not imply it does.
+    isOrgAdmin: person.role === 'Admin',
+    programs, projects,
+  });
+});
+
+router.put('/members/:userId/access', requireOrgAdmin, (req, res) => {
+  const person = memberInOrg(Number(req.params.userId), req.orgId);
+  if (!person) return res.status(404).json({ error: 'Not found' });
+
+  const wantPrograms = Array.isArray(req.body.program_ids) ? req.body.program_ids.map(Number) : [];
+  const wantProjects = Array.isArray(req.body.project_ids) ? req.body.project_ids.map(Number) : [];
+
+  // Only ids inside this organization survive, so a tampered request cannot grant access to
+  // another customer's program or project.
+  const okPrograms = db.prepare(`SELECT id FROM programs WHERE org_id = ?`).all(req.orgId).map(r => r.id);
+  const okProjects = db.prepare(`SELECT id FROM projects WHERE org_id = ?`).all(req.orgId).map(r => r.id);
+  const programIds = wantPrograms.filter(id => okPrograms.includes(id));
+  const projectIds = wantProjects.filter(id => okProjects.includes(id));
+  if (programIds.length !== wantPrograms.length || projectIds.length !== wantProjects.length) {
+    return res.status(400).json({ error: 'That program or project is not in this organization' });
+  }
+
+  // Rewrite rather than merge: the form shows the complete picture, so what comes back is
+  // the complete picture. Scoped to this organization so grants elsewhere are untouched.
+  db.prepare(`
+    DELETE FROM program_members WHERE user_id = ?
+      AND program_id IN (SELECT id FROM programs WHERE org_id = ?)
+  `).run(person.id, req.orgId);
+  db.prepare(`
+    DELETE FROM project_members WHERE user_id = ?
+      AND project_id IN (SELECT id FROM projects WHERE org_id = ?)
+  `).run(person.id, req.orgId);
+
+  const addProgram = db.prepare(`INSERT OR IGNORE INTO program_members (program_id, user_id, role) VALUES (?, ?, 'Member')`);
+  for (const id of programIds) addProgram.run(id, person.id);
+  const addProject = db.prepare(`INSERT OR IGNORE INTO project_members (project_id, user_id, role) VALUES (?, ?, 'PM')`);
+  for (const id of projectIds) addProject.run(id, person.id);
+
+  res.json({ success: true, programs: programIds.length, projects: projectIds.length });
+});
 
 router.get('/invitations', requireOrgAdmin, (req, res) => {
   res.json(db.prepare(`

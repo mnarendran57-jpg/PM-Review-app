@@ -1,12 +1,74 @@
 import { useState, useEffect } from 'react';
 import {
   ReceiptPercentIcon, SparklesIcon, ArrowDownTrayIcon, TrashIcon, ClockIcon, DocumentTextIcon,
-  ExclamationTriangleIcon, CheckCircleIcon, LightBulbIcon,
+  ExclamationTriangleIcon, CheckCircleIcon, LightBulbIcon, PlusIcon,
 } from '@heroicons/react/24/outline';
 import { invoiceReviewApi, payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import MultiFileDrop from '../components/MultiFileDrop';
+import Modal from '../components/Modal';
+import FileDrop from '../components/FileDrop';
+
+// Adding a contract without leaving the review. It lands in the project's Shared Documents
+// like any other, so it is available to every later review too.
+function AddContractModal({ projectId, onClose, onAdded }) {
+  const [file, setFile] = useState(null);
+  const [label, setLabel] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  // The filename is usually most of the answer, so pre-fill from it and let the PM shorten
+  // it to something that reads well in a dropdown.
+  const pickFile = f => {
+    setFile(f);
+    if (f && !label.trim()) setLabel(f.name.replace(/\.pdf$/i, '').slice(0, 60));
+  };
+
+  const save = async () => {
+    if (!file) { setError('Choose the contract PDF first.'); return; }
+    setError(''); setSaving(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('doc_type', 'contract');
+      fd.append('label', label.trim());
+      const added = await payAppReviewApi.addDocument(projectId, fd);
+      onAdded(added);
+      onClose();
+    } catch (e) {
+      setError(e?.response?.data?.error || 'Could not add this contract.');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title="Add a contract" onClose={saving ? () => {} : onClose}>
+      <div className="space-y-4">
+        <p className="text-sm text-gray-500">
+          Its terms are read once and stored, so later reviews never re-send the PDF.
+        </p>
+        <FileDrop file={file} onChange={pickFile} accept=".pdf" label="Contract (PDF) *"
+          hint="The executed agreement — architect, general contractor, engineer · PDF" />
+        <div>
+          <label className="label">Name it</label>
+          <input className="input" value={label} onChange={e => setLabel(e.target.value)}
+            placeholder="e.g. General Contractor" />
+          <p className="text-[11px] text-gray-400 mt-1">
+            This is what you'll pick from when reviewing an invoice — short is better.
+          </p>
+        </div>
+        {error && <p className="text-sm" style={{ color: '#dc2626' }}>{error}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="btn-primary" onClick={save} disabled={saving || !file}>
+            {saving ? 'Reading the contract…' : 'Add contract'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 function money(n) {
   return typeof n === 'number' ? `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'n/a';
@@ -131,7 +193,12 @@ export default function InvoiceReview() {
   const routeProjectId = ctx?.projectId;
 
   const [files, setFiles] = useState([]);
-  const [contract, setContract] = useState(null);
+  // Every contract on the project, and which one this invoice is being checked against. An
+  // architect's invoice must be measured against the architect's agreement, not the
+  // contractor's, so the reviewer chooses rather than the app guessing.
+  const [contracts, setContracts] = useState(null);
+  const [contractId, setContractId] = useState('');
+  const [addingContract, setAddingContract] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);   // { id, report }
@@ -141,16 +208,25 @@ export default function InvoiceReview() {
   const loadHistory = () => invoiceReviewApi.list(routeProjectId ? { project_id: routeProjectId } : undefined).then(setHistory);
   useEffect(() => { loadHistory(); }, [routeProjectId]);
 
-  // Surface whether the project's contract is on file — it's the reference the invoice
-  // is checked against for tax, unallowable items, and reimbursable rules.
-  useEffect(() => {
-    if (!routeProjectId) { setContract(null); return; }
-    let cancelled = false;
-    payAppReviewApi.getContract(routeProjectId)
-      .then(d => { if (!cancelled) setContract(d); })
-      .catch(() => { if (!cancelled) setContract(null); });
-    return () => { cancelled = true; };
-  }, [routeProjectId]);
+  // The contracts in Shared Documents are what an invoice is checked against for tax,
+  // unallowable items, and reimbursable rules.
+  const loadContracts = () => {
+    if (!routeProjectId) { setContracts(null); return Promise.resolve(); }
+    return payAppReviewApi.listDocuments(routeProjectId)
+      .then(docs => {
+        const onlyContracts = (docs || []).filter(d => d.doc_type === 'contract');
+        setContracts(onlyContracts);
+        // Pre-select so a one-contract project needs no click, and so the choice is never
+        // left blank when there is an obvious answer.
+        setContractId(prev => {
+          if (prev && onlyContracts.some(c => String(c.id) === String(prev))) return prev;
+          const primary = onlyContracts.find(c => c.is_primary) || onlyContracts[0];
+          return primary ? String(primary.id) : '';
+        });
+      })
+      .catch(() => setContracts([]));
+  };
+  useEffect(() => { loadContracts(); }, [routeProjectId]);
 
   const handleAnalyze = async () => {
     if (files.length === 0) { setError('Upload the vendor invoice PDF first.'); return; }
@@ -159,6 +235,7 @@ export default function InvoiceReview() {
       const fd = new FormData();
       files.forEach(f => fd.append('invoices', f));
       if (routeProjectId) fd.append('project_id', routeProjectId);
+      if (contractId) fd.append('contract_id', contractId);
       const data = await invoiceReviewApi.create(fd);
       setResult({ id: data.id, report: data.report });
       loadHistory();
@@ -210,11 +287,42 @@ export default function InvoiceReview() {
               )}
             </div>
 
-            <p className="text-xs mt-1" style={{ color: contract ? '#059669' : '#c2410c' }}>
-              {contract
-                ? `Contract on file (${contract.file_name}) — its tax and cost terms are the reference for this invoice.`
-                : 'No contract on file for this project — tax and unallowable-item checks will be limited. Add one on the project Overview page.'}
-            </p>
+            {/* Which agreement this invoice is measured against. First thing on the form,
+                because picking the wrong one invalidates every contract-based finding. */}
+            <div className="pt-1">
+              <div className="flex items-end justify-between gap-3">
+                <label className="label mb-0">Review against which contract?</label>
+                <button type="button" className="btn-secondary px-2.5 py-1 text-xs"
+                  onClick={() => setAddingContract(true)} disabled={!routeProjectId}>
+                  <PlusIcon className="w-3.5 h-3.5" /> Add a contract
+                </button>
+              </div>
+
+              {contracts === null ? (
+                <p className="text-xs text-gray-400 mt-1.5">Loading contracts…</p>
+              ) : contracts.length === 0 ? (
+                <p className="text-xs mt-1.5" style={{ color: '#c2410c' }}>
+                  No contract in this project's Shared Documents yet. You can still review the invoice —
+                  the maths is checked either way — but tax and unallowable-cost findings need a contract.
+                </p>
+              ) : (
+                <>
+                  <select className="input mt-1.5" value={contractId} onChange={e => setContractId(e.target.value)}>
+                    {contracts.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.label || c.file_name}{c.is_primary ? ' — project default' : ''}
+                      </option>
+                    ))}
+                    <option value="">No contract — check the maths only</option>
+                  </select>
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    {contractId
+                      ? "This contract's tax and cost terms are what the invoice is checked against."
+                      : 'Nothing to check tax or unallowable costs against — arithmetic findings only.'}
+                  </p>
+                </>
+              )}
+            </div>
 
             <MultiFileDrop files={files} onChange={setFiles}
               accept=".pdf"
@@ -276,6 +384,15 @@ export default function InvoiceReview() {
           )}
         </div>
       </div>
+
+      {addingContract && (
+        <AddContractModal
+          projectId={routeProjectId}
+          onClose={() => setAddingContract(false)}
+          // Select the contract just added — it is almost certainly the one being reviewed.
+          onAdded={added => loadContracts().then(() => setContractId(String(added.id)))}
+        />
+      )}
     </div>
   );
 }

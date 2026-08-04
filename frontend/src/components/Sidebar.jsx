@@ -1,11 +1,58 @@
+import { useState, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   InboxArrowDownIcon, ArrowRightOnRectangleIcon, DocumentMagnifyingGlassIcon,
   ClipboardDocumentCheckIcon, Squares2X2Icon, ScaleIcon, ArrowLeftIcon,
   Cog6ToothIcon, EnvelopeIcon, FolderIcon, ReceiptPercentIcon, CameraIcon, UserGroupIcon,
 } from '@heroicons/react/24/outline';
-import { authApi, selectedOrg, selectedProgram } from '../api';
+import { authApi, selectedOrg, selectedProgram, orgsApi, programsApi, projectsApi } from '../api';
 import { useProject } from '../context/ProjectContext';
+import { usePlanFeatures } from '../hooks/usePlanFeatures';
+
+// Offering "Switch organization" to someone who only belongs to one is a dead end that
+// makes the app look bigger than their access is. So the back-link names the highest level
+// where they actually have a choice, and disappears entirely when they have none.
+function useSwitchTarget(org, program) {
+  const [target, setTarget] = useState(null);
+
+  useEffect(() => {
+    if (!org) { setTarget(null); return; }
+    let cancelled = false;
+
+    (async () => {
+      // Both counts are always needed: the program count decides whether the program line
+      // below is worth making clickable even when the organization link wins here.
+      const [orgs, programs] = await Promise.all([
+        orgsApi.mine().catch(() => []),
+        programsApi.list().catch(() => []),
+      ]);
+      if (cancelled) return;
+      const counts = { orgs: (orgs || []).length, programs: (programs || []).length };
+
+      if (counts.orgs > 1) {
+        setTarget({ label: 'Switch organization', to: '/organizations', level: 'org', counts });
+        return;
+      }
+      if (counts.programs > 1) {
+        setTarget({ label: 'Switch program', to: '/programs', level: 'program', counts });
+        return;
+      }
+      // Only worth offering once they are inside a program, since that is what scopes the
+      // project list they would be switching within.
+      const projects = program
+        ? await projectsApi.list({ program_id: program.id }).catch(() => [])
+        : [];
+      if (cancelled) return;
+      setTarget((projects || []).length > 1
+        ? { label: 'Switch project', to: '/projects', level: 'project', counts }
+        : null);
+    })();
+
+    return () => { cancelled = true; };
+  }, [org?.id, program?.id]);
+
+  return target;
+}
 
 // The tools that operate on a single project. Their routes are built relative to the
 // active project (/project/:id/...) so they always carry the project context with them.
@@ -69,6 +116,13 @@ export default function Sidebar() {
   // Org-level admin rights are recorded on the organization the user picked; a platform
   // admin (the vendor) counts as an admin everywhere.
   const isAdmin = authApi.user()?.isPlatformAdmin || !!org?.is_admin;
+  const switchTarget = useSwitchTarget(org, program);
+  // Tools the customer's plan doesn't include are not shown at all — a disabled row the user
+  // can never use is worse than one that isn't there.
+  const { has: hasFeature } = usePlanFeatures();
+  // The organization link is one level up, so a second program to switch to is still worth
+  // offering underneath it. When the link above already says "Switch program", it is not.
+  const canChangeProgram = switchTarget?.level === 'org' && switchTarget.counts.programs > 1;
 
   const handleLogout = () => {
     authApi.logout();
@@ -118,7 +172,7 @@ export default function Sidebar() {
             <div className="space-y-1">
               <NavRow to={`/project/${projectId}`} end label="Overview" Icon={Squares2X2Icon}
                 color="#3b82f6" glow="rgba(37,99,235,0.2)" />
-              {projectTools.map(t => (
+              {projectTools.filter(t => hasFeature(t.slug)).map(t => (
                 <NavRow key={t.slug} to={`/project/${projectId}/${t.slug}`}
                   label={t.label} Icon={t.icon} color={t.color} glow={t.glow} />
               ))}
@@ -129,22 +183,30 @@ export default function Sidebar() {
             {/* Where the user currently is in the hierarchy, and a way back up it. */}
             {org && (
               <div className="px-2 pt-4 pb-3">
-                <button onClick={() => navigate('/organizations')}
-                  className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider mb-2 transition-colors"
-                  style={{ color: 'rgba(255,255,255,0.4)' }}
-                  onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.75)'; }}
-                  onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.4)'; }}>
-                  <ArrowLeftIcon className="w-3.5 h-3.5" /> Switch organization
-                </button>
-                <p className="text-white font-bold text-[14px] leading-snug break-words">{org.name}</p>
-                {program && (
-                  <button onClick={() => navigate('/programs')}
-                    className="text-[11px] mt-0.5 text-left transition-colors"
+                {switchTarget && (
+                  <button onClick={() => navigate(switchTarget.to)}
+                    className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider mb-2 transition-colors"
                     style={{ color: 'rgba(255,255,255,0.4)' }}
                     onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.75)'; }}
                     onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.4)'; }}>
-                    {program.name} · change
+                    <ArrowLeftIcon className="w-3.5 h-3.5" /> {switchTarget.label}
                   </button>
+                )}
+                <p className="text-white font-bold text-[14px] leading-snug break-words">{org.name}</p>
+                {program && (
+                  // Only clickable when there is somewhere else to go, and not when the link
+                  // above already offers exactly this.
+                  canChangeProgram ? (
+                    <button onClick={() => navigate('/programs')}
+                      className="text-[11px] mt-0.5 text-left transition-colors"
+                      style={{ color: 'rgba(255,255,255,0.4)' }}
+                      onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.75)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.4)'; }}>
+                      {program.name} · change
+                    </button>
+                  ) : (
+                    <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.4)' }}>{program.name}</p>
+                  )
                 )}
               </div>
             )}

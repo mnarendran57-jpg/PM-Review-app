@@ -10,10 +10,13 @@ const storage = require('../lib/storage');
 
 const access = require('../lib/access');
 const { requireOrg } = require('../middleware/auth');
+const { requireFeature } = require('../lib/plans');
 
 // Scoped to one organization; within it a member sees only projects they belong to.
 // Applied to the whole router so a new endpoint cannot silently skip it.
 router.use(requireOrg);
+// Gated by the customer's Coaster plan — see lib/plans.js.
+router.use(requireFeature('precon-review'));
 
 // Loads a row only if the caller may see it, else null -> the caller answers 404 rather
 // than 403 so ids cannot be probed. Always selects the whole row, because the check needs

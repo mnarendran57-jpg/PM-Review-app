@@ -54,6 +54,9 @@ export default function ProgramSelect() {
   const [programs, setPrograms] = useState(null);
   const [adding, setAdding] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  // Someone who belongs to a single organization has nothing to switch to, so offering it
+  // is a dead end.
+  const [orgCount, setOrgCount] = useState(0);
   const user = authApi.user();
 
   const load = () => programsApi.list().then(setPrograms).catch(() => setPrograms([]));
@@ -65,6 +68,7 @@ export default function ProgramSelect() {
     authApi.me().then(({ user: u, organizations }) => {
       const mine = (organizations || []).find(o => o.id === org.id);
       setIsAdmin(u?.isPlatformAdmin || !!mine?.is_admin);
+      setOrgCount((organizations || []).length);
     }).catch(() => {});
   }, []);
 
@@ -88,9 +92,11 @@ export default function ProgramSelect() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button className="btn-secondary" onClick={() => navigate('/organizations')}>
-              <ArrowLeftIcon className="w-4 h-4" /> Switch organization
-            </button>
+            {orgCount > 1 && (
+              <button className="btn-secondary" onClick={() => navigate('/organizations')}>
+                <ArrowLeftIcon className="w-4 h-4" /> Switch organization
+              </button>
+            )}
             <button className="btn-secondary" onClick={logout}>
               <ArrowRightOnRectangleIcon className="w-4 h-4" /> Sign out
             </button>

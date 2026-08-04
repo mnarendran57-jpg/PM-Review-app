@@ -11,10 +11,13 @@ const storage = require('../lib/storage');
 
 const access = require('../lib/access');
 const { requireOrg } = require('../middleware/auth');
+const { requireFeature } = require('../lib/plans');
 
 // Scoped to one organization; within it a member sees only projects they belong to.
 // Applied to the whole router so a new endpoint cannot silently skip it.
 router.use(requireOrg);
+// Gated by the customer's Coaster plan — see lib/plans.js.
+router.use(requireFeature('invoice-review'));
 
 // Loads a row only if the caller may see it, else null -> the caller answers 404 rather
 // than 403 so ids cannot be probed. Always selects the whole row, because the check needs
@@ -41,13 +44,32 @@ router.post('/', upload.array('invoices', 100), async (req, res) => {
     if (nonPdf) return res.status(400).json({ error: `Every file must be a PDF (${nonPdf.originalname} is not)` });
 
     const projectId = req.body.project_id ? Number(req.body.project_id) : null;
+    const contractId = req.body.contract_id ? Number(req.body.contract_id) : null;
+
+    // Which agreement this invoice is checked against. A project has several — the
+    // architect's, the general contractor's — so the reviewer picks, and an architect's
+    // invoice is never measured against the contractor's terms. Falls back to the project's
+    // primary contract when nothing is chosen, which is what a one-contract project wants.
     let contractTerms = null;
+    let contractRow = null;
     if (projectId) {
-      const contractRow = db.prepare(`
-        SELECT terms FROM project_contracts WHERE project_id = ?
-        ORDER BY created_at DESC LIMIT 1
-      `).get(projectId);
-      if (contractRow) contractTerms = JSON.parse(contractRow.terms);
+      contractRow = contractId
+        ? db.prepare(`
+            SELECT id, label, file_name, terms FROM project_contracts
+            WHERE id = ? AND project_id = ? AND doc_type = 'contract'
+          `).get(contractId, projectId)
+        : db.prepare(`
+            SELECT id, label, file_name, terms FROM project_contracts
+            WHERE project_id = ? AND doc_type = 'contract'
+            ORDER BY is_primary DESC, created_at ASC LIMIT 1
+          `).get(projectId);
+
+      // A contract id that is not this project's is a mistake worth surfacing, not silently
+      // swapping for a different contract.
+      if (contractId && !contractRow) {
+        return res.status(400).json({ error: 'That contract is not on this project.' });
+      }
+      if (contractRow) contractTerms = JSON.parse(contractRow.terms || '{}');
     }
 
     const { invoice, observations } = await analyzeInvoices({
@@ -64,12 +86,14 @@ router.post('/', upload.array('invoices', 100), async (req, res) => {
 
     const insert = db.prepare(`
       INSERT INTO invoice_reviews (
-        org_id, project_id, vendor, invoice_number, invoice_date, total_amount,
+        org_id, project_id, contract_id, contract_label, vendor, invoice_number, invoice_date, total_amount,
         extracted_data, checks_result, ai_observations, report_markdown,
         critical_count, fail_count, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.orgId, projectId,
+      contractRow?.id ?? null,
+      contractRow ? (contractRow.label || contractRow.file_name) : null,
       invoice.vendor || null,
       invoice.invoiceNumber || null,
       invoice.invoiceDate || null,
@@ -102,7 +126,7 @@ router.post('/', upload.array('invoices', 100), async (req, res) => {
 router.get('/', (req, res) => {
   const { project_id, search } = req.query;
   const scope = access.visibilityClause(req.user, req.orgId);
-  let sql = `SELECT id, project_id, vendor, invoice_number, invoice_date, total_amount,
+  let sql = `SELECT id, project_id, contract_label, vendor, invoice_number, invoice_date, total_amount,
              critical_count, fail_count, created_by, created_at
              FROM invoice_reviews WHERE ${scope.sql}`;
   const params = [...scope.params];

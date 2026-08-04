@@ -107,6 +107,18 @@ db.exec(`
     UNIQUE (project_id, user_id, role)
   );
 
+  -- A grant on a whole program: everything in it, including projects added later. Without
+  -- it, giving someone a program meant adding them to each of its projects by hand and
+  -- remembering to repeat that every time a project was created.
+  CREATE TABLE IF NOT EXISTS program_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id INTEGER NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'Member',
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE (program_id, user_id)
+  );
+
   CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_name TEXT NOT NULL,
@@ -678,6 +690,48 @@ db.exec(`
 // usually meant to lock out. Tokens issued before this moment are refused.
 if (!columnsOf('users').includes('sessions_valid_from')) {
   db.exec(`ALTER TABLE users ADD COLUMN sessions_valid_from TEXT`);
+}
+
+// Which Coaster plan a customer is on, and — for a negotiated "custom" deal — the exact
+// features they bought. Deliberately left NULL on existing organizations: a null plan means
+// everything is included, so introducing pricing never takes a tool away from a customer who
+// already had it. See lib/plans.js.
+if (!columnsOf('organizations').includes('plan')) {
+  db.exec(`ALTER TABLE organizations ADD COLUMN plan TEXT`);
+}
+if (!columnsOf('organizations').includes('plan_features')) {
+  db.exec(`ALTER TABLE organizations ADD COLUMN plan_features TEXT`);
+}
+
+// A project has more than one agreement — the architect's, the general contractor's, often an
+// engineer's — and an invoice must be checked against the right one. Shared Documents also
+// holds files that are not agreements at all (schedule, estimate), so each row records what
+// it is: only a 'contract' has terms extracted and appears where a contract is chosen.
+if (!columnsOf('project_contracts').includes('label')) {
+  db.exec(`ALTER TABLE project_contracts ADD COLUMN label TEXT`);
+}
+if (!columnsOf('project_contracts').includes('doc_type')) {
+  db.exec(`ALTER TABLE project_contracts ADD COLUMN doc_type TEXT DEFAULT 'contract'`);
+}
+// Pay App and Change Order Review still read a single contract per project. Marking one
+// keeps that deterministic now that several can exist — without it they would follow whatever
+// was uploaded most recently, which could be the architect's contract on a GC pay app.
+if (!columnsOf('project_contracts').includes('is_primary')) {
+  db.exec(`ALTER TABLE project_contracts ADD COLUMN is_primary INTEGER DEFAULT 0`);
+  // Everything already on file predates multiple contracts, so it is that project's primary.
+  db.exec(`UPDATE project_contracts SET is_primary = 1`);
+}
+db.exec(`UPDATE project_contracts SET doc_type = 'contract' WHERE doc_type IS NULL`);
+
+// Which contract an invoice was reviewed against, recorded on the review itself. Without it
+// a saved review cannot say whose terms it applied, and re-reading history would be guesswork
+// once a project carries several agreements. The label is copied rather than joined so the
+// record still reads correctly if the contract is later renamed or removed.
+if (!columnsOf('invoice_reviews').includes('contract_id')) {
+  db.exec(`ALTER TABLE invoice_reviews ADD COLUMN contract_id INTEGER`);
+}
+if (!columnsOf('invoice_reviews').includes('contract_label')) {
+  db.exec(`ALTER TABLE invoice_reviews ADD COLUMN contract_label TEXT`);
 }
 
 // First login: seed a platform administrator from the environment, and make them an Admin
