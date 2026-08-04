@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const { splitPdf, partNotice } = require('./pdfChunk');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -112,6 +113,68 @@ async function callClaude(content) {
   });
 }
 
+const findingKey = item =>
+  JSON.stringify(item?.description ?? item?.item ?? item).trim().toLowerCase();
+
+// Reads an over-long submission in passes: the pay app on its own, then each slice of backup
+// alongside the pay app's first pages so coverage can still be judged. Findings concatenate,
+// deduped, since the same issue may be visible in more than one pass.
+async function scanInPasses({ payAppPart, payAppParts, backupParts, contractTerms, scopeBaseline, currentItems, coLog }) {
+  const prompt = buildPrompt({ contractTerms, scopeBaseline, currentItems, coLog });
+  const passes = [
+    ...payAppParts.map(part => ({ docs: [part.buffer], part })),
+    ...backupParts.map(part => ({ docs: [payAppPart, part.buffer], part, isBackup: true })),
+  ];
+
+  const results = [];
+  for (const [index, pass] of passes.entries()) {
+    const content = pass.docs.map(buf => ({
+      type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') },
+    }));
+    content.push({
+      type: 'text',
+      text: prompt + partNotice({
+        isPart: true, partNumber: index + 1, partCount: passes.length,
+        startPage: pass.part.startPage, endPage: pass.part.endPage,
+      }),
+    });
+
+    let response;
+    try {
+      response = await callClaude(content);
+    } catch (err) {
+      if (err.status !== 429) throw err;
+      await new Promise(resolve => setTimeout(resolve, 20000));
+      response = await callClaude(content);
+    }
+    // One truncated pass shouldn't discard the others — the rest still stand.
+    if (response.stop_reason === 'max_tokens') continue;
+    results.push(safeJsonFromText(response.content[0].text));
+  }
+
+  const gather = key => {
+    const seen = new Set();
+    const out = [];
+    for (const r of results) {
+      for (const item of Array.isArray(r?.[key]) ? r[key] : []) {
+        const k = findingKey(item);
+        if (k && !seen.has(k)) { seen.add(k); out.push(item); }
+      }
+    }
+    return out;
+  };
+
+  return {
+    scopeComparison: scopeBaseline ? gather('scopeComparison').filter(r => r && r.description) : null,
+    scopeSource: scopeBaseline ? scopeBaseline.source : null,
+    taxFindings: gather('taxFindings'),
+    unallowableFindings: gather('unallowableFindings'),
+    backupCoverage: results.map(r => r?.backupCoverage).filter(Boolean).join(' ') || null,
+    notes: results.map(r => r?.notes).filter(Boolean).join(' ') || null,
+    incomplete: results.length === 0,
+  };
+}
+
 // Scans the pay application and any separate backup documents against the project's
 // stored contract terms. Runs as its own call rather than being folded into
 // payAppExtract: that extraction already runs near its token ceiling on large
@@ -124,6 +187,19 @@ async function scanCompliance({ payAppBuffer, backupBuffers = [], contractTerms,
   // Runs with contract terms (tax + unallowable review), a scope baseline (in/out-of-
   // contract comparison), or both. With neither there is nothing to audit against.
   if (!contractTerms && !scopeBaseline) return null;
+
+  const payAppParts = await splitPdf(payAppBuffer);
+  const backupParts = (await Promise.all(backupBuffers.map(buf => splitPdf(buf)))).flat();
+  const oversized = payAppParts.length > 1 || backupParts.length > backupBuffers.length;
+
+  // A thick backup bundle no longer forces the scan to give up. The pay app itself travels
+  // with every backup pass, because judging whether a line has backup needs both in view.
+  if (oversized) {
+    return scanInPasses({
+      payAppPart: payAppParts[0].buffer, payAppParts, backupParts,
+      contractTerms, scopeBaseline, currentItems, coLog,
+    });
+  }
 
   const content = [
     { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: payAppBuffer.toString('base64') } },

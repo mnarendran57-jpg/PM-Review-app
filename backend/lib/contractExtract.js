@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const { analyzeInPasses, partNotice } = require('./pdfChunk');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -70,10 +71,10 @@ async function callClaude(content) {
 // Called once per project when the contract is uploaded — the result is stored on the
 // project and reused by every later pay app review, so a long contract is never
 // re-sent to the model period after period.
-async function extractContractTerms(contractBuffer) {
+async function readOnePass(buffer, context, usages) {
   const content = [
-    { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: contractBuffer.toString('base64') } },
-    { type: 'text', text: PROMPT },
+    { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
+    { type: 'text', text: PROMPT + partNotice(context) },
   ];
 
   let response;
@@ -90,12 +91,23 @@ async function extractContractTerms(contractBuffer) {
 
   if (response.stop_reason === 'max_tokens') {
     throw new Error(
-      'This contract is too long to read in one pass (the AI response was cut off). Try uploading ' +
-      'just the sections covering tax status, allowable costs, and the schedule of values.'
+      'A section of this contract produced more detail than one response can hold — most often a very ' +
+      'long schedule of values. Try uploading the contract without its largest exhibit.'
     );
   }
+  if (response.usage) usages.push(response.usage);
+  return safeJsonFromText(response.content[0].text);
+}
 
-  const parsed = safeJsonFromText(response.content[0].text);
+// A long contract is read in page-range passes and the terms combined, so contract length
+// never blocks a project. Header terms (tax status, contract sum, retainage) come from
+// whichever pass finds them; the schedule of values concatenates across passes in page order.
+async function extractContractTerms(contractBuffer) {
+  // Reported usage is the total across passes — a long contract genuinely costs several calls,
+  // and showing only the last one would understate it.
+  const usages = [];
+  const parsed = await analyzeInPasses(contractBuffer, (buffer, context) =>
+    readOnePass(buffer, context, usages));
   return {
     taxExempt: typeof parsed.taxExempt === 'boolean' ? parsed.taxExempt : null,
     taxExemptBasis: parsed.taxExemptBasis || null,
@@ -114,8 +126,11 @@ async function extractContractTerms(contractBuffer) {
           }))
       : [],
     notes: parsed.notes || null,
-    usage: response.usage
-      ? { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens }
+    usage: usages.length
+      ? {
+          inputTokens: usages.reduce((sum, u) => sum + (u.input_tokens || 0), 0),
+          outputTokens: usages.reduce((sum, u) => sum + (u.output_tokens || 0), 0),
+        }
       : null,
   };
 }

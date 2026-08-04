@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const { splitPdf, analyzeInPasses, partNotice } = require('./pdfChunk');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -95,42 +96,72 @@ async function callClaude(content) {
 // Single Claude call: PCO PDF + optional RFI/ASI PDF + the contract's stored terms as
 // text. The contract PDF itself is deliberately NOT re-sent — its terms were extracted
 // once at upload and re-billing a long contract every PCO would swamp the review cost.
-async function analyzePco({ pcoBuffer, referenceBuffer, contractTerms }) {
-  const content = [
-    { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pcoBuffer.toString('base64') } },
-  ];
-  if (referenceBuffer) {
-    content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: referenceBuffer.toString('base64') } });
-  }
-  content.push({ type: 'text', text: buildPrompt({ hasReference: !!referenceBuffer, contractTerms }) });
-
-  let response;
+async function callWithRetry(content) {
   try {
-    response = await callClaude(content);
+    return await callClaude(content);
   } catch (err) {
     if (err.status === 429) {
       await new Promise(resolve => setTimeout(resolve, 20000));
-      response = await callClaude(content);
-    } else {
-      throw err;
+      return callClaude(content);
     }
+    throw err;
+  }
+}
+
+function tooManyLineItems() {
+  return new Error(
+    'This change order has more pricing detail than one response can hold. ' +
+    'Try uploading it without its largest backup attachment.'
+  );
+}
+
+async function analyzePco({ pcoBuffer, referenceBuffer, contractTerms }) {
+  const pcoParts = await splitPdf(pcoBuffer);
+  const refParts = referenceBuffer ? await splitPdf(referenceBuffer) : [];
+
+  // Both fit: keep the single two-document call, which costs one request rather than two.
+  if (pcoParts.length === 1 && refParts.length <= 1) {
+    const content = [
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pcoBuffer.toString('base64') } },
+    ];
+    if (referenceBuffer) {
+      content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: referenceBuffer.toString('base64') } });
+    }
+    content.push({ type: 'text', text: buildPrompt({ hasReference: !!referenceBuffer, contractTerms }) });
+
+    const response = await callWithRetry(content);
+    if (response.stop_reason === 'max_tokens') throw tooManyLineItems();
+    const parsed = safeJsonFromText(response.content[0].text);
+    if (response.usage) {
+      console.log(`[pco extract] in=${response.usage.input_tokens} out=${response.usage.output_tokens} tokens`);
+    }
+    return {
+      pco: parsed.pco || {},
+      reference: parsed.reference || null,
+      observations: parsed.observations || {},
+    };
   }
 
-  if (response.stop_reason === 'max_tokens') {
-    throw new Error(
-      'This PCO has too many line items to read in one pass (the AI response was cut off). ' +
-      'Try uploading just the pricing pages.'
-    );
-  }
+  // Long change order (usually thick pricing backup): each document is read in page-range
+  // passes and the results combined, so length never blocks the review.
+  const readPco = async (buffer, context) => {
+    const content = [
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
+      { type: 'text', text: buildPrompt({ hasReference: false, contractTerms }) + partNotice(context) },
+    ];
+    const response = await callWithRetry(content);
+    if (response.stop_reason === 'max_tokens') throw tooManyLineItems();
+    return safeJsonFromText(response.content[0].text);
+  };
 
-  const parsed = safeJsonFromText(response.content[0].text);
-  if (response.usage) {
-    console.log(`[pco extract] in=${response.usage.input_tokens} out=${response.usage.output_tokens} tokens`);
-  }
+  const main = await analyzeInPasses(pcoBuffer, readPco);
+  const ref = referenceBuffer ? await analyzeInPasses(referenceBuffer, readPco) : null;
+
   return {
-    pco: parsed.pco || {},
-    reference: parsed.reference || null,
-    observations: parsed.observations || {},
+    pco: main.pco || {},
+    // The RFI/ASI is a separate document, so its own extraction stands in for the reference.
+    reference: ref ? (ref.reference || ref.pco || null) : null,
+    observations: main.observations || {},
   };
 }
 

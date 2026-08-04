@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const { splitPdf, analyzeInPasses, partNotice, mergeExtracted } = require('./pdfChunk');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -84,40 +85,65 @@ async function callClaude(content) {
 // contract PDF itself is deliberately NOT re-sent — its terms were extracted once at
 // upload. All uploaded documents go in together so the model can match reimbursable
 // lines on the primary invoice to their backup receipts.
-async function analyzeInvoices({ invoiceBuffers, contractTerms }) {
-  const content = invoiceBuffers.map(buf => ({
-    type: 'document',
-    source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') },
-  }));
-  content.push({ type: 'text', text: buildPrompt({ fileCount: invoiceBuffers.length, contractTerms }) });
-
-  let response;
+async function callWithRetry(content) {
   try {
-    response = await callClaude(content);
+    return await callClaude(content);
   } catch (err) {
     if (err.status === 429) {
       await new Promise(resolve => setTimeout(resolve, 20000));
-      response = await callClaude(content);
-    } else {
-      throw err;
+      return callClaude(content);
     }
+    throw err;
+  }
+}
+
+function tooManyLineItems() {
+  return new Error(
+    'This invoice has more itemised detail than one response can hold. ' +
+    'Try uploading it without its largest backup attachment.'
+  );
+}
+
+async function analyzeInvoices({ invoiceBuffers, contractTerms }) {
+  const parts = await Promise.all(invoiceBuffers.map(buf => splitPdf(buf)));
+  const anyOversized = parts.some(p => p.length > 1);
+
+  // Everything fits: keep the single call with all documents together, so the model can still
+  // match reimbursable lines on the invoice to their backup receipts.
+  if (!anyOversized) {
+    const content = invoiceBuffers.map(buf => ({
+      type: 'document',
+      source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') },
+    }));
+    content.push({ type: 'text', text: buildPrompt({ fileCount: invoiceBuffers.length, contractTerms }) });
+
+    const response = await callWithRetry(content);
+    if (response.stop_reason === 'max_tokens') throw tooManyLineItems();
+    const parsed = safeJsonFromText(response.content[0].text);
+    if (response.usage) {
+      console.log(`[invoice extract] in=${response.usage.input_tokens} out=${response.usage.output_tokens} tokens`);
+    }
+    return { invoice: parsed.invoice || {}, observations: parsed.observations || {} };
   }
 
-  if (response.stop_reason === 'max_tokens') {
-    throw new Error(
-      'This invoice has too many line items to read in one pass (the AI response was cut off). ' +
-      'Try uploading just the itemized pages.'
-    );
-  }
-
-  const parsed = safeJsonFromText(response.content[0].text);
-  if (response.usage) {
-    console.log(`[invoice extract] in=${response.usage.input_tokens} out=${response.usage.output_tokens} tokens`);
-  }
-  return {
-    invoice: parsed.invoice || {},
-    observations: parsed.observations || {},
+  // At least one document is too long to send whole. Each is read in page-range passes and
+  // the extractions combined. Cross-document matching of receipts to invoice lines is weaker
+  // here than in the single-call path — that is the cost of not refusing the upload.
+  const readOne = async (buffer, context) => {
+    const content = [
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
+      { type: 'text', text: buildPrompt({ fileCount: 1, contractTerms }) + partNotice(context) },
+    ];
+    const response = await callWithRetry(content);
+    if (response.stop_reason === 'max_tokens') throw tooManyLineItems();
+    return safeJsonFromText(response.content[0].text);
   };
+
+  const results = [];
+  for (const buffer of invoiceBuffers) results.push(await analyzeInPasses(buffer, readOne));
+  const merged = mergeExtracted(results);
+
+  return { invoice: merged.invoice || {}, observations: merged.observations || {} };
 }
 
 module.exports = { analyzeInvoices };

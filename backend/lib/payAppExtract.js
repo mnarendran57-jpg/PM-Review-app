@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const { splitPdf, analyzeInPasses, partNotice } = require('./pdfChunk');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -133,26 +134,51 @@ async function callClaudeWithRetry(content) {
 // Extracts the current (and optionally previous) pay application in a SINGLE Claude call —
 // sending both PDFs as separate document blocks in one message uses one API request and one
 // prompt instead of two, which matters a lot given how tight per-minute rate limits can be.
+function tooManyLineItems() {
+  return new Error(
+    'These pay applications have too many line items to extract in one pass (the AI response was cut off). ' +
+    'Try again, or split the continuation sheet into a smaller PDF.'
+  );
+}
+
 async function analyzePayApps(currentBuffer, previousBuffer) {
-  const content = [
-    { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: currentBuffer.toString('base64') } },
-  ];
-  if (previousBuffer) {
-    content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: previousBuffer.toString('base64') } });
+  const currentParts = await splitPdf(currentBuffer);
+  const previousParts = previousBuffer ? await splitPdf(previousBuffer) : [];
+
+  // Both fit: keep the single two-document call. It costs one request instead of two, which
+  // matters given how narrow this account's per-minute limit is.
+  if (currentParts.length === 1 && previousParts.length <= 1) {
+    const content = [
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: currentBuffer.toString('base64') } },
+    ];
+    if (previousBuffer) {
+      content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: previousBuffer.toString('base64') } });
+    }
+    content.push({ type: 'text', text: buildPrompt(!!previousBuffer) });
+
+    const response = await callClaudeWithRetry(content);
+    if (response.stop_reason === 'max_tokens') throw tooManyLineItems();
+    const parsed = safeJsonFromText(response.content[0].text);
+    return { current: parsed.current, previous: parsed.previous || null };
   }
-  content.push({ type: 'text', text: buildPrompt(!!previousBuffer) });
 
-  const response = await callClaudeWithRetry(content);
+  // A pay app long enough to need splitting (usually a big continuation sheet or attached
+  // backup) is read one document at a time, in page-range passes. Header values come from
+  // whichever pass shows them; continuation-sheet line items concatenate in page order.
+  const readOne = async (buffer, context) => {
+    const content = [
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
+      { type: 'text', text: buildPrompt(false) + partNotice(context) },
+    ];
+    const response = await callClaudeWithRetry(content);
+    if (response.stop_reason === 'max_tokens') throw tooManyLineItems();
+    return safeJsonFromText(response.content[0].text).current;
+  };
 
-  if (response.stop_reason === 'max_tokens') {
-    throw new Error(
-      'These pay applications have too many line items to extract in one pass (the AI response was cut off). ' +
-      'Try again, or split the continuation sheet into a smaller PDF.'
-    );
-  }
-
-  const parsed = safeJsonFromText(response.content[0].text);
-  return { current: parsed.current, previous: parsed.previous || null };
+  return {
+    current: await analyzeInPasses(currentBuffer, readOne),
+    previous: previousBuffer ? await analyzeInPasses(previousBuffer, readOne) : null,
+  };
 }
 
 module.exports = { analyzePayApps };

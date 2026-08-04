@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const { planPasses, passLabel } = require('./pdfChunk');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -66,24 +67,77 @@ Rules:
 - Prioritize issues that could affect cost, schedule, scope, constructability, or change orders.
 - Every array should be present (use an empty array if genuinely nothing applies to that section).`;
 
-async function analyzePreconDocuments(files, { projectName, reviewFocus }) {
-  const contentBlocks = files.map(fileToContentBlock);
-  const prompt = PROMPT_TEMPLATE({ projectName, reviewFocus });
+async function analyzeOnePass(entries, { projectName, reviewFocus, passNumber, passTotal }) {
+  const contentBlocks = entries.map(e => fileToContentBlock(e.file));
+  let prompt = PROMPT_TEMPLATE({ projectName, reviewFocus });
+
+  // Tell the model it is reading an extract. Without this it reports the pages it cannot
+  // see as missing from the submission, which would fill the report with false gaps.
+  if (passTotal > 1) {
+    const names = entries.map(passLabel).join(', ');
+    prompt += `\n\nIMPORTANT — this is part ${passNumber} of ${passTotal} of a larger document set, covering only: ${names}. ` +
+      'Review ONLY what is in front of you. Do not report other sections, drawings, or pages as missing — ' +
+      'they are being reviewed separately and will be combined with your findings.';
+  }
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-5',
     max_tokens: 8192,
-    messages: [{
-      role: 'user',
-      content: [...contentBlocks, { type: 'text', text: prompt }]
-    }]
+    messages: [{ role: 'user', content: [...contentBlocks, { type: 'text', text: prompt }] }],
   });
 
   if (response.stop_reason === 'max_tokens') {
     throw new Error('The review was too large to complete in one pass. Try again with fewer documents at once.');
   }
-
   return safeJsonFromText(response.content[0].text);
+}
+
+// Same finding reported against two parts of one document should appear once. Compared on
+// wording alone, since that is what the PM reads.
+const dedupeKey = item => String(item?.text ?? item).trim().toLowerCase().replace(/\s+/g, ' ');
+
+function mergeAnalyses(results) {
+  if (results.length === 1) return results[0];
+
+  const merged = {
+    documentSummary: '',
+    // Only genuinely insufficient if no pass found enough to review.
+    insufficientInfo: results.every(r => r.insufficientInfo),
+    insufficientInfoNote: null,
+    risks: [], highCostItems: [], changeOrderAreas: [], missingInfo: [], actionItems: [],
+  };
+
+  for (const key of ['risks', 'highCostItems', 'changeOrderAreas', 'missingInfo', 'actionItems']) {
+    const seen = new Set();
+    for (const result of results) {
+      for (const item of result[key] || []) {
+        const k = dedupeKey(item);
+        if (k && !seen.has(k)) { seen.add(k); merged[key].push(item); }
+      }
+    }
+  }
+
+  merged.documentSummary = results.map(r => r.documentSummary).filter(Boolean).join(' ');
+  if (merged.insufficientInfo) {
+    merged.insufficientInfoNote = results.map(r => r.insufficientInfoNote).filter(Boolean).join(' ') || null;
+  }
+  return merged;
+}
+
+// A long document is read in several passes and the findings combined, so no upload is
+// refused for being too long. Passes run one at a time rather than in parallel: the account's
+// per-minute token allowance is low enough that concurrent passes would rate-limit each other.
+async function analyzePreconDocuments(files, { projectName, reviewFocus }) {
+  const passes = await planPasses(files);
+  const results = [];
+
+  for (const [index, entries] of passes.entries()) {
+    results.push(await analyzeOnePass(entries, {
+      projectName, reviewFocus, passNumber: index + 1, passTotal: passes.length,
+    }));
+  }
+
+  return mergeAnalyses(results);
 }
 
 module.exports = { analyzePreconDocuments, SUPPORTED_IMAGE_TYPES };
