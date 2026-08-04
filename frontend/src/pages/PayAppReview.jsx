@@ -441,7 +441,7 @@ export default function PayAppReview() {
 
       await runAnalysis(extracted.current, previousData, currentFile, previousReviewId);
     } catch (err) {
-      setError(err.response?.data?.error || 'Could not analyze these pay applications.');
+      setError(err.friendlyMessage || err.response?.data?.error || 'Could not analyze these pay applications.');
     } finally {
       setAnalyzing(false);
     }
@@ -456,7 +456,7 @@ export default function PayAppReview() {
       await runAnalysis(result.extracted.current, result.extracted.previous, currentFile, result.previousReviewId);
       setEditing(false);
     } catch (err) {
-      setError(err.response?.data?.error || 'Could not recompute the review.');
+      setError(err.friendlyMessage || err.response?.data?.error || 'Could not recompute the review.');
     } finally {
       setRecomputing(false);
     }

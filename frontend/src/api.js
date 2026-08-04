@@ -51,9 +51,27 @@ api.interceptors.response.use(
       window.location.href = '/organizations';
     }
     // Turn a timeout / unreachable-backend failure into a clear, consistent message so
-    // callers can surface "can't reach the server" instead of appearing to hang.
-    if (!err.response && (err.code === 'ECONNABORTED' || err.code === 'ERR_NETWORK' || err.message === 'Network Error')) {
-      err.friendlyMessage = 'Cannot reach the server. It may be offline or still starting up — check that the backend is running and reachable, then try again.';
+    // callers can surface "can't reach the server" instead of appearing to hang. A
+    // timeout is called out separately: on a long document it usually means the work is
+    // still running, and "the server is offline" would send the user looking in the
+    // wrong place.
+    if (!err.response) {
+      err.friendlyMessage = err.code === 'ECONNABORTED'
+        ? 'The server took too long to answer. Large documents can exceed the time limit — try again, and if it keeps happening split the PDF into smaller parts.'
+        : 'Cannot reach the server. It may be offline or still starting up — check that the backend is running and reachable, then try again.';
+    }
+
+    // An endpoint the app called does not exist on this server. Express answers an
+    // unmatched route with an HTML page, whereas a route that ran and found nothing
+    // answers with JSON — so the HTML body is what distinguishes "this version of the
+    // server has never heard of that endpoint" from an ordinary "not found".
+    //
+    // In practice this means the deployed frontend and backend are different versions:
+    // the backend redeploys itself on every push, the frontend does not. Saying so
+    // beats a generic failure that sends everyone hunting through the actual feature.
+    const body = err.response?.data;
+    if (err.response?.status === 404 && typeof body === 'string' && /^\s*<!doctype html/i.test(body)) {
+      err.friendlyMessage = 'This page is out of step with the server — it is asking for something the server no longer provides. Rebuild and redeploy the site, then try again.';
     }
     return Promise.reject(err);
   }
