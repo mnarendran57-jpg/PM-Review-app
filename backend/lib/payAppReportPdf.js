@@ -241,17 +241,6 @@ async function renderPayAppReportPdf({ report, companyName }) {
     if (c.backupCoverage) text(`Backup documentation: ${c.backupCoverage}`, { size: 9, color: GREY, gapAfter: 10 });
   }
 
-  // What the reviewer confirmed before the review ran. On a document that may be sent to
-  // a contractor, the basis for a finding matters as much as the finding.
-  if (report.answers?.length) {
-    text('What the reviewer confirmed before this review', { bold: true, size: 12, gapAfter: 5 });
-    for (const a of report.answers) {
-      text(a.question, { size: 9, color: GREY, gapAfter: 1 });
-      text(a.answer, { bold: true, gapAfter: 6 });
-    }
-    y -= 4;
-  }
-
   text('To Verify On Site Before Approving', { bold: true, size: 12, gapAfter: 5 });
   if (report.checklist.length === 0) {
     text('Nothing new was billed this period, so there is no new work to confirm on site.', { italic: true, gapAfter: 12 });

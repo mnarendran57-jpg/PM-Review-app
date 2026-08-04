@@ -478,13 +478,6 @@ if (!db.prepare(`PRAGMA table_info(pay_app_reviews)`).all().map(c => c.name).inc
   db.exec(`ALTER TABLE pay_app_reviews ADD COLUMN compliance_findings TEXT`);
 }
 
-// The clarifying questions the reviewer answered before this review ran. Stored with the
-// review because several findings depend on those answers — a review reopened a year later
-// is only defensible if it still says what it was told.
-if (!db.prepare(`PRAGMA table_info(pay_app_reviews)`).all().map(c => c.name).includes('review_answers')) {
-  db.exec(`ALTER TABLE pay_app_reviews ADD COLUMN review_answers TEXT`);
-}
-
 // Default settings
 const existing = db.prepare(`SELECT key FROM settings WHERE key IN ('rfi_response_days','submittal_review_days')`).all();
 const existingKeys = new Set(existing.map(r => r.key));

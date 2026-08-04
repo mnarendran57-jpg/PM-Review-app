@@ -208,100 +208,6 @@ function ContractPanel({ projectId, contract, onChange }) {
   );
 }
 
-// The step between reading the application and reviewing it.
-//
-// Both review standards say to ask the reviewer only about what the documents cannot
-// settle — so this appears with two or three questions on a well-documented job, and
-// more on a thin one. Every question can be left blank: the standards are equally clear
-// that a missing answer must not hold up the review, so skipping runs it anyway and the
-// affected findings simply come back more cautious.
-function QuestionsPanel({ questions, answers, onChange, onRun, onSkip, running }) {
-  const answered = questions.filter(q => {
-    const v = answers[q.id];
-    return v !== undefined && v !== '' && v !== 'unknown';
-  }).length;
-
-  return (
-    <div className="card card-accent p-6 space-y-5" style={{ '--card-accent': 'linear-gradient(90deg, #f59e0b, #ef4444)' }}>
-      <div>
-        <div className="flex items-baseline justify-between gap-3">
-          <h2 className="text-sm font-semibold text-gray-900">A few questions before we review this</h2>
-          <span className="text-xs text-gray-400 flex-shrink-0 tabular-nums">{answered} of {questions.length}</span>
-        </div>
-        <p className="text-xs text-gray-500 mt-1.5">
-          We&apos;ve read the application. These are the things the contract and the documents
-          don&apos;t settle — answering them makes the findings sharper. Leave anything blank and
-          we&apos;ll review without it.
-        </p>
-      </div>
-
-      <div className="space-y-4">
-        {questions.map(q => (
-          <div key={q.id} className="p-3.5 rounded-xl space-y-2" style={{ background: '#fafbfc', border: '1px solid #f1f5f9' }}>
-            <div>
-              <p className="text-xs font-medium text-gray-900">{q.question}</p>
-              <p className="text-[11px] text-gray-400 mt-0.5">{q.why}</p>
-            </div>
-
-            {q.type === 'choice' ? (
-              <div className="flex flex-wrap gap-1.5">
-                {q.options.map(o => {
-                  const selected = answers[q.id] === o.value;
-                  return (
-                    <button
-                      key={o.value}
-                      type="button"
-                      className="px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors"
-                      style={selected
-                        ? { background: '#1e293b', color: '#fff', border: '1px solid #1e293b' }
-                        : { background: '#fff', color: '#475569', border: '1px solid #e2e8f0' }}
-                      // Clicking the selected answer clears it — otherwise a misclick on a
-                      // question the reviewer does not actually know is permanent.
-                      onClick={() => onChange(q.id, selected ? '' : o.value)}
-                    >
-                      {o.label}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5">
-                <input
-                  className="input py-1.5 text-xs"
-                  type={q.type === 'number' ? 'number' : 'text'}
-                  placeholder={q.placeholder || ''}
-                  value={answers[q.id] ?? ''}
-                  onChange={e => onChange(q.id, e.target.value)}
-                />
-                {q.unit && <span className="text-xs text-gray-400 flex-shrink-0">{q.unit}</span>}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      <div className="flex items-center gap-2">
-        <button type="button" className="btn-primary flex-1 justify-center" onClick={onRun} disabled={running}>
-          {running ? (
-            <span className="flex items-center gap-2">
-              <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-              </svg>
-              Reviewing…
-            </span>
-          ) : (
-            <span className="flex items-center gap-2"><SparklesIcon className="w-4 h-4" /> Review this application</span>
-          )}
-        </button>
-        <button type="button" className="btn-secondary px-3" onClick={onSkip} disabled={running}>
-          Skip
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // Where the job stands overall, before looking at any single application. Headline
 // numbers first (the view a PM would turn toward a client), then the application-by-
 // application movement underneath.
@@ -402,13 +308,6 @@ export default function PayAppReview() {
   const [history, setHistory] = useState([]);
   const [viewing, setViewing] = useState(null); // { id, report }
 
-  // The clarifying-questions step. `pending` holds the extracted application while the
-  // reviewer answers, so the extraction is never thrown away and never re-run — that call
-  // is the expensive one, and asking a question should not cost another.
-  const [pending, setPending] = useState(null); // { current, previous, previousReviewId }
-  const [questions, setQuestions] = useState([]);
-  const [answers, setAnswers] = useState({});
-
   // The active project comes from the URL (/project/:id/...). Inside a project the
   // reviewer never picks one — this tool is already scoped to it.
   const ctx = useProject();
@@ -488,12 +387,9 @@ export default function PayAppReview() {
     return () => { cancelled = true; };
   }, [projectId]);
 
-  const runAnalysis = async (current, previous, currentFileForUpload, previousReviewId, reviewAnswers = null) => {
+  const runAnalysis = async (current, previous, currentFileForUpload, previousReviewId) => {
     const fd = new FormData();
     fd.append('current_file', currentFileForUpload);
-    if (reviewAnswers && Object.keys(reviewAnswers).length) {
-      fd.append('answers_json', JSON.stringify(reviewAnswers));
-    }
     for (const f of backupFiles) fd.append('backup_files', f);
     fd.append('current', JSON.stringify(current));
     if (previous) fd.append('previous', JSON.stringify(previous));
@@ -518,7 +414,7 @@ export default function PayAppReview() {
 
   const handleAnalyze = async () => {
     if (!currentFile) { setError('Upload the current pay application PDF first.'); return; }
-    setError(''); setAnalyzing(true); setResult(null); setViewing(null); setEditing(false); setPending(null);
+    setError(''); setAnalyzing(true); setResult(null); setViewing(null); setEditing(false);
     try {
       const fd = new FormData();
       fd.append('current_file', currentFile);
@@ -543,49 +439,7 @@ export default function PayAppReview() {
         }
       }
 
-      // Ask before reviewing, not after. The questions depend on what the extraction
-      // found — a rate printed on the form is a rate we don't need to ask about — so
-      // they can only be worked out once the application has been read.
-      const { questions: asked } = await payAppReviewApi.questions({
-        project_id: projectId || undefined,
-        current: JSON.stringify(extracted.current),
-        retainage_rate: retainageRate ? parseFloat(retainageRate) / 100 : undefined,
-        original_contract_sum: contractSum || undefined,
-        co_log_csv: coLogCsv || undefined,
-        has_backup: backupFiles.length > 0,
-      });
-
-      if (asked.length > 0) {
-        setPending({ current: extracted.current, previous: previousData, previousReviewId });
-        setQuestions(asked);
-        // Questions that ship a default start on it, so the reviewer only touches the
-        // ones where their answer differs from the standard's own default.
-        setAnswers(Object.fromEntries(asked.filter(q => q.default).map(q => [q.id, q.default])));
-        return;
-      }
-
       await runAnalysis(extracted.current, previousData, currentFile, previousReviewId);
-    } catch (err) {
-      setError(err.response?.data?.error || 'Could not analyze these pay applications.');
-    } finally {
-      setAnalyzing(false);
-    }
-  };
-
-  // Runs the review the reviewer has been answering questions for. `withAnswers` is false
-  // when they skip — the review still runs, it just runs without the extra context.
-  const runPending = async withAnswers => {
-    setError(''); setAnalyzing(true);
-    try {
-      await runAnalysis(
-        pending.current, pending.previous, currentFile, pending.previousReviewId,
-        withAnswers ? answers : null
-      );
-      setPending(null);
-      setQuestions([]);
-      // Skipping discards the pre-filled defaults too, so a later "correct a value and
-      // recompute" doesn't quietly apply answers the reviewer chose not to give.
-      if (!withAnswers) setAnswers({});
     } catch (err) {
       setError(err.response?.data?.error || 'Could not analyze these pay applications.');
     } finally {
@@ -599,9 +453,7 @@ export default function PayAppReview() {
   const handleRecompute = async () => {
     setError(''); setRecomputing(true);
     try {
-      // Carry the answers through a correction — the reviewer answered them for this
-      // application, and a corrected figure doesn't change what the contract says.
-      await runAnalysis(result.extracted.current, result.extracted.previous, currentFile, result.previousReviewId, answers);
+      await runAnalysis(result.extracted.current, result.extracted.previous, currentFile, result.previousReviewId);
       setEditing(false);
     } catch (err) {
       setError(err.response?.data?.error || 'Could not recompute the review.');
@@ -630,7 +482,6 @@ export default function PayAppReview() {
     setCurrentFile(null); setPreviousFile(null); setBackupFiles([]); setHistoryMatch(null);
     setUsePreviousFromHistory(false); setResult(null); setViewing(null); setError(''); setEditing(false);
     setContractSum(''); setCoLogCsv(''); setRetainageRate(''); setRetainageMilestonePct(''); setRetainageReducedRate('');
-    setPending(null); setQuestions([]); setAnswers({});
   };
 
   const [confirm, confirmDialog] = useConfirm();
@@ -848,17 +699,6 @@ export default function PayAppReview() {
         <div className="col-span-3 space-y-4">
           {budget && <BudgetSummary budget={budget} />}
 
-          {pending && (
-            <QuestionsPanel
-              questions={questions}
-              answers={answers}
-              onChange={(id, value) => setAnswers(a => ({ ...a, [id]: value }))}
-              onRun={() => runPending(true)}
-              onSkip={() => runPending(false)}
-              running={analyzing}
-            />
-          )}
-
           {result && (
             <>
               <div className="flex items-center justify-between">
@@ -910,7 +750,7 @@ export default function PayAppReview() {
             </>
           )}
 
-          {!result && !viewing && !pending && (
+          {!result && !viewing && (
             <>
               <h2 className="text-sm font-semibold text-gray-900">Review History</h2>
               <div className="space-y-2">

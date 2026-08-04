@@ -14,7 +14,7 @@ function safeJsonFromText(text) {
   }
 }
 
-function buildPrompt({ contractTerms, scopeBaseline, currentItems, coLog, answersBlock = '' }) {
+function buildPrompt({ contractTerms, scopeBaseline, currentItems, coLog }) {
   const banned = contractTerms?.unallowableItems || [];
   const scopeSection = scopeBaseline
     ? `
@@ -35,7 +35,7 @@ ${coLog?.length
   return `Audit this contractor's pay application and its backup documentation (receipts,
 invoices, lien waivers) against the executed contract, on behalf of the owner's project
 manager, applying the two standards in your instructions.
-${answersBlock}
+
 ${contractTerms ? `The contract's relevant terms, already verified by the PM:
 ${JSON.stringify(
     {
@@ -148,8 +148,8 @@ const findingKey = item =>
 // Reads an over-long submission in passes: the pay app on its own, then each slice of backup
 // alongside the pay app's first pages so coverage can still be judged. Findings concatenate,
 // deduped, since the same issue may be visible in more than one pass.
-async function scanInPasses({ payAppPart, payAppParts, backupParts, contractTerms, scopeBaseline, currentItems, coLog, answersBlock }) {
-  const prompt = buildPrompt({ contractTerms, scopeBaseline, currentItems, coLog, answersBlock });
+async function scanInPasses({ payAppPart, payAppParts, backupParts, contractTerms, scopeBaseline, currentItems, coLog }) {
+  const prompt = buildPrompt({ contractTerms, scopeBaseline, currentItems, coLog });
   const passes = [
     ...payAppParts.map(part => ({ docs: [part.buffer], part })),
     ...backupParts.map(part => ({ docs: [payAppPart, part.buffer], part, isBackup: true })),
@@ -213,7 +213,7 @@ async function scanInPasses({ payAppPart, payAppParts, backupParts, contractTerm
 //
 // Returns advisory findings — this is a model reading documents and exercising
 // judgment, not arithmetic. The caller renders it separately from the math checks.
-async function scanCompliance({ payAppBuffer, backupBuffers = [], contractTerms, scopeBaseline = null, currentItems = null, coLog = null, answersBlock = '' }) {
+async function scanCompliance({ payAppBuffer, backupBuffers = [], contractTerms, scopeBaseline = null, currentItems = null, coLog = null }) {
   // Runs with contract terms (tax + unallowable review), a scope baseline (in/out-of-
   // contract comparison), or both. With neither there is nothing to audit against.
   if (!contractTerms && !scopeBaseline) return null;
@@ -227,7 +227,7 @@ async function scanCompliance({ payAppBuffer, backupBuffers = [], contractTerms,
   if (oversized) {
     return scanInPasses({
       payAppPart: payAppParts[0].buffer, payAppParts, backupParts,
-      contractTerms, scopeBaseline, currentItems, coLog, answersBlock,
+      contractTerms, scopeBaseline, currentItems, coLog,
     });
   }
 
@@ -237,7 +237,7 @@ async function scanCompliance({ payAppBuffer, backupBuffers = [], contractTerms,
   for (const buf of backupBuffers) {
     content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') } });
   }
-  content.push({ type: 'text', text: buildPrompt({ contractTerms, scopeBaseline, currentItems, coLog, answersBlock }) });
+  content.push({ type: 'text', text: buildPrompt({ contractTerms, scopeBaseline, currentItems, coLog }) });
 
   let response;
   try {

@@ -336,31 +336,8 @@ function ScopeComparisonChart({ compliance }) {
   );
 }
 
-// What the reviewer told us before the review ran. Kept on the report because several
-// findings depend on these answers — anyone reading it later, or disagreeing with it,
-// needs to see what the review was working from.
-function ReviewAnswers({ answers }) {
-  if (!answers?.length) return null;
-  return (
-    <div className="card p-5 space-y-2">
-      <div>
-        <h3 className="text-sm font-semibold text-gray-900">What You Told Us Before This Review Ran</h3>
-        <p className="text-[11px] text-gray-500 mt-1">
-          Treated as fact about the contract. If one of these is wrong, the findings that rest on it are too.
-        </p>
-      </div>
-      {answers.map((a, i) => (
-        <div key={i}>
-          <p className="text-xs text-gray-500">{a.question}</p>
-          <p className="text-sm font-medium text-gray-900">{a.answer}</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export default function PayAppReportView({ report }) {
-  const { header, plainEnglish, critical, mathErrors, worthNoting = [], warnings, cleanBill, checklist = [], compliance = null, subReconciliation = [], answers = [] } = report;
+  const { header, plainEnglish, critical, mathErrors, worthNoting = [], warnings, cleanBill, checklist = [], compliance = null, subReconciliation = [] } = report;
   const isClean = critical.length === 0 && mathErrors.length === 0;
 
   return (
@@ -406,7 +383,6 @@ export default function PayAppReportView({ report }) {
       <SubReconciliationChart rows={subReconciliation} />
       <ScopeComparisonChart compliance={compliance} />
       <ContractComplianceSection compliance={compliance} />
-      <ReviewAnswers answers={answers} />
       <SiteVerificationChecklist items={checklist} />
       <CheckSection title="Checks We Couldn't Fully Complete" icon={InformationCircleIcon} items={warnings} color="#a16207" bg="#fefce8" defaultOpen={false} />
       <CheckSection title="Everything Else Checked Out Fine" icon={CheckCircleIcon} items={cleanBill} color="#15803d" bg="#f0fdf4" defaultOpen={false} />

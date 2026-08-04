@@ -18,7 +18,7 @@ const TAX_FINDING_LABEL = {
 const severityTag = s =>
   s === 'Critical' || s === 'High' ? ` **[${s}]**` : s === 'Medium' || s === 'Low' ? ` [${s}]` : '';
 
-function buildReport({ data, results, compliance = null, contractTerms = null, subReconciliation = [], answers = [] }) {
+function buildReport({ data, results, compliance = null, contractTerms = null, subReconciliation = [] }) {
   const s = data.current.summary;
   // N-series checks are "missed and worth noting" observations, not calculation
   // errors — they get their own section rather than being mixed into the math.
@@ -76,12 +76,12 @@ function buildReport({ data, results, compliance = null, contractTerms = null, s
     billedPct, retainedPct,
   };
 
-  const markdown = renderMarkdown({ header, plainEnglish, critical, mathErrors, worthNoting, warnings, cleanBill, checklist, compliance, contractTerms, subReconciliation, answers });
+  const markdown = renderMarkdown({ header, plainEnglish, critical, mathErrors, worthNoting, warnings, cleanBill, checklist, compliance, contractTerms, subReconciliation });
 
-  return { header, plainEnglish, critical, mathErrors, worthNoting, warnings, cleanBill, checklist, compliance, contractTerms, subReconciliation, answers, markdown };
+  return { header, plainEnglish, critical, mathErrors, worthNoting, warnings, cleanBill, checklist, compliance, contractTerms, subReconciliation, markdown };
 }
 
-function renderMarkdown({ header, plainEnglish, critical, mathErrors, worthNoting, warnings, cleanBill, checklist, compliance, contractTerms, subReconciliation, answers = [] }) {
+function renderMarkdown({ header, plainEnglish, critical, mathErrors, worthNoting, warnings, cleanBill, checklist, compliance, contractTerms, subReconciliation }) {
   const lines = [];
   lines.push(`# Pay Application Review — ${header.projectName}`);
   lines.push('');
@@ -228,21 +228,6 @@ function renderMarkdown({ header, plainEnglish, critical, mathErrors, worthNotin
 
   section('Checks We Couldn\'t Fully Complete', warnings, '_None._');
   section('Everything Else Checked Out Fine', cleanBill, '_None passed._');
-
-  // What the reviewer told us, recorded on the report itself. Several findings above turn
-  // on these answers, so anyone reading the report later — or disputing it — needs to see
-  // what the review was told before it ran.
-  if (answers.length > 0) {
-    lines.push('## What You Told Us Before This Review Ran');
-    lines.push('');
-    lines.push('> These answers were treated as fact about the contract. If one of them is wrong, the findings that depend on it are too.');
-    lines.push('');
-    for (const a of answers) {
-      lines.push(`- **${a.question}**`);
-      lines.push(`  ${a.answer}`);
-    }
-    lines.push('');
-  }
 
   return lines.join('\n');
 }
