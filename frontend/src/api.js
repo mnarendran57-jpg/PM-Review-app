@@ -271,6 +271,10 @@ export const payAppReviewApi = {
   create: formData => api.post('/pay-app-review', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),
+  // The clarifying questions to put to the reviewer for this particular application.
+  // Derived server-side from what the contract and the extraction leave unanswered, so
+  // it is a fast, ordinary request — no AI call, no long timeout.
+  questions: payload => api.post('/pay-app-review/questions', payload).then(r => r.data),
   projects: () => api.get('/pay-app-review/projects').then(r => r.data),
   createProject: projectName =>
     api.post('/pay-app-review/projects', { project_name: projectName }).then(r => r.data),

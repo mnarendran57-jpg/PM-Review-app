@@ -12,6 +12,7 @@ const { scanCompliance } = require('../lib/payAppCompliance');
 const { buildSubReconciliation, runMissedItemChecks } = require('../lib/payAppReconcile');
 const { buildSiteVerificationChecklist } = require('../lib/payAppChecklist');
 const { backfillPayApp } = require('../lib/payAppNormalize');
+const { buildQuestions, formatAnswers, retainageFrom } = require('../lib/payAppQuestions');
 const { parseCoLogCsv } = require('../lib/csv');
 const { friendlyAiError } = require('../lib/aiErrors');
 const storage = require('../lib/storage');
@@ -61,6 +62,45 @@ router.post('/extract', upload.fields([{ name: 'current_file', maxCount: 1 }, { 
     console.error('Pay app extract error:', err);
     res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });
   }
+});
+
+// The terms of the contract this project's pay apps are judged against.
+function storedContractTerms(projectId) {
+  if (!projectId) return null;
+  const row = db.prepare(`
+    SELECT terms FROM project_contracts WHERE project_id = ? ORDER BY created_at DESC LIMIT 1
+  `).get(projectId);
+  return row ? JSON.parse(row.terms) : null;
+}
+
+// Both review standards say to ask the reviewer only about what the documents cannot
+// settle, and never to hold up the review waiting. So the questions are computed from
+// the gaps left after reading the contract and the extracted application — the reviewer
+// is asked two or three things on a well-documented job, and more on a thin one.
+//
+// Called after extraction and before the review runs, so the answers can feed both the
+// arithmetic and the document scan.
+router.post('/questions', (req, res) => {
+  const projectId = req.body.project_id ? Number(req.body.project_id) : null;
+  if (projectId && !visibleProject(req, projectId)) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  const current = req.body.current ? JSON.parse(req.body.current) : null;
+  if (!current) return res.status(400).json({ error: 'The extracted current application is required' });
+
+  const retainageRate = req.body.retainage_rate ? parseFloat(req.body.retainage_rate) : null;
+
+  res.json({
+    questions: buildQuestions({
+      current,
+      contractTerms: storedContractTerms(projectId),
+      retainagePolicy: retainageRate ? { rate: retainageRate } : null,
+      originalContractSum: req.body.original_contract_sum ? parseFloat(req.body.original_contract_sum) : null,
+      coLog: req.body.co_log_csv || req.body.co_log_json || null,
+      hasBackup: req.body.has_backup === 'true' || req.body.has_backup === true,
+    }),
+  });
 });
 
 // Projects to offer in the Pay App Review dropdown. Deliberately not a full project
@@ -428,13 +468,48 @@ router.post('/', upload.fields([
     // contract-level figures the reviewer would otherwise re-type every period, and for
     // the tax / unallowable-item rules. Anything typed on the form still wins — the PM
     // overriding a term is a deliberate act.
-    let contractTerms = null;
-    if (projectId) {
-      const contractRow = db.prepare(`
-        SELECT terms FROM project_contracts WHERE project_id = ? ORDER BY created_at DESC LIMIT 1
-      `).get(projectId);
-      if (contractRow) contractTerms = JSON.parse(contractRow.terms);
+    let contractTerms = storedContractTerms(projectId);
+
+    // What the reviewer answered when asked about the gaps. Recomputing the questions
+    // here rather than trusting the ones the browser sent keeps the answers tied to real
+    // questions — a client cannot invent a question to smuggle text into the prompt.
+    const answers = req.body.answers_json ? JSON.parse(req.body.answers_json) : null;
+    const questions = answers
+      ? buildQuestions({
+          current,
+          contractTerms,
+          retainagePolicy,
+          originalContractSum,
+          coLog: changeOrderLog,
+          hasBackup: backupFiles.length > 0,
+        })
+      : [];
+    const answersBlock = formatAnswers(questions, answers);
+    const answersForReport = questions
+      .filter(q => answers?.[q.id] != null && answers[q.id] !== '' && answers[q.id] !== 'unknown')
+      .map(q => ({
+        question: q.question,
+        answer: q.type === 'choice'
+          ? (q.options.find(o => o.value === answers[q.id])?.label ?? answers[q.id])
+          : (q.unit === '%' ? `${answers[q.id]}%` : String(answers[q.id])),
+      }));
+
+    // A tax status the reviewer confirmed is a contract term the extraction simply missed,
+    // so it feeds the scan the same way an extracted one does. It only ever fills a gap —
+    // an answer never overwrites a status actually found in the contract.
+    if (answers?.taxStatus && answers.taxStatus !== 'unknown'
+      && contractTerms?.taxExempt !== true && contractTerms?.taxExempt !== false) {
+      contractTerms = {
+        ...(contractTerms || {}),
+        taxExempt: answers.taxStatus === 'exempt',
+        taxExemptBasis: 'Confirmed by the reviewer — not stated in the contract on file.',
+      };
     }
+
+    // Same for retainage: a rate given in answer to a question is a real contract term,
+    // so it should drive the arithmetic, not just the narrative.
+    if (!retainagePolicy) retainagePolicy = retainageFrom(answers);
+
     if (contractTerms) {
       if (originalContractSum == null && contractTerms.originalContractSum != null) {
         originalContractSum = contractTerms.originalContractSum;
@@ -498,19 +573,20 @@ router.post('/', upload.fields([
             itemNo: li.itemNo, description: li.description, scheduledValue: li.c ?? null, billedToDate: li.g ?? null,
           })),
           coLog: changeOrderLog,
+          answersBlock,
         });
       } catch (err) {
         console.error('Compliance scan failed (review continues):', err.message);
         compliance = {
           scopeComparison: null, scopeSource: null,
-          taxFindings: [], unallowableFindings: [], backupCoverage: null,
+          taxFindings: [], unallowableFindings: [], anomalies: [], backupCoverage: null,
           notes: `The contract compliance scan could not be completed (${friendlyAiError(err)}). The math checks are unaffected.`,
           incomplete: true,
         };
       }
     }
 
-    const report = buildReport({ data, results, compliance, contractTerms, subReconciliation: subRecon.rows });
+    const report = buildReport({ data, results, compliance, contractTerms, subReconciliation: subRecon.rows, answers: answersForReport });
 
     const criticalCount = results.filter(r => r.critical && r.status === 'FAIL').length;
     const failCount = results.filter(r => r.status === 'FAIL').length;
@@ -524,8 +600,8 @@ router.post('/', upload.fields([
         extracted_data, checks_result, report_markdown,
         current_file_name, current_file, current_file_key, previous_review_id,
         contract_sum, co_log, critical_count, fail_count, created_by, project_id,
-        compliance_findings
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        compliance_findings, review_answers
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.orgId,
       current.summary.projectName || null,
@@ -545,7 +621,8 @@ router.post('/', upload.fields([
       criticalCount, failCount,
       req.body.created_by || null,
       projectId,
-      compliance ? JSON.stringify(compliance) : null
+      compliance ? JSON.stringify(compliance) : null,
+      answersForReport.length ? JSON.stringify(answersForReport) : null
     );
 
     res.json({ id: insertResult.lastInsertRowid, projectId, report, results });
@@ -582,6 +659,7 @@ router.get('/:id', (req, res) => {
   const report = buildReport({
     data: extractedData, results, compliance,
     subReconciliation: buildSubReconciliation(extractedData.current).rows,
+    answers: row.review_answers ? JSON.parse(row.review_answers) : [],
   });
   res.json({
     ...row,
@@ -617,6 +695,7 @@ router.get('/:id/report.pdf', async (req, res) => {
       data, results,
       compliance: row.compliance_findings ? JSON.parse(row.compliance_findings) : null,
       subReconciliation: buildSubReconciliation(data.current).rows,
+      answers: row.review_answers ? JSON.parse(row.review_answers) : [],
     });
 
     const pdf = await renderPayAppReportPdf({ report, companyName: 'Coaster' });
