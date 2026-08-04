@@ -1,6 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const { splitPdf, partNotice } = require('./pdfChunk');
-const { standardsSystemPrompt } = require('./reviewStandards');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -32,9 +31,9 @@ ${coLog?.length
 `
     : '';
 
-  return `Audit this contractor's pay application and its backup documentation (receipts,
-invoices, lien waivers) against the executed contract, on behalf of the owner's project
-manager, applying the two standards in your instructions.
+  return `You are auditing a contractor's pay application and its backup documentation
+(receipts, invoices, lien waivers) against the executed contract, on behalf of the
+owner's project manager.
 
 ${contractTerms ? `The contract's relevant terms, already verified by the PM:
 ${JSON.stringify(
@@ -65,10 +64,6 @@ Return ONLY valid JSON in this exact shape:
       "where": "<which document/page/line this appears on>",
       "description": "<what is being taxed>",
       "amount": <number or null>,
-      "finding": "<the required tax finding, exactly one of: \\"reimbursable\\" | \\"contractor_absorbs\\" | \\"already_in_sub_price\\" | \\"exempt_remove\\" | \\"miscalculated\\" | \\"unsupported\\" | \\"needs_documentation\\" | \\"needs_tax_review\\">",
-      "taxableBase": <the amount the tax was calculated on, number or null>,
-      "rate": <the tax rate as a decimal e.g. 0.0825, or null>,
-      "severity": "<\\"Critical\\" | \\"High\\" | \\"Medium\\" | \\"Low\\">",
       "detail": "<plain English: what you found and why it matters>"
     }
   ],
@@ -77,17 +72,7 @@ Return ONLY valid JSON in this exact shape:
       "contractItem": "<which unallowable item from the contract this matches>",
       "where": "<which document/page/line this appears on>",
       "amount": <number or null>,
-      "severity": "<\\"Critical\\" | \\"High\\" | \\"Medium\\" | \\"Low\\">",
       "detail": "<plain English: what is being billed and which contract term it conflicts with>"
-    }
-  ],
-  "anomalies": [
-    {
-      "title": "<short label for the anomaly>",
-      "where": "<which document/page/line this appears on>",
-      "amount": <number or null>,
-      "severity": "<\\"Critical\\" | \\"High\\" | \\"Medium\\" | \\"Low\\">",
-      "detail": "<plain English: what you observed, stated as an observation to investigate rather than a proven error>"
     }
   ],
   "backupCoverage": "<plain English: what backup documentation was actually present, and what is billed but has no backup at all. Or null if you cannot tell.>",
@@ -110,15 +95,6 @@ ${scopeBaseline ? `- "scopeComparison": every line item on the CURRENT applicati
 - For "unallowableFindings", only report costs matching an item in the contract's
   unallowableItems list above. Do NOT invent unallowable items from general practice —
   if this contract does not forbid it, it is not a finding.
-- "finding" on each tax entry is required — it is the tax standard's Required Tax Finding.
-  Use "needs_tax_review" rather than guessing when the treatment cannot be settled from
-  the contract and the documents in front of you.
-- "anomalies" is the Risk and Anomaly Review: duplicate invoices or amounts, reused waiver
-  pages, altered totals, front-loading, round-dollar unsupported charges, billing before a
-  subcontract was executed, stored materials that never move, mismatched entity or project
-  names, markup on markup. Word each as something to investigate. Do not allege fraud.
-- "severity" follows the standard's Issue Classification. Reserve Critical for things that
-  should stop payment; a formatting inconsistency is Low.
 - Ground every finding in something actually visible in the documents. Quote or cite where
   you saw it. If you cannot point to it, leave it out.
 - Dollar amounts are plain numbers (no "$", no commas).
@@ -133,17 +109,12 @@ async function callClaude(content) {
     // Raised from 8000 when the scope comparison was added — its table returns one
     // row per G703 line item.
     max_tokens: 12000,
-    // The two review standards. They go in the system prompt, marked cacheable, because
-    // they are identical on every call — so a long submission read in several passes,
-    // and every review run within the cache window, pays for them once.
-    system: standardsSystemPrompt(),
     messages: [{ role: 'user', content }],
   });
 }
 
 const findingKey = item =>
-  JSON.stringify(item?.description ?? item?.title ?? item?.contractItem ?? item?.item ?? item)
-    .trim().toLowerCase();
+  JSON.stringify(item?.description ?? item?.item ?? item).trim().toLowerCase();
 
 // Reads an over-long submission in passes: the pay app on its own, then each slice of backup
 // alongside the pay app's first pages so coverage can still be judged. Findings concatenate,
@@ -198,7 +169,6 @@ async function scanInPasses({ payAppPart, payAppParts, backupParts, contractTerm
     scopeSource: scopeBaseline ? scopeBaseline.source : null,
     taxFindings: gather('taxFindings'),
     unallowableFindings: gather('unallowableFindings'),
-    anomalies: gather('anomalies'),
     backupCoverage: results.map(r => r?.backupCoverage).filter(Boolean).join(' ') || null,
     notes: results.map(r => r?.notes).filter(Boolean).join(' ') || null,
     incomplete: results.length === 0,
@@ -256,7 +226,7 @@ async function scanCompliance({ payAppBuffer, backupBuffers = [], contractTerms,
     // load-bearing part and they have already run.
     return {
       scopeComparison: null, scopeSource: null,
-      taxFindings: [], unallowableFindings: [], anomalies: [], backupCoverage: null,
+      taxFindings: [], unallowableFindings: [], backupCoverage: null,
       notes: 'The contract compliance scan was cut off — there was more backup documentation than could be read in one pass. The math checks above are unaffected, but the compliance review is incomplete.',
       incomplete: true,
     };
@@ -264,13 +234,7 @@ async function scanCompliance({ payAppBuffer, backupBuffers = [], contractTerms,
 
   const parsed = safeJsonFromText(response.content[0].text);
   if (response.usage) {
-    // cache_read is the standards being served from cache rather than re-billed. If it
-    // stays at zero across consecutive reviews, the cached prefix is being invalidated.
-    const u = response.usage;
-    console.log(
-      `[compliance scan] in=${u.input_tokens} out=${u.output_tokens} ` +
-      `cache_write=${u.cache_creation_input_tokens ?? 0} cache_read=${u.cache_read_input_tokens ?? 0} tokens`
-    );
+    console.log(`[compliance scan] in=${response.usage.input_tokens} out=${response.usage.output_tokens} tokens`);
   }
   return {
     scopeComparison: scopeBaseline && Array.isArray(parsed.scopeComparison)
@@ -279,7 +243,6 @@ async function scanCompliance({ payAppBuffer, backupBuffers = [], contractTerms,
     scopeSource: scopeBaseline ? scopeBaseline.source : null,
     taxFindings: Array.isArray(parsed.taxFindings) ? parsed.taxFindings : [],
     unallowableFindings: Array.isArray(parsed.unallowableFindings) ? parsed.unallowableFindings : [],
-    anomalies: Array.isArray(parsed.anomalies) ? parsed.anomalies : [],
     backupCoverage: parsed.backupCoverage || null,
     notes: parsed.notes || null,
     incomplete: false,

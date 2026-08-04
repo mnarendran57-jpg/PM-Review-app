@@ -63,15 +63,6 @@ router.post('/extract', upload.fields([{ name: 'current_file', maxCount: 1 }, { 
   }
 });
 
-// The terms of the contract this project's pay apps are judged against.
-function storedContractTerms(projectId) {
-  if (!projectId) return null;
-  const row = db.prepare(`
-    SELECT terms FROM project_contracts WHERE project_id = ? ORDER BY created_at DESC LIMIT 1
-  `).get(projectId);
-  return row ? JSON.parse(row.terms) : null;
-}
-
 // Projects to offer in the Pay App Review dropdown. Deliberately not a full project
 // list: only projects that are Active, ordered so the ones with recent pay app
 // activity surface first. Projects are created implicitly when a pay app is reviewed,
@@ -437,7 +428,13 @@ router.post('/', upload.fields([
     // contract-level figures the reviewer would otherwise re-type every period, and for
     // the tax / unallowable-item rules. Anything typed on the form still wins — the PM
     // overriding a term is a deliberate act.
-    const contractTerms = storedContractTerms(projectId);
+    let contractTerms = null;
+    if (projectId) {
+      const contractRow = db.prepare(`
+        SELECT terms FROM project_contracts WHERE project_id = ? ORDER BY created_at DESC LIMIT 1
+      `).get(projectId);
+      if (contractRow) contractTerms = JSON.parse(contractRow.terms);
+    }
     if (contractTerms) {
       if (originalContractSum == null && contractTerms.originalContractSum != null) {
         originalContractSum = contractTerms.originalContractSum;
@@ -506,7 +503,7 @@ router.post('/', upload.fields([
         console.error('Compliance scan failed (review continues):', err.message);
         compliance = {
           scopeComparison: null, scopeSource: null,
-          taxFindings: [], unallowableFindings: [], anomalies: [], backupCoverage: null,
+          taxFindings: [], unallowableFindings: [], backupCoverage: null,
           notes: `The contract compliance scan could not be completed (${friendlyAiError(err)}). The math checks are unaffected.`,
           incomplete: true,
         };

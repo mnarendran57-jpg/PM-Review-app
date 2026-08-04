@@ -1,23 +1,6 @@
 const { money } = require('./payAppChecks');
 const { buildSiteVerificationChecklist } = require('./payAppChecklist');
 
-// The tax standard requires every material tax charge to carry one of these findings.
-// Rendering the raw key would leave the PM to decode it, so each maps to the sentence a
-// reviewer would actually write.
-const TAX_FINDING_LABEL = {
-  reimbursable: 'Owner reimbursable',
-  contractor_absorbs: 'Already in the contract price — the contractor absorbs this',
-  already_in_sub_price: "Already in the subcontractor's price — cannot be billed again",
-  exempt_remove: 'Exempt — should be removed',
-  miscalculated: 'Incorrectly calculated',
-  unsupported: 'Unsupported',
-  needs_documentation: 'Needs more documentation',
-  needs_tax_review: 'Needs jurisdiction-specific tax review',
-};
-
-const severityTag = s =>
-  s === 'Critical' || s === 'High' ? ` **[${s}]**` : s === 'Medium' || s === 'Low' ? ` [${s}]` : '';
-
 function buildReport({ data, results, compliance = null, contractTerms = null, subReconciliation = [] }) {
   const s = data.current.summary;
   // N-series checks are "missed and worth noting" observations, not calculation
@@ -31,7 +14,6 @@ function buildReport({ data, results, compliance = null, contractTerms = null, s
   const checklist = buildSiteVerificationChecklist(data.current, data.previous);
   const complianceCount =
     (compliance?.taxFindings?.length || 0) + (compliance?.unallowableFindings?.length || 0);
-  const anomalies = compliance?.anomalies || [];
   const outOfContract = (compliance?.scopeComparison || []).filter(r => r.status === 'not_in_contract');
 
   const billedPct = s.line3 ? (s.line4 / s.line3) * 100 : null;
@@ -60,9 +42,6 @@ function buildReport({ data, results, compliance = null, contractTerms = null, s
   }
   if (outOfContract.length > 0) {
     plainEnglish += ` ${outOfContract.length} billed line${outOfContract.length === 1 ? '' : 's'} appear${outOfContract.length === 1 ? 's' : ''} to be outside the contract scope.`;
-  }
-  if (anomalies.length > 0) {
-    plainEnglish += ` ${anomalies.length} anomal${anomalies.length === 1 ? 'y' : 'ies'} to investigate.`;
   }
 
   const header = {
@@ -174,16 +153,7 @@ function renderMarkdown({ header, plainEnglish, critical, mathErrors, worthNotin
       lines.push(`### Tax found${contractTerms?.taxExempt === true ? ' on a tax-exempt project' : ''}`);
       lines.push('');
       for (const f of compliance.taxFindings) {
-        lines.push(`- **${f.description}**${f.amount != null ? ` — ${money(f.amount)}` : ''}${f.where ? ` (${f.where})` : ''}${severityTag(f.severity)}`);
-        // Who owes this tax is the whole point of the tax review, so it is stated on its
-        // own line rather than left inside the narrative.
-        const label = TAX_FINDING_LABEL[f.finding];
-        if (label) lines.push(`  _${label}._`);
-        // Shown only when the model actually derived the tax rather than just spotting it —
-        // this is the arithmetic the reviewer would otherwise redo by hand.
-        if (f.taxableBase != null && f.rate != null) {
-          lines.push(`  ${money(f.taxableBase)} × ${(f.rate * 100).toFixed(3).replace(/\.?0+$/, '')}% = ${money(f.taxableBase * f.rate)} expected.`);
-        }
+        lines.push(`- **${f.description}**${f.amount != null ? ` — ${money(f.amount)}` : ''}${f.where ? ` (${f.where})` : ''}`);
         lines.push(`  ${f.detail}`);
       }
       lines.push('');
@@ -193,25 +163,13 @@ function renderMarkdown({ header, plainEnglish, critical, mathErrors, worthNotin
       lines.push('### Costs the contract does not allow');
       lines.push('');
       for (const f of compliance.unallowableFindings) {
-        lines.push(`- **${f.contractItem}**${f.amount != null ? ` — ${money(f.amount)}` : ''}${f.where ? ` (${f.where})` : ''}${severityTag(f.severity)}`);
+        lines.push(`- **${f.contractItem}**${f.amount != null ? ` — ${money(f.amount)}` : ''}${f.where ? ` (${f.where})` : ''}`);
         lines.push(`  ${f.detail}`);
       }
       lines.push('');
     }
 
-    if (compliance.anomalies?.length) {
-      lines.push('### Anomalies to investigate');
-      lines.push('');
-      lines.push('> Patterns worth a second look — duplicate amounts, reused pages, front-loading, billing that predates authorisation. These are observations, not proven errors.');
-      lines.push('');
-      for (const a of compliance.anomalies) {
-        lines.push(`- **${a.title}**${a.amount != null ? ` — ${money(a.amount)}` : ''}${a.where ? ` (${a.where})` : ''}${severityTag(a.severity)}`);
-        lines.push(`  ${a.detail}`);
-      }
-      lines.push('');
-    }
-
-    if (!compliance.taxFindings?.length && !compliance.unallowableFindings?.length && !compliance.anomalies?.length) {
+    if (!compliance.taxFindings?.length && !compliance.unallowableFindings?.length) {
       lines.push('_Nothing on this application conflicts with the contract terms on file._');
       lines.push('');
     }

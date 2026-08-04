@@ -169,27 +169,12 @@ async function renderPayAppReportPdf({ report, companyName }) {
   // above and worded as items to confirm.
   const c = report.compliance;
   if (c) {
-    // The tax standard requires every material tax charge to state who owes it. On the
-    // client-facing PDF that verdict is the point of the finding, so it gets its own line.
-    const TAX_VERDICT = {
-      reimbursable: 'Owner reimbursable',
-      contractor_absorbs: 'Already in the contract price — the contractor absorbs this',
-      already_in_sub_price: "Already in the subcontractor's price — cannot be billed again",
-      exempt_remove: 'Exempt — should be removed',
-      miscalculated: 'Incorrectly calculated',
-      unsupported: 'Unsupported',
-      needs_documentation: 'Needs more documentation',
-      needs_tax_review: 'Needs jurisdiction-specific tax review',
-    };
-    const sev = s => (s ? `  [${s}]` : '');
-
     const findings = [
       ...(c.taxFindings || []).map(f => ({
-        head: `Tax charged: ${f.description}${sev(f.severity)}`, amount: f.amount, where: f.where, detail: f.detail,
-        verdict: TAX_VERDICT[f.finding],
+        head: `Tax charged: ${f.description}`, amount: f.amount, where: f.where, detail: f.detail,
       })),
       ...(c.unallowableFindings || []).map(f => ({
-        head: `Not allowed by contract: ${f.contractItem}${sev(f.severity)}`, amount: f.amount, where: f.where, detail: f.detail,
+        head: `Not allowed by contract: ${f.contractItem}`, amount: f.amount, where: f.where, detail: f.detail,
       })),
     ];
     text('Checked Against the Contract', { bold: true, size: 12, gapAfter: 3 });
@@ -221,23 +206,10 @@ async function renderPayAppReportPdf({ report, companyName }) {
       for (const f of findings) {
         text(`• ${f.head}${f.amount != null ? ` — ${money(f.amount)}` : ''}`, { bold: true, gapAfter: 2 });
         if (f.where) text(f.where, { indent: 12, size: 9, color: GREY, gapAfter: 1 });
-        if (f.verdict) text(f.verdict, { indent: 12, italic: true, gapAfter: 1 });
         text(f.detail, { indent: 12, gapAfter: 7 });
       }
       y -= 4;
     }
-
-    if (c.anomalies?.length) {
-      text('Anomalies to investigate', { bold: true, size: 10, gapAfter: 2 });
-      text('Patterns worth a second look. Observations, not proven errors.', { size: 9, italic: true, color: GREY, gapAfter: 5 });
-      for (const a of c.anomalies) {
-        text(`• ${a.title}${a.severity ? `  [${a.severity}]` : ''}${a.amount != null ? ` — ${money(a.amount)}` : ''}`, { bold: true, gapAfter: 2 });
-        if (a.where) text(a.where, { indent: 12, size: 9, color: GREY, gapAfter: 1 });
-        text(a.detail, { indent: 12, gapAfter: 7 });
-      }
-      y -= 4;
-    }
-
     if (c.backupCoverage) text(`Backup documentation: ${c.backupCoverage}`, { size: 9, color: GREY, gapAfter: 10 });
   }
 

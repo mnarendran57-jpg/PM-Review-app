@@ -117,52 +117,15 @@ function SiteVerificationChecklist({ items }) {
 // Findings read from the documents against the executed contract. Kept visually distinct
 // from the math checks and worded as things to confirm: unlike the arithmetic, a model
 // reading a receipt can be wrong, and a reviewer needs to know which is which.
-// The tax standard requires every material tax charge to carry one of these findings —
-// who actually owes the money. Shown as its own line because it is the answer the PM
-// needs, and it is easy to lose inside a paragraph.
-const TAX_FINDING_LABEL = {
-  reimbursable: 'Owner reimbursable',
-  contractor_absorbs: 'Already in the contract price — the contractor absorbs this',
-  already_in_sub_price: "Already in the subcontractor's price — cannot be billed again",
-  exempt_remove: 'Exempt — should be removed',
-  miscalculated: 'Incorrectly calculated',
-  unsupported: 'Unsupported',
-  needs_documentation: 'Needs more documentation',
-  needs_tax_review: 'Needs jurisdiction-specific tax review',
-};
-
-const SEVERITY_STYLE = {
-  Critical: { background: '#fef2f2', color: '#b91c1c' },
-  High: { background: '#fff7ed', color: '#c2410c' },
-  Medium: { background: '#fefce8', color: '#a16207' },
-  Low: { background: '#f1f5f9', color: '#475569' },
-};
-
-function SeverityBadge({ severity }) {
-  const style = SEVERITY_STYLE[severity];
-  if (!style) return null;
-  return (
-    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ml-1.5 align-middle" style={style}>
-      {severity}
-    </span>
-  );
-}
-
 function ContractComplianceSection({ compliance }) {
   if (!compliance) return null;
 
   const findings = [
     ...(compliance.taxFindings || []).map(f => ({
       head: `Tax charged — ${f.description}`, amount: f.amount, where: f.where, detail: f.detail,
-      severity: f.severity, verdict: TAX_FINDING_LABEL[f.finding],
-      // Only shown when the model actually derived the tax rather than just spotting it.
-      maths: f.taxableBase != null && f.rate != null
-        ? `${money(f.taxableBase)} × ${(f.rate * 100).toFixed(3).replace(/\.?0+$/, '')}% = ${money(f.taxableBase * f.rate)} expected`
-        : null,
     })),
     ...(compliance.unallowableFindings || []).map(f => ({
       head: `Not allowed by contract — ${f.contractItem}`, amount: f.amount, where: f.where, detail: f.detail,
-      severity: f.severity,
     })),
   ];
 
@@ -189,35 +152,11 @@ function ContractComplianceSection({ compliance }) {
           <div key={i}>
             <p className="text-sm font-medium text-gray-900">
               {f.head}{f.amount != null ? ` — ${money(f.amount)}` : ''}
-              <SeverityBadge severity={f.severity} />
             </p>
             {f.where && <p className="text-[11px] text-gray-400">{f.where}</p>}
-            {f.verdict && <p className="text-xs font-medium mt-0.5" style={{ color: '#6d28d9' }}>{f.verdict}</p>}
-            {f.maths && <p className="text-[11px] text-gray-500 tabular-nums mt-0.5">{f.maths}</p>}
             <p className="text-xs text-gray-600 mt-0.5">{f.detail}</p>
           </div>
         ))
-      )}
-
-      {compliance.anomalies?.length > 0 && (
-        <div className="pt-2 space-y-2" style={{ borderTop: '1px solid #ddd6fe' }}>
-          <div>
-            <p className="text-xs font-semibold text-gray-900">Anomalies to investigate</p>
-            <p className="text-[11px] text-gray-500">
-              Patterns worth a second look. Observations, not proven errors.
-            </p>
-          </div>
-          {compliance.anomalies.map((a, i) => (
-            <div key={i}>
-              <p className="text-sm font-medium text-gray-900">
-                {a.title}{a.amount != null ? ` — ${money(a.amount)}` : ''}
-                <SeverityBadge severity={a.severity} />
-              </p>
-              {a.where && <p className="text-[11px] text-gray-400">{a.where}</p>}
-              <p className="text-xs text-gray-600 mt-0.5">{a.detail}</p>
-            </div>
-          ))}
-        </div>
       )}
 
       {compliance.backupCoverage && (
