@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 
 export default function Modal({ title, onClose, children, size = 'md' }) {
@@ -10,7 +11,15 @@ export default function Modal({ title, onClose, children, size = 'md' }) {
 
   const widths = { sm: 'max-w-md', md: 'max-w-xl', lg: 'max-w-2xl', xl: 'max-w-4xl' };
 
-  return (
+  // Rendered into <body> rather than where it is written. Layout's <main> sets z-index: 1
+  // to sit above the decorative background, and that makes it a stacking context — so a
+  // modal nested inside it has its z-50 confined within a layer that ranks below the
+  // sidebar's z-30, and the sidebar paints over the modal. On a wide window the centred
+  // panel clears the sidebar and nothing looks wrong; on a narrow one it is covered.
+  // Escaping to <body> puts the modal in the page's top-level stacking context, where its
+  // z-50 means what it says. React events still bubble through the component tree, so
+  // onClose and form handlers are unaffected.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
       <div
@@ -47,6 +56,7 @@ export default function Modal({ title, onClose, children, size = 'md' }) {
         {/* Body */}
         <div className="overflow-y-auto flex-1 px-6 py-5">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

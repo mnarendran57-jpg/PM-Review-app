@@ -167,23 +167,8 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now'))
   );
 
-  CREATE TABLE IF NOT EXISTS submittals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    submittal_number TEXT NOT NULL,
-    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
-    spec_section TEXT,
-    description TEXT NOT NULL,
-    submitted_by TEXT,
-    date_received TEXT,
-    date_forwarded TEXT,
-    date_response_due TEXT,
-    date_returned TEXT,
-    review_action TEXT DEFAULT 'Pending',
-    revision_number INTEGER DEFAULT 0,
-    notes TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-  );
+  -- The submittal log's tables are defined further down, once projects exists and the
+  -- tenancy migration has run — see "Submittal log".
 
   CREATE TABLE IF NOT EXISTS pay_applications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -722,6 +707,87 @@ if (!columnsOf('project_contracts').includes('is_primary')) {
   db.exec(`UPDATE project_contracts SET is_primary = 1`);
 }
 db.exec(`UPDATE project_contracts SET doc_type = 'contract' WHERE doc_type IS NULL`);
+
+// --- Submittal log ---------------------------------------------------------------------
+// A submittal is not one event, it is a conversation: the contractor sends it, the A/E
+// answers days or weeks later, and a "Revise and Resubmit" starts the whole exchange again.
+// So the record is split in two. `submittals` holds what the submittal IS — the vendor, the
+// number, the spec section — which never changes across revisions. `submittal_revisions`
+// holds each round trip, one row per time the package went out and came back.
+//
+// Nothing stores the current status. It is derived from the newest revision every time it is
+// asked for (see lib/submittalLog.js), because a stored status is a second copy of the truth
+// and the two drift apart the first time a date is corrected.
+//
+// The original table was a single flat row per submittal with the dates and the A/E's action
+// on it, which could not represent a resubmittal at all — Rev 1 simply overwrote Rev 0 and
+// the history was gone. It was never reachable from the app and never held a row, so it is
+// replaced rather than migrated. The row check is what makes that safe: if a deployment
+// somehow did put data in it, the old table is left exactly where it is and the new tables
+// are created alongside under different names, so nothing is ever destroyed silently.
+const legacySubmittals = tableExists('submittals')
+  && columnsOf('submittals').includes('review_action')
+  && db.prepare(`SELECT COUNT(*) AS c FROM submittals`).get().c === 0;
+if (legacySubmittals) {
+  db.exec(`DROP TABLE submittals`);
+  console.log('[submittals] replaced the unused flat submittal table with the revision-aware log');
+}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS submittals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    submittal_number TEXT NOT NULL,
+    spec_section TEXT,
+    description TEXT NOT NULL,
+    vendor TEXT,
+    submittal_type TEXT,
+    notes TEXT,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
+  -- One row per trip to the A/E and back. revision_number 0 is the first submission; a
+  -- "Revise and Resubmit" answer is what causes revision 1 to be added, and so on. A null
+  -- review_action means this revision is still open — that is the only "pending" flag there
+  -- is, so a revision cannot be both answered and outstanding.
+  CREATE TABLE IF NOT EXISTS submittal_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    submittal_id INTEGER NOT NULL REFERENCES submittals(id) ON DELETE CASCADE,
+    revision_number INTEGER NOT NULL DEFAULT 0,
+    date_received TEXT,
+    date_forwarded TEXT,
+    date_response_due TEXT,
+    date_returned TEXT,
+    review_action TEXT,
+    reviewed_by TEXT,
+    response_notes TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE (submittal_id, revision_number)
+  );
+
+  -- Both halves of the exchange: 'submittal' is what the contractor sent, 'response' is what
+  -- the A/E returned (usually the same drawing back with a stamp on it). Attached to the
+  -- revision rather than the submittal so Rev 0 and Rev 1 keep their own paperwork.
+  CREATE TABLE IF NOT EXISTS submittal_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    submittal_id INTEGER NOT NULL REFERENCES submittals(id) ON DELETE CASCADE,
+    revision_id INTEGER REFERENCES submittal_revisions(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL DEFAULT 'submittal',
+    file_name TEXT NOT NULL,
+    mime_type TEXT,
+    file_key TEXT,
+    file_blob BLOB,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_submittals_project ON submittals(project_id);
+  CREATE INDEX IF NOT EXISTS idx_submittal_revisions_submittal ON submittal_revisions(submittal_id);
+  CREATE INDEX IF NOT EXISTS idx_submittal_files_submittal ON submittal_files(submittal_id);
+`);
 
 // Which contract an invoice was reviewed against, recorded on the review itself. Without it
 // a saved review cannot say whose terms it applied, and re-reading history would be guesswork

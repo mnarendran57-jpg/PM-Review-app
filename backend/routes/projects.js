@@ -11,7 +11,18 @@ function decorate(project) {
   const counts = db.prepare(`
     SELECT
       (SELECT COUNT(*) FROM rfis r WHERE r.project_id = ? AND r.status = 'Open') AS open_rfis,
-      (SELECT COUNT(*) FROM submittals s WHERE s.project_id = ? AND s.review_action = 'Pending') AS pending_submittals,
+      -- Submittals still needing someone to act. A submittal's state lives on its newest
+      -- revision, so that is what decides: an unanswered revision is out for review, and one
+      -- returned as "Revise and Resubmit" or "Rejected" is waiting on the contractor. Only
+      -- the three closing actions take it off the count.
+      (SELECT COUNT(*) FROM submittals s
+        WHERE s.project_id = ?
+          AND COALESCE((
+                SELECT sr.review_action FROM submittal_revisions sr
+                WHERE sr.submittal_id = s.id
+                ORDER BY sr.revision_number DESC LIMIT 1
+              ), '') NOT IN ('Approved', 'Approved as Noted', 'For Record Only')
+      ) AS pending_submittals,
       (SELECT COUNT(*) FROM pay_applications pa WHERE pa.project_id = ? AND pa.status = 'Under Review') AS pay_apps_under_review,
       (SELECT COUNT(*) FROM document_reviews dr WHERE dr.project_name = ?) AS ai_reviews
   `).get(project.id, project.id, project.id, project.project_name);

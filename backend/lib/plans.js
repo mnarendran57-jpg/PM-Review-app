@@ -9,6 +9,7 @@ const FEATURES = [
   { key: 'progress-report', label: 'Progress Report' },
   { key: 'precon-review', label: 'Pre-Construction Review' },
   { key: 'proposal-intake', label: 'Proposal Intake' },
+  { key: 'submittal-log', label: 'Submittal Log' },
 ];
 
 const FEATURE_KEYS = FEATURES.map(f => f.key);
@@ -25,8 +26,8 @@ const PLANS = [
   {
     key: 'standard',
     name: 'Standard',
-    blurb: 'Adds change orders and progress reporting.',
-    features: ['pay-app-review', 'invoice-review', 'pco-review', 'progress-report'],
+    blurb: 'Adds change orders, progress reporting and the submittal log.',
+    features: ['pay-app-review', 'invoice-review', 'pco-review', 'progress-report', 'submittal-log'],
   },
   {
     key: 'pro',

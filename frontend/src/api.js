@@ -199,11 +199,46 @@ export const rfisApi = {
   nextNumber: projectId => api.get(`/rfis/next-number/${projectId}`).then(r => r.data),
 };
 
+// The submittal log. A submittal is one entry with a revision behind it for each trip to
+// the A/E and back, so the calls below are grouped the same way: the entry, its revisions,
+// and the response that closes a revision.
 export const submittalsApi = {
   list: params => api.get('/submittals', { params }).then(r => r.data),
-  create: data => api.post('/submittals', data).then(r => r.data),
-  update: (id, data) => api.put(`/submittals/${id}`, data).then(r => r.data),
+  get: id => api.get(`/submittals/${id}`).then(r => r.data),
+  // Reads an uploaded submittal so the entry form opens pre-filled. Saves nothing.
+  extract: formData => api.post('/submittals/extract', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => r.data),
+  create: formData => api.post('/submittals', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => r.data),
+  update: (id, data) => api.patch(`/submittals/${id}`, data).then(r => r.data),
   delete: id => api.delete(`/submittals/${id}`).then(r => r.data),
+
+  // A resubmittal — the next revision of an existing entry.
+  addRevision: (id, formData) => api.post(`/submittals/${id}/revisions`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => r.data),
+  updateRevision: (id, revId, data) =>
+    api.patch(`/submittals/${id}/revisions/${revId}`, data).then(r => r.data),
+  // Reads the A/E's stamp off the returned document. Suggestion only — nothing is saved
+  // until recordResponse is called with the action the user confirmed.
+  extractResponse: (id, revId, formData) =>
+    api.post(`/submittals/${id}/revisions/${revId}/extract-response`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+    }).then(r => r.data),
+  recordResponse: (id, revId, formData) =>
+    api.post(`/submittals/${id}/revisions/${revId}/response`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+    }).then(r => r.data),
+
+  fileUrl: (id, fileId) => `${apiBaseUrl}/submittals/${id}/files/${fileId}`,
+  downloadCsv: async projectId => {
+    const res = await api.get('/submittals/export.csv', {
+      params: projectId ? { project_id: projectId } : undefined, responseType: 'blob',
+    });
+    triggerDownload(res.data, 'Submittal_Log.csv');
+  },
 };
 
 export const financeApi = {

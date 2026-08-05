@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   InboxArrowDownIcon, DocumentMagnifyingGlassIcon, ClipboardDocumentCheckIcon,
   ScaleIcon, ArrowRightIcon, DocumentTextIcon, TrashIcon, CheckCircleIcon,
-  ReceiptPercentIcon, CameraIcon,
+  ReceiptPercentIcon, CameraIcon, ClipboardDocumentListIcon,
 } from '@heroicons/react/24/outline';
 import { payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -29,6 +29,9 @@ const TOOLS = [
   { slug: 'precon-review', label: 'Pre-Construction Review',
     description: 'Upload drawings, specs, or narratives for a risk, cost, and change-order review.',
     icon: ClipboardDocumentCheckIcon, bg: 'linear-gradient(135deg, #10b981, #059669)', glow: 'rgba(16,185,129,0.28)' },
+  { slug: 'submittal-log', label: 'Submittal Log',
+    description: 'Track every submittal from the contractor to the A/E and back, with each revision on the record.',
+    icon: ClipboardDocumentListIcon, bg: 'linear-gradient(135deg, #a78bfa, #7c3aed)', glow: 'rgba(139,92,246,0.28)' },
 ];
 
 // The shared contract — uploaded once for the whole project and read by every tool.
