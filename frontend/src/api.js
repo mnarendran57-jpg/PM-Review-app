@@ -315,10 +315,9 @@ export const meetingsApi = {
   contacts: () => api.get('/meetings/contacts').then(r => r.data),
   createContact: data => api.post('/meetings/contacts', data).then(r => r.data),
   updateContact: (id, data) => api.patch(`/meetings/contacts/${id}`, data).then(r => r.data),
-  // Teaches the register that a name in the minutes is this person, and relinks everything
-  // already logged under that name.
-  linkAlias: (contactId, alias) =>
-    api.post(`/meetings/contacts/${contactId}/aliases`, { alias }).then(r => r.data),
+  // Attaches an email to a name from the minutes. Optional — the register works on names
+  // alone; this only exists so a person can be emailed.
+  setPersonEmail: data => api.post('/meetings/register/person-email', data).then(r => r.data),
 };
 
 export const financeApi = {

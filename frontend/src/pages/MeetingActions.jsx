@@ -75,7 +75,7 @@ function Field({ label, children, className = '' }) {
 
 // --- One action item --------------------------------------------------------------------------
 
-function ItemRow({ item, contacts, onChanged, onDeleted }) {
+function ItemRow({ item, onChanged, onDeleted }) {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const t = tone(item.urgency);
@@ -155,14 +155,15 @@ function ItemRow({ item, contacts, onChanged, onDeleted }) {
                   </div>
                 </div>
                 <div>
+                  {/* The name is the assignment. Editing it here moves the item to that
+                      person's card, which is the only reassignment that ever needs doing. */}
                   <label className="label text-[10px]">Assigned to</label>
-                  <select className="input py-1 text-[11px]" value={item.contact_id || ''}
-                    onChange={e => patch({ contact_id: e.target.value || null })}>
-                    <option value="">{item.assignee_name || 'Unassigned'} — not matched to a contact</option>
-                    {contacts.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}{c.company ? ` · ${c.company}` : ''}</option>
-                    ))}
-                  </select>
+                  <input className="input py-1 text-[11px]" defaultValue={item.assignee_name || ''}
+                    placeholder="Name from the minutes"
+                    onBlur={e => {
+                      const next = e.target.value.trim();
+                      if (next !== (item.assignee_name || '')) patch({ assignee_name: next });
+                    }} />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] text-gray-400">
@@ -188,9 +189,11 @@ function ItemRow({ item, contacts, onChanged, onDeleted }) {
 
 // --- One person's card ------------------------------------------------------------------------
 
-function PersonCard({ card, contacts, projectName, onChanged, onMatch }) {
+function PersonCard({ card, projectName, onChanged }) {
   const [showDone, setShowDone] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [addingEmail, setAddingEmail] = useState(false);
+  const [emailDraft, setEmailDraft] = useState('');
   const colour = avatarFor(card.key);
   const worst = card.overdueCount > 0 ? URGENCY.overdue
     : card.dueSoonCount > 0 ? URGENCY.due_soon
@@ -227,8 +230,10 @@ function PersonCard({ card, contacts, projectName, onChanged, onMatch }) {
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-[14px] font-bold text-gray-900 leading-tight truncate">{card.name}</p>
+          {/* The name from the minutes is the identity. An email is shown when one has been
+              added, and its absence is not a problem to be fixed before the card is useful. */}
           <p className="text-[11px] text-gray-500 truncate">
-            {[card.company, card.role].filter(Boolean).join(' · ') || (card.isMatched ? 'No company recorded' : 'Not matched to a contact')}
+            {card.email || [card.company, card.role].filter(Boolean).join(' · ') || 'From the minutes'}
           </p>
         </div>
         {card.openCount > 0 && (
@@ -239,30 +244,18 @@ function PersonCard({ card, contacts, projectName, onChanged, onMatch }) {
         )}
       </div>
 
-      {(card.overdueCount > 0 || !card.isMatched) && (
-        <div className="px-4 pb-2 flex flex-wrap gap-1.5">
-          {card.overdueCount > 0 && (
-            <span className="text-[10px] px-2 py-0.5 rounded-full font-bold"
-              style={{ background: URGENCY.overdue.bg, color: URGENCY.overdue.text }}>
-              {card.overdueCount} overdue
-            </span>
-          )}
-          {/* An unmatched name still gets a card — the work is owed either way — but it
-              cannot be emailed until it points at a person, so say so here. */}
-          {!card.isMatched && (
-            <button onClick={() => onMatch(card)}
-              className="text-[10px] px-2 py-0.5 rounded-full font-semibold"
-              style={{ background: '#eff6ff', color: '#1d4ed8' }}>
-              Match "{card.name}" to a contact →
-            </button>
-          )}
+      {card.overdueCount > 0 && (
+        <div className="px-4 pb-2">
+          <span className="text-[10px] px-2 py-0.5 rounded-full font-bold"
+            style={{ background: URGENCY.overdue.bg, color: URGENCY.overdue.text }}>
+            {card.overdueCount} overdue
+          </span>
         </div>
       )}
 
       <div className="px-4 pb-4 space-y-2">
         {open.map(item => (
-          <ItemRow key={item.id} item={item} contacts={contacts}
-            onChanged={onChanged} onDeleted={onChanged} />
+          <ItemRow key={item.id} item={item} onChanged={onChanged} onDeleted={onChanged} />
         ))}
         {open.length === 0 && (
           <p className="text-[12px] text-gray-400 py-2">Nothing outstanding.</p>
@@ -276,119 +269,52 @@ function PersonCard({ card, contacts, projectName, onChanged, onMatch }) {
               {done.length} done
             </button>
             {showDone && done.map(item => (
-              <ItemRow key={item.id} item={item} contacts={contacts}
-                onChanged={onChanged} onDeleted={onChanged} />
+              <ItemRow key={item.id} item={item} onChanged={onChanged} onDeleted={onChanged} />
             ))}
           </>
         )}
       </div>
 
       {open.length > 0 && (
-        <div className="px-4 py-2.5 flex items-center gap-2" style={{ borderTop: '1px solid #f1f5f9', background: '#fafbfc' }}>
-          <button className="btn-secondary text-[11px] py-1" onClick={copyDigest}>
-            <ClipboardDocumentIcon className="w-3.5 h-3.5" />
-            {copied ? 'Copied' : 'Copy chase-up'}
-          </button>
-          {card.email ? (
-            <a className="btn-secondary text-[11px] py-1"
-              href={`mailto:${card.email}?subject=${encodeURIComponent(`Open actions${projectName ? ` — ${projectName}` : ''}`)}`}>
-              <EnvelopeIcon className="w-3.5 h-3.5" /> Email
-            </a>
+        <div className="px-4 py-2.5" style={{ borderTop: '1px solid #f1f5f9', background: '#fafbfc' }}>
+          {addingEmail ? (
+            // One field, and only when asked for. Adding an address is a convenience for
+            // chasing someone, never a step between the minutes and the register.
+            <form className="flex items-center gap-2"
+              onSubmit={async e => {
+                e.preventDefault();
+                await meetingsApi.setPersonEmail({ name: card.name, email: emailDraft });
+                setAddingEmail(false); onChanged();
+              }}>
+              <input className="input py-1 text-[11px] flex-1" type="email" autoFocus required
+                value={emailDraft} onChange={e => setEmailDraft(e.target.value)}
+                placeholder={`Email for ${String(card.name).split(' ')[0]}`} />
+              <button type="submit" className="btn-primary text-[11px] py-1">Save</button>
+              <button type="button" className="btn-secondary text-[11px] py-1"
+                onClick={() => setAddingEmail(false)}>Cancel</button>
+            </form>
           ) : (
-            <span className="text-[10px] text-gray-400">No email on file</span>
+            <div className="flex items-center gap-2">
+              <button className="btn-secondary text-[11px] py-1" onClick={copyDigest}>
+                <ClipboardDocumentIcon className="w-3.5 h-3.5" />
+                {copied ? 'Copied' : 'Copy chase-up'}
+              </button>
+              {card.email ? (
+                <a className="btn-secondary text-[11px] py-1"
+                  href={`mailto:${card.email}?subject=${encodeURIComponent(`Open actions${projectName ? ` — ${projectName}` : ''}`)}`}>
+                  <EnvelopeIcon className="w-3.5 h-3.5" /> Email
+                </a>
+              ) : (
+                <button className="text-[10px] text-gray-400 hover:text-blue-600"
+                  onClick={() => { setEmailDraft(''); setAddingEmail(true); }}>
+                  + add email
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}
     </div>
-  );
-}
-
-// --- Matching a name to a contact -----------------------------------------------------------
-
-// The step that turns "Gautam" in a set of minutes into a person with an address. Doing it
-// once relinks every item already logged under that name, so the register's history is fixed
-// too, not just what comes next.
-function MatchDialog({ card, contacts, onDone, onCancel }) {
-  const [mode, setMode] = useState(contacts.length ? 'existing' : 'new');
-  const [contactId, setContactId] = useState('');
-  const [form, setForm] = useState({ name: card.name, role: '', email: '', company: '' });
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
-
-  const save = async e => {
-    e.preventDefault();
-    setBusy(true); setError('');
-    try {
-      const target = mode === 'existing'
-        ? { id: Number(contactId) }
-        : await meetingsApi.createContact(form);
-      if (!target?.id) throw new Error('Choose who this is.');
-      const result = await meetingsApi.linkAlias(target.id, card.name);
-      onDone(result.itemsRelinked);
-    } catch (err) {
-      setError(errorText(err, 'Could not match this name.'));
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <form onSubmit={save} className="space-y-4">
-      <p className="text-sm text-gray-600">
-        The minutes say <span className="font-semibold text-gray-900">"{card.name}"</span>. Who is that?
-        Everything already logged under that name will be moved across too.
-      </p>
-
-      {contacts.length > 0 && (
-        <div className="flex gap-2">
-          {['existing', 'new'].map(m => (
-            <button key={m} type="button" onClick={() => setMode(m)}
-              className={`text-[12px] px-3 py-1.5 rounded-lg font-semibold ${mode === m ? 'btn-primary' : 'btn-secondary'}`}>
-              {m === 'existing' ? 'An existing contact' : 'Someone new'}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {mode === 'existing' ? (
-        <Field label="Contact">
-          <select className="input" required value={contactId} onChange={e => setContactId(e.target.value)}>
-            <option value="">— Choose —</option>
-            {contacts.map(c => (
-              <option key={c.id} value={c.id}>
-                {c.name}{c.company ? ` · ${c.company}` : ''}{c.email ? ` · ${c.email}` : ''}
-              </option>
-            ))}
-          </select>
-        </Field>
-      ) : (
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Full name *">
-            <input className="input" required value={form.name} onChange={set('name')} />
-          </Field>
-          <Field label="Email">
-            <input className="input" type="email" value={form.email} onChange={set('email')}
-              placeholder="For chasing them later" />
-          </Field>
-          <Field label="Company">
-            <input className="input" value={form.company} onChange={set('company')}
-              placeholder="e.g. Gulf Coast Mechanical" />
-          </Field>
-          <Field label="Role">
-            <input className="input" value={form.role} onChange={set('role')} placeholder="e.g. Superintendent" />
-          </Field>
-        </div>
-      )}
-
-      {error && <p className="text-xs" style={{ color: '#b91c1c' }}>{error}</p>}
-
-      <div className="flex justify-end gap-2">
-        <button type="button" className="btn-secondary" onClick={onCancel}>Cancel</button>
-        <button type="submit" className="btn-primary" disabled={busy}>
-          {busy ? 'Matching…' : 'Match'}
-        </button>
-      </div>
-    </form>
   );
 }
 
@@ -401,7 +327,6 @@ function UploadMinutes({ onSaved, onCancel }) {
   const [text, setText] = useState('');
   const [reading, setReading] = useState(false);
   const [draft, setDraft] = useState(null);
-  const [contacts, setContacts] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -414,7 +339,6 @@ function UploadMinutes({ onSaved, onCancel }) {
       else fd.append('text', text);
       const found = await meetingsApi.extract(fd);
       setDraft(found);
-      setContacts(found.contacts || []);
     } catch (err) {
       setError(errorText(err, 'Could not read these minutes.'));
     } finally { setReading(false); }
@@ -535,12 +459,13 @@ function UploadMinutes({ onSaved, onCancel }) {
 
                 <div className="grid grid-cols-3 gap-2">
                   <div>
+                    {/* Read straight off the minutes and editable as text. Names already on
+                        the register are reused automatically, so this is only for fixing a
+                        misread — not a step to work through. */}
                     <label className="label text-[10px]">Who</label>
-                    <select className="input py-1 text-[11px]" value={item.contactId || ''}
-                      onChange={e => setItem(i, { contactId: e.target.value || null })}>
-                      <option value="">{item.assigneeName || 'Unassigned'}{item.contactId ? '' : ' — new name'}</option>
-                      {contacts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
+                    <input className="input py-1 text-[11px]" value={item.assigneeName || ''}
+                      placeholder="Nobody named"
+                      onChange={e => setItem(i, { assigneeName: e.target.value })} />
                   </div>
                   <div>
                     <label className="label text-[10px]">Due</label>
@@ -605,9 +530,12 @@ function UploadMinutes({ onSaved, onCancel }) {
 export default function MeetingActions() {
   const { projectId, project } = useProject();
   const [data, setData] = useState(null);
-  const [contacts, setContacts] = useState([]);
   const [error, setError] = useState('');
-  const [modal, setModal] = useState(null);
+  // An object with an explicit `type`, never a bare string. It was previously either the
+  // string 'upload' or { match: card }, and `'upload'?.match` resolves to
+  // String.prototype.match — a truthy function — so opening the upload dialog silently
+  // rendered a different one on top of it.
+  const [modal, setModal] = useState(null);   // null | {type:'upload'}
   const [view, setView] = useState('people');
   const [filter, setFilter] = useState('');       // '' | 'overdue' | 'due_soon' | 'unassigned'
   const [meetingId, setMeetingId] = useState('');
@@ -617,7 +545,6 @@ export default function MeetingActions() {
     meetingsApi.register({ project_id: projectId, meeting_id: meetingId || undefined })
       .then(d => { setData(d); setError(''); })
       .catch(err => setError(errorText(err, 'Could not load the action register.')));
-    meetingsApi.contacts().then(c => setContacts(c.contacts || [])).catch(() => {});
   }, [projectId, meetingId]);
   useEffect(() => { load(); }, [load]);
 
@@ -630,7 +557,7 @@ export default function MeetingActions() {
         items: card.items.filter(i => {
           if (filter === 'overdue') return i.isOverdue;
           if (filter === 'due_soon') return i.urgency === 'due_soon';
-          if (filter === 'unassigned') return !i.contact_id && !i.isClosed;
+          if (filter === 'unassigned') return !String(i.assignee_name || '').trim() && !i.isClosed;
           return true;
         }),
       }))
@@ -652,7 +579,7 @@ export default function MeetingActions() {
               disabled={!s?.total}>
               <ArrowDownTrayIcon className="w-4 h-4" /> Export
             </button>
-            <button className="btn-primary" onClick={() => setModal('upload')}>
+            <button className="btn-primary" onClick={() => setModal({ type: 'upload' })}>
               <PlusIcon className="w-4 h-4" /> Upload Minutes
             </button>
           </>
@@ -701,11 +628,13 @@ export default function MeetingActions() {
             onClick={() => { setFilter(''); setMeetingId(''); }}>Clear</button>
         )}
 
+        {/* Now means the minutes named nobody at all — a real gap worth chasing, rather than
+            the old "has no contact record", which flagged almost everyone and said nothing. */}
         {s?.unassigned > 0 && (
           <button onClick={() => setFilter(f => (f === 'unassigned' ? '' : 'unassigned'))}
             className="text-[11px] px-2.5 py-1 rounded-full font-semibold ml-auto"
-            style={{ background: '#eff6ff', color: '#1d4ed8' }}>
-            {s.unassigned} not matched to a contact
+            style={{ background: '#fff7ed', color: '#c2410c' }}>
+            {s.unassigned} with nobody named
           </button>
         )}
       </div>
@@ -720,21 +649,37 @@ export default function MeetingActions() {
         <>
           {!data && <p className="text-sm text-gray-400">Loading…</p>}
           {data && people.length === 0 && (
+            // An empty register that only describes uploading, with the button stranded in
+            // the top corner, reads as though there is nothing to do here. On the one screen
+            // where upload is the only sensible action, it belongs in the middle of it.
             <div className="card p-12 text-center">
-              <DocumentTextIcon className="w-10 h-10 mx-auto text-gray-300 mb-3" />
-              <p className="text-sm text-gray-500">
-                {s?.total === 0
-                  ? 'No action items yet. Upload a set of meeting minutes and Coaster will pull out who agreed to do what.'
-                  : 'Nothing matches this filter.'}
-              </p>
+              {s?.total === 0 ? (
+                <>
+                  <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4"
+                    style={{ background: 'linear-gradient(135deg, #4ade80, #16a34a)', boxShadow: '0 8px 24px rgba(34,197,94,0.28)' }}>
+                    <DocumentTextIcon className="w-7 h-7 text-white" />
+                  </div>
+                  <h3 className="text-[16px] font-bold text-gray-900 mb-1.5">Start with a set of minutes</h3>
+                  <p className="text-sm text-gray-500 max-w-md mx-auto mb-5 leading-relaxed">
+                    Upload your Fathom export — or paste the summary straight in — and Coaster pulls
+                    out who agreed to do what, then groups it by person.
+                  </p>
+                  <button className="btn-primary mx-auto" onClick={() => setModal({ type: 'upload' })}>
+                    <PlusIcon className="w-4 h-4" /> Upload Minutes
+                  </button>
+                </>
+              ) : (
+                <>
+                  <DocumentTextIcon className="w-10 h-10 mx-auto text-gray-300 mb-3" />
+                  <p className="text-sm text-gray-500">Nothing matches this filter.</p>
+                </>
+              )}
             </div>
           )}
           <div className="grid grid-cols-2 gap-5 items-start">
             {people.map(card => (
-              <PersonCard key={card.key} card={card} contacts={contacts}
-                projectName={project?.project_name}
-                onChanged={load}
-                onMatch={c => setModal({ match: c })} />
+              <PersonCard key={card.key} card={card}
+                projectName={project?.project_name} onChanged={load} />
             ))}
           </div>
         </>
@@ -769,16 +714,9 @@ export default function MeetingActions() {
         </div>
       )}
 
-      {modal === 'upload' && (
+      {modal?.type === 'upload' && (
         <Modal title="Upload Meeting Minutes" onClose={() => setModal(null)} size="xl">
           <UploadMinutes onSaved={() => { setModal(null); load(); }} onCancel={() => setModal(null)} />
-        </Modal>
-      )}
-      {modal?.match && (
-        <Modal title="Who is this?" onClose={() => setModal(null)} size="lg">
-          <MatchDialog card={modal.match} contacts={contacts}
-            onDone={() => { setModal(null); load(); }}
-            onCancel={() => setModal(null)} />
         </Modal>
       )}
     </div>

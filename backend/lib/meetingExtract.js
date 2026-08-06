@@ -27,7 +27,22 @@ const trimmed = value => {
 
 const isoDate = value => (/^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value) : null);
 
-function buildPrompt({ openItems, today, projectName }) {
+function buildPrompt({ openItems, knownNames, today, projectName }) {
+  // The register is keyed on the name in the minutes, so the same person written two ways
+  // becomes two people owing half the work each. Rather than making the PM reconcile that by
+  // hand — most of the room is external and will never be a record in this app — the names
+  // already on the register travel with the extraction, and the model reuses a spelling when
+  // it is plainly the same person. The roster barely changes between meetings, so after the
+  // first upload this settles by itself.
+  const roster = knownNames.length
+    ? `NAMES ALREADY ON THIS PROJECT'S REGISTER
+${knownNames.map(n => `- ${n}`).join('\n')}
+
+When someone in these minutes is one of the people above, use the EXISTING spelling exactly
+as written there, even if the minutes abbreviate or expand it — "Tom" in the minutes is
+"Tom Bradley" if that is who is meant. Only use a new name for someone genuinely new.`
+    : '';
+
   // The open register travels with every extraction. Without it each meeting would produce a
   // fresh copy of the same unfinished item, and after four meetings "chase the shop drawings"
   // appears four times with nobody able to tell it is one job. With it, a repeat becomes a
@@ -49,6 +64,8 @@ ${projectName ? `Project: ${projectName}\n` : ''}Today's date is ${today}. Use i
 relative deadlines like "by next Friday" or "in two weeks" into real dates.
 
 ${register}
+
+${roster}
 
 Return ONLY valid JSON in this exact shape:
 
@@ -82,8 +99,9 @@ Rules:
   above, link it rather than repeating it. Match on the underlying job, not the wording.
 - "isNowComplete" lets a meeting close an item out. Set it only when the minutes actually say
   it was done, not when someone merely promises to do it.
-- Keep "assigneeName" exactly as written in the minutes — do not expand, correct or guess a
-  surname. The name is matched to a person separately.
+- "assigneeName" must match an existing name from the roster above whenever it is that
+  person. Otherwise write it as the minutes do. Never invent a surname for someone new — if
+  the minutes only say "Mike", that is the name.
 - Write "task" and "detail" in plain English for a reader who is not in construction.`;
 }
 
@@ -112,7 +130,7 @@ async function callClaude(content) {
 //
 // Everything returned is a draft: the PM confirms the items, the assignees and the dates on a
 // review screen before any of it reaches the register.
-async function extractMeeting({ buffer, mimeType, text, openItems = [], today, projectName }) {
+async function extractMeeting({ buffer, mimeType, text, openItems = [], knownNames = [], today, projectName }) {
   const content = [];
 
   if (buffer) {
@@ -133,7 +151,7 @@ async function extractMeeting({ buffer, mimeType, text, openItems = [], today, p
     throw new Error('Provide the minutes, either as a file or pasted in.');
   }
 
-  content.push({ type: 'text', text: buildPrompt({ openItems, today, projectName }) });
+  content.push({ type: 'text', text: buildPrompt({ openItems, knownNames, today, projectName }) });
   const parsed = await callClaude(content);
 
   const openIds = new Set(openItems.map(i => i.id));

@@ -81,29 +81,45 @@ function compareItems(a, b) {
   return (b.ageDays ?? 0) - (a.ageDays ?? 0);
 }
 
-// The register's main view: one card per person, ordered by who is holding up the most. An
-// unmatched name still gets a card — the work is owed whether or not the PM has matched the
-// name to a contact yet, and hiding it until then would lose it.
+// The name as the minutes wrote it, reduced to something comparable. Most of the room is
+// outside the organisation and will never be a Coaster record, so the name IS the identity
+// here — there is no account to reconcile it against.
+const personKey = name => String(name || '')
+  .toLowerCase().replace(/\s+/g, ' ').replace(/[.,]/g, '').trim();
+
+// The register's main view: one card per person named in the minutes, ordered by who is
+// holding up the most. Grouping is by name, full stop — asking a PM to fill in a contact
+// record for the architect and every sub before their actions show up is the data entry this
+// tool exists to remove. An email can be attached later if one is wanted for chasing, but
+// nothing waits on it.
 function groupByPerson(items) {
   const groups = new Map();
 
   for (const item of items) {
-    // Keyed by contact where one is matched, so "Gautam" and "Gautam S" collapse into one
-    // card once matched; by name otherwise.
-    const key = item.contact_id ? `c${item.contact_id}` : `n${(item.assignee_name || '').toLowerCase().trim()}`;
+    const key = personKey(item.assignee_name) || 'unassigned';
     if (!groups.has(key)) {
       groups.set(key, {
         key,
+        name: item.assignee_name || 'Unassigned',
+        // Enrichment only. Present when an email has been added against this name, absent
+        // otherwise, and the card renders either way.
         contactId: item.contact_id || null,
-        name: item.contact_name || item.assignee_name || 'Unassigned',
         email: item.contact_email || null,
         company: item.contact_company || null,
         role: item.contact_role || null,
-        isMatched: !!item.contact_id,
         items: [],
       });
     }
-    groups.get(key).items.push(item);
+    const group = groups.get(key);
+    // Any item carrying contact details lends them to the whole card, so adding an email once
+    // lights up the person rather than the single item it was typed against.
+    if (!group.email && item.contact_email) {
+      group.email = item.contact_email;
+      group.contactId = item.contact_id;
+      group.company = group.company || item.contact_company;
+      group.role = group.role || item.contact_role;
+    }
+    group.items.push(item);
   }
 
   const cards = [...groups.values()].map(group => {
@@ -141,8 +157,10 @@ function summarize(items) {
     dueSoon: open.filter(i => i.urgency === 'due_soon').length,
     stale: open.filter(i => i.urgency === 'stale').length,
     done: items.filter(i => i.status === 'Done').length,
-    unassigned: open.filter(i => !i.contact_id).length,
-    people: new Set(open.map(i => i.contact_id ? `c${i.contact_id}` : `n${(i.assignee_name || '').toLowerCase()}`)).size,
+    // Genuinely nobody's name against it — a real gap in the minutes worth chasing. This used
+    // to mean "no contact record", which flagged almost everyone and told the PM nothing.
+    unassigned: open.filter(i => !personKey(i.assignee_name)).length,
+    people: new Set(open.map(i => personKey(i.assignee_name) || 'unassigned')).size,
   };
 }
 
@@ -175,6 +193,6 @@ function digestFor(card, { projectName } = {}) {
 }
 
 module.exports = {
-  STATUSES, PRIORITIES, isClosed, describeItem, compareItems, groupByPerson, summarize,
+  STATUSES, PRIORITIES, isClosed, describeItem, compareItems, groupByPerson, summarize, personKey,
   digestFor, URGENCY, DUE_SOON_DAYS, STALE_AFTER_DAYS, todayUtc, toIsoDay,
 };

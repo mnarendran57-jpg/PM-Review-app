@@ -120,6 +120,29 @@ function linkAlias({ orgId, alias, contactId }) {
   ).run(contactId, orgId, key).changes;
 }
 
+// Attaches an email to a name from the minutes, so that person can be chased. This is the
+// whole of "contacts" as far as the PM is concerned: one field, typed once, optional.
+// Everything underneath — finding or creating the record, recording the alias, relinking the
+// items already logged under that name — happens here rather than being asked about.
+router.post('/register/person-email', (req, res) => {
+  const name = nullable(req.body.name);
+  const address = nullable(req.body.email);
+  if (!name) return res.status(400).json({ error: 'Which person?' });
+
+  const existing = db.prepare(
+    `SELECT * FROM team_members WHERE org_id=? AND lower(trim(name))=lower(trim(?))`
+  ).get(req.orgId, name);
+
+  const contactId = existing
+    ? (db.prepare(`UPDATE team_members SET email=?, company=COALESCE(?, company) WHERE id=?`)
+        .run(address, nullable(req.body.company), existing.id), existing.id)
+    : db.prepare(`INSERT INTO team_members (org_id, name, email, company) VALUES (?, ?, ?, ?)`)
+        .run(req.orgId, name, address, nullable(req.body.company)).lastInsertRowid;
+
+  const relinked = linkAlias({ orgId: req.orgId, alias: name, contactId });
+  res.json({ success: true, contactId, email: address, itemsLinked: relinked });
+});
+
 router.post('/contacts/:contactId/aliases', (req, res) => {
   const contact = db.prepare(`SELECT id FROM team_members WHERE id=? AND org_id=?`).get(req.params.contactId, req.orgId);
   if (!contact) return res.status(404).json({ error: 'Not found' });
@@ -237,31 +260,33 @@ router.post('/extract', upload.single('file'), async (req, res) => {
        WHERE project_id=? AND status NOT IN ('Done', 'Cancelled') ORDER BY created_at ASC`
     ).all(project.id);
 
+    // Everyone already named on this project. Sent with the extraction so a person written
+    // two ways across meetings lands on one card, without the PM reconciling anything.
+    const knownNames = db.prepare(
+      `SELECT DISTINCT assignee_name FROM action_items
+       WHERE project_id=? AND assignee_name IS NOT NULL AND TRIM(assignee_name) <> ''
+       ORDER BY assignee_name ASC`
+    ).all(project.id).map(r => r.assignee_name);
+
     const draft = await extractMeeting({
       buffer: req.file?.buffer,
       mimeType: req.file?.mimetype,
       text,
       openItems,
+      knownNames,
       today: toIsoDay(todayUtc()),
       projectName: project.project_name,
     });
 
-    // Each name is resolved against what the PM has matched before, so a name seen in an
-    // earlier meeting needs no attention now and only genuinely new ones are asked about.
-    const aliases = aliasLookup(req.orgId);
-    const contacts = db.prepare(
-      `SELECT id, name, role, email, company FROM team_members WHERE org_id=? ORDER BY name ASC`
-    ).all(req.orgId);
+    // An email already recorded against a name carries over silently. Nothing is required —
+    // the name alone is enough for the item to appear on the register.
+    const known = aliasLookup(req.orgId);
+    const items = draft.actionItems.map(item => ({
+      ...item,
+      contactId: known.get(String(item.assigneeName || '').trim().toLowerCase()) || null,
+    }));
 
-    const items = draft.actionItems.map(item => {
-      const key = String(item.assigneeName || '').trim().toLowerCase();
-      return { ...item, contactId: aliases.get(key) || null };
-    });
-    const unmatched = [...new Set(
-      items.filter(i => !i.contactId && i.assigneeName).map(i => i.assigneeName)
-    )];
-
-    res.json({ ...draft, actionItems: items, unmatchedNames: unmatched, contacts });
+    res.json({ ...draft, actionItems: items, knownNames });
   } catch (err) {
     console.error('Meeting extract error:', err);
     res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });
