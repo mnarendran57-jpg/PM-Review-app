@@ -4,6 +4,7 @@ import {
   InboxArrowDownIcon, DocumentMagnifyingGlassIcon, ClipboardDocumentCheckIcon,
   ScaleIcon, ArrowRightIcon, DocumentTextIcon, TrashIcon, CheckCircleIcon,
   ReceiptPercentIcon, CameraIcon, ClipboardDocumentListIcon, QuestionMarkCircleIcon,
+  CheckCircleIcon as CheckCircleToolIcon,
 } from '@heroicons/react/24/outline';
 import { payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -35,6 +36,9 @@ const TOOLS = [
   { slug: 'rfi-log', label: 'RFI Log',
     description: 'Track RFIs to the A/E, and get a suggested answer read off the drawings before they reply.',
     icon: QuestionMarkCircleIcon, bg: 'linear-gradient(135deg, #38bdf8, #0284c7)', glow: 'rgba(14,165,233,0.28)' },
+  { slug: 'meeting-actions', label: 'Meeting Actions',
+    description: 'Turn meeting minutes into a running list of who owes what, with overdue items front and centre.',
+    icon: CheckCircleToolIcon, bg: 'linear-gradient(135deg, #4ade80, #16a34a)', glow: 'rgba(34,197,94,0.28)' },
 ];
 
 // The shared contract — uploaded once for the whole project and read by every tool.

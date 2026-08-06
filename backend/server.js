@@ -32,6 +32,7 @@ app.use('/api/settings', require('./routes/settings'));
 app.use('/api/proposal-intake', require('./routes/proposalIntake'));
 app.use('/api/submittals', require('./routes/submittals'));
 app.use('/api/rfis', require('./routes/rfis'));
+app.use('/api/meetings', require('./routes/meetings'));
 app.use('/api/memo-templates', require('./routes/memoTemplates'));
 app.use('/api/pay-app-review', require('./routes/payAppReview'));
 app.use('/api/pco-review', require('./routes/pcoReview'));

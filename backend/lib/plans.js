@@ -11,6 +11,7 @@ const FEATURES = [
   { key: 'proposal-intake', label: 'Proposal Intake' },
   { key: 'submittal-log', label: 'Submittal Log' },
   { key: 'rfi-log', label: 'RFI Log' },
+  { key: 'meeting-actions', label: 'Meeting Actions' },
 ];
 
 const FEATURE_KEYS = FEATURES.map(f => f.key);
@@ -27,10 +28,10 @@ const PLANS = [
   {
     key: 'standard',
     name: 'Standard',
-    blurb: 'Adds change orders, progress reporting and the submittal and RFI logs.',
+    blurb: 'Adds change orders, progress reporting, the submittal and RFI logs, and meeting actions.',
     features: [
       'pay-app-review', 'invoice-review', 'pco-review', 'progress-report',
-      'submittal-log', 'rfi-log',
+      'submittal-log', 'rfi-log', 'meeting-actions',
     ],
   },
   {

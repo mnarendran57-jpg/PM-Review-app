@@ -281,6 +281,46 @@ export const submittalsApi = {
   },
 };
 
+// Meeting minutes in, a running action register out. The register accumulates across every
+// meeting on a project rather than resetting per meeting, so the calls are split between the
+// meetings themselves, the register they feed, and the contacts actions are assigned to.
+export const meetingsApi = {
+  list: params => api.get('/meetings', { params }).then(r => r.data),
+  get: id => api.get(`/meetings/${id}`).then(r => r.data),
+  // Reads the minutes and returns a draft to confirm. Saves nothing.
+  extract: formData => api.post('/meetings/extract', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => r.data),
+  save: formData => api.post('/meetings', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => r.data),
+  delete: id => api.delete(`/meetings/${id}`).then(r => r.data),
+  fileUrl: id => `${apiBaseUrl}/meetings/${id}/file`,
+
+  register: params => api.get('/meetings/register', { params }).then(r => r.data),
+  digests: params => api.get('/meetings/register/digest', { params }).then(r => r.data),
+  downloadCsv: async projectId => {
+    const res = await api.get('/meetings/register/export.csv', {
+      params: projectId ? { project_id: projectId } : undefined, responseType: 'blob',
+    });
+    triggerDownload(res.data, 'Action_Items.csv');
+  },
+
+  createItem: data => api.post('/meetings/items', data).then(r => r.data),
+  updateItem: (itemId, data) => api.patch(`/meetings/items/${itemId}`, data).then(r => r.data),
+  deleteItem: itemId => api.delete(`/meetings/items/${itemId}`).then(r => r.data),
+
+  // The people actions are assigned to. Separate from Coaster users on purpose — most of the
+  // room (the architect, the GC's super) will never sign in here.
+  contacts: () => api.get('/meetings/contacts').then(r => r.data),
+  createContact: data => api.post('/meetings/contacts', data).then(r => r.data),
+  updateContact: (id, data) => api.patch(`/meetings/contacts/${id}`, data).then(r => r.data),
+  // Teaches the register that a name in the minutes is this person, and relinks everything
+  // already logged under that name.
+  linkAlias: (contactId, alias) =>
+    api.post(`/meetings/contacts/${contactId}/aliases`, { alias }).then(r => r.data),
+};
+
 export const financeApi = {
   payapps: params => api.get('/finance/payapps', { params }).then(r => r.data),
   createPayapp: data => api.post('/finance/payapps', data).then(r => r.data),

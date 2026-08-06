@@ -4,7 +4,7 @@ import {
   InboxArrowDownIcon, ArrowRightOnRectangleIcon, DocumentMagnifyingGlassIcon,
   ClipboardDocumentCheckIcon, Squares2X2Icon, ScaleIcon, ArrowLeftIcon,
   Cog6ToothIcon, EnvelopeIcon, FolderIcon, ReceiptPercentIcon, CameraIcon, UserGroupIcon,
-  ClipboardDocumentListIcon, QuestionMarkCircleIcon,
+  ClipboardDocumentListIcon, QuestionMarkCircleIcon, CheckCircleIcon,
 } from '@heroicons/react/24/outline';
 import { authApi, selectedOrg, selectedProgram, orgsApi, programsApi, projectsApi } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -66,6 +66,7 @@ const projectTools = [
   { slug: 'precon-review', label: 'Pre-Construction Review', icon: ClipboardDocumentCheckIcon, color: '#34d399', glow: 'rgba(16,185,129,0.16)' },
   { slug: 'submittal-log', label: 'Submittal Log', icon: ClipboardDocumentListIcon, color: '#a78bfa', glow: 'rgba(139,92,246,0.16)' },
   { slug: 'rfi-log', label: 'RFI Log', icon: QuestionMarkCircleIcon, color: '#38bdf8', glow: 'rgba(14,165,233,0.16)' },
+  { slug: 'meeting-actions', label: 'Meeting Actions', icon: CheckCircleIcon, color: '#4ade80', glow: 'rgba(34,197,94,0.16)' },
 ];
 
 const globalNav = [

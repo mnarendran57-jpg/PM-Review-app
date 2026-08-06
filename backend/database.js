@@ -875,6 +875,94 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_rfi_analyses_rfi ON rfi_analyses(rfi_id);
 `);
 
+// --- Meeting action items -----------------------------------------------------------------
+// Minutes are read once and their action items flow into a single running register per
+// project, rather than living inside the meeting they came from. That is the whole point: an
+// item agreed in March and still open in May is the one worth seeing, and a list-per-meeting
+// buries exactly those as the meetings pile up.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS meetings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    meeting_date TEXT,
+    attendees TEXT,
+    summary TEXT,
+    decisions TEXT,
+    -- Minutes arrive either as a file or pasted in, so the source document is optional.
+    file_name TEXT,
+    mime_type TEXT,
+    file_key TEXT,
+    file_blob BLOB,
+    source_text TEXT,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  -- One row per thing somebody has to do. meeting_id is where it was FIRST raised, and it
+  -- stays pointing there for the life of the item — the register's value is showing how long
+  -- ago that was. Later meetings that chase the same item add a mention rather than a new row.
+  CREATE TABLE IF NOT EXISTS action_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    meeting_id INTEGER REFERENCES meetings(id) ON DELETE SET NULL,
+    -- The name as the minutes said it, kept verbatim even after it is matched to a contact,
+    -- so the record still reads like the meeting did.
+    assignee_name TEXT,
+    contact_id INTEGER REFERENCES team_members(id) ON DELETE SET NULL,
+    task TEXT NOT NULL,
+    detail TEXT,
+    due_date TEXT,
+    priority TEXT DEFAULT 'Medium',
+    status TEXT NOT NULL DEFAULT 'Open',
+    completed_at TEXT,
+    notes TEXT,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
+  -- Every time a meeting raises or chases an item. The first row is the meeting that created
+  -- it; each later row is evidence it had to be asked about again, which is the strongest
+  -- signal a PM has that something is stuck.
+  CREATE TABLE IF NOT EXISTS action_item_mentions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_item_id INTEGER NOT NULL REFERENCES action_items(id) ON DELETE CASCADE,
+    meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+    note TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE (action_item_id, meeting_id)
+  );
+
+  -- What the minutes called someone, pointing at who they actually are. Minutes say "Gautam",
+  -- "Gautam S" and "G. Thampy" for one person; without this the register splits them into
+  -- three people who each owe part of the work. Matched once by the PM, then automatic.
+  CREATE TABLE IF NOT EXISTS contact_aliases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    alias TEXT NOT NULL,
+    contact_id INTEGER NOT NULL REFERENCES team_members(id) ON DELETE CASCADE,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE (org_id, alias)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_meetings_project ON meetings(project_id);
+  CREATE INDEX IF NOT EXISTS idx_action_items_project ON action_items(project_id);
+  CREATE INDEX IF NOT EXISTS idx_action_items_contact ON action_items(contact_id);
+  CREATE INDEX IF NOT EXISTS idx_action_mentions_item ON action_item_mentions(action_item_id);
+`);
+
+// team_members is the contact list the register assigns to — it already holds a name, a role
+// and an email, which is exactly what is needed to chase someone. Most people in a set of
+// minutes (the architect, the GC's super) will never have a Coaster login, so contacts are
+// deliberately separate from users. Company is added because "John at the GC" and "John at
+// the architect" are two different people to a PM.
+if (!columnsOf('team_members').includes('company')) {
+  db.exec(`ALTER TABLE team_members ADD COLUMN company TEXT`);
+}
+
 // Which contract an invoice was reviewed against, recorded on the review itself. Without it
 // a saved review cannot say whose terms it applied, and re-reading history would be guesswork
 // once a project carries several agreements. The label is copied rather than joined so the
