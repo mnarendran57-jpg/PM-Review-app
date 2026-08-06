@@ -191,12 +191,52 @@ export const projectsApi = {
   delete: id => api.delete(`/projects/${id}`).then(r => r.data),
 };
 
+// The RFI log. Same shape as the submittal log — one entry per RFI with a revision behind it
+// for each trip to the A/E — plus the predicted answer, which is run on demand and kept
+// separate from the log because it is for the PM's understanding, not a record of anything.
 export const rfisApi = {
   list: params => api.get('/rfis', { params }).then(r => r.data),
-  create: data => api.post('/rfis', data).then(r => r.data),
-  update: (id, data) => api.put(`/rfis/${id}`, data).then(r => r.data),
+  get: id => api.get(`/rfis/${id}`).then(r => r.data),
+  extract: formData => api.post('/rfis/extract', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => r.data),
+  create: formData => api.post('/rfis', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => r.data),
+  update: (id, data) => api.patch(`/rfis/${id}`, data).then(r => r.data),
   delete: id => api.delete(`/rfis/${id}`).then(r => r.data),
-  nextNumber: projectId => api.get(`/rfis/next-number/${projectId}`).then(r => r.data),
+
+  addRevision: (id, formData) => api.post(`/rfis/${id}/revisions`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => r.data),
+  updateRevision: (id, revId, data) =>
+    api.patch(`/rfis/${id}/revisions/${revId}`, data).then(r => r.data),
+  extractResponse: (id, revId, formData) =>
+    api.post(`/rfis/${id}/revisions/${revId}/extract-response`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+    }).then(r => r.data),
+  recordResponse: (id, revId, formData) =>
+    api.post(`/rfis/${id}/revisions/${revId}/response`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+    }).then(r => r.data),
+
+  // Reads the RFI against the chosen documents and suggests how the A/E is likely to answer.
+  // Two AI passes over a drawing set, so it is slow — hence the long timeout.
+  analyze: (id, formData) => api.post(`/rfis/${id}/analysis`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => r.data),
+  downloadAnalysis: async (id, fileName) => {
+    const res = await api.get(`/rfis/${id}/analysis.md`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `rfi_${id}_suggested_answer.md`);
+  },
+
+  fileUrl: (id, fileId) => `${apiBaseUrl}/rfis/${id}/files/${fileId}`,
+  downloadCsv: async projectId => {
+    const res = await api.get('/rfis/export.csv', {
+      params: projectId ? { project_id: projectId } : undefined, responseType: 'blob',
+    });
+    triggerDownload(res.data, 'RFI_Log.csv');
+  },
 };
 
 // The submittal log. A submittal is one entry with a revision behind it for each trip to

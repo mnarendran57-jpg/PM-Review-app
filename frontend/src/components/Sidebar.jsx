@@ -4,7 +4,7 @@ import {
   InboxArrowDownIcon, ArrowRightOnRectangleIcon, DocumentMagnifyingGlassIcon,
   ClipboardDocumentCheckIcon, Squares2X2Icon, ScaleIcon, ArrowLeftIcon,
   Cog6ToothIcon, EnvelopeIcon, FolderIcon, ReceiptPercentIcon, CameraIcon, UserGroupIcon,
-  ClipboardDocumentListIcon,
+  ClipboardDocumentListIcon, QuestionMarkCircleIcon,
 } from '@heroicons/react/24/outline';
 import { authApi, selectedOrg, selectedProgram, orgsApi, programsApi, projectsApi } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -65,6 +65,7 @@ const projectTools = [
   { slug: 'progress-report', label: 'Progress Report', icon: CameraIcon, color: '#fb7185', glow: 'rgba(244,63,94,0.16)' },
   { slug: 'precon-review', label: 'Pre-Construction Review', icon: ClipboardDocumentCheckIcon, color: '#34d399', glow: 'rgba(16,185,129,0.16)' },
   { slug: 'submittal-log', label: 'Submittal Log', icon: ClipboardDocumentListIcon, color: '#a78bfa', glow: 'rgba(139,92,246,0.16)' },
+  { slug: 'rfi-log', label: 'RFI Log', icon: QuestionMarkCircleIcon, color: '#38bdf8', glow: 'rgba(14,165,233,0.16)' },
 ];
 
 const globalNav = [

@@ -148,24 +148,8 @@ db.exec(`
     value TEXT
   );
 
-  CREATE TABLE IF NOT EXISTS rfis (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    rfi_number TEXT NOT NULL,
-    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
-    title TEXT NOT NULL,
-    submitted_by TEXT,
-    submitted_to TEXT,
-    date_submitted TEXT,
-    date_response_due TEXT,
-    date_responded TEXT,
-    status TEXT DEFAULT 'Open',
-    priority TEXT DEFAULT 'Medium',
-    description TEXT,
-    response TEXT,
-    linked_document TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-  );
+  -- The RFI log's tables are defined further down, once projects exists and the tenancy
+  -- migration has run — see "RFI log".
 
   -- The submittal log's tables are defined further down, once projects exists and the
   -- tenancy migration has run — see "Submittal log".
@@ -787,6 +771,108 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_submittals_project ON submittals(project_id);
   CREATE INDEX IF NOT EXISTS idx_submittal_revisions_submittal ON submittal_revisions(submittal_id);
   CREATE INDEX IF NOT EXISTS idx_submittal_files_submittal ON submittal_files(submittal_id);
+`);
+
+// --- RFI log ---------------------------------------------------------------------------
+// Same two-part shape as the submittal log, and for the same reason: an RFI is a question
+// that may be asked more than once. `rfis` holds the question itself; `rfi_revisions` holds
+// each trip to the A/E and back, so an answer that doesn't resolve it can be pushed back
+// without opening a second RFI. Status is derived from the newest revision, never stored.
+//
+// The old flat table had one row per RFI with the answer written onto it, so a re-ask
+// overwrote the previous answer. It was never reachable from the app; it is replaced only
+// when it holds no rows, so no deployment can lose data to this.
+const legacyRfis = tableExists('rfis')
+  && columnsOf('rfis').includes('response')
+  && db.prepare(`SELECT COUNT(*) AS c FROM rfis`).get().c === 0;
+if (legacyRfis) {
+  db.exec(`DROP TABLE rfis`);
+  console.log('[rfis] replaced the unused flat RFI table with the revision-aware log');
+}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS rfis (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    rfi_number TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    question TEXT,
+    -- Which trade the RFI is really asking about. Chosen by the PM, and it is what steers
+    -- the analysis to the right drawings — a mechanical question read against the
+    -- architectural sheets produces a confident, useless answer.
+    discipline TEXT,
+    submitted_by TEXT,
+    notes TEXT,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS rfi_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rfi_id INTEGER NOT NULL REFERENCES rfis(id) ON DELETE CASCADE,
+    revision_number INTEGER NOT NULL DEFAULT 0,
+    date_received TEXT,
+    date_forwarded TEXT,
+    date_response_due TEXT,
+    date_returned TEXT,
+    response_action TEXT,
+    responded_by TEXT,
+    response_notes TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE (rfi_id, revision_number)
+  );
+
+  -- 'rfi' is what the contractor asked, 'response' is what the A/E returned, 'reference' is
+  -- an extra document attached for this one RFI (a photo, a sketch, a spec page) that is not
+  -- part of the project's Shared Documents.
+  CREATE TABLE IF NOT EXISTS rfi_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rfi_id INTEGER NOT NULL REFERENCES rfis(id) ON DELETE CASCADE,
+    revision_id INTEGER REFERENCES rfi_revisions(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL DEFAULT 'rfi',
+    file_name TEXT NOT NULL,
+    mime_type TEXT,
+    file_key TEXT,
+    file_blob BLOB,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  -- Which of the project's Shared Documents this RFI should be read against. A join table
+  -- rather than a list of ids on the RFI, so removing a shared document cannot leave an RFI
+  -- pointing at one that no longer exists.
+  CREATE TABLE IF NOT EXISTS rfi_documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rfi_id INTEGER NOT NULL REFERENCES rfis(id) ON DELETE CASCADE,
+    contract_id INTEGER NOT NULL REFERENCES project_contracts(id) ON DELETE CASCADE,
+    UNIQUE (rfi_id, contract_id)
+  );
+
+  -- The predicted answer. Advisory only and deliberately kept out of the log's status: it
+  -- exists so the PM understands the question before the A/E replies, and it must never be
+  -- mistaken for the A/E's actual answer. Stored so it is not re-run (and re-charged) every
+  -- time the RFI is opened, and so the prediction can be read back against what the A/E
+  -- eventually said.
+  CREATE TABLE IF NOT EXISTS rfi_analyses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rfi_id INTEGER NOT NULL REFERENCES rfis(id) ON DELETE CASCADE,
+    revision_id INTEGER REFERENCES rfi_revisions(id) ON DELETE SET NULL,
+    discipline TEXT,
+    -- What was actually read: which documents, which sheets, which PDF pages. Recorded so
+    -- the PM can judge the answer, and correct the selection if it read the wrong sheets.
+    sources_json TEXT,
+    analysis_json TEXT NOT NULL,
+    analysis_markdown TEXT,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_rfis_project ON rfis(project_id);
+  CREATE INDEX IF NOT EXISTS idx_rfi_revisions_rfi ON rfi_revisions(rfi_id);
+  CREATE INDEX IF NOT EXISTS idx_rfi_files_rfi ON rfi_files(rfi_id);
+  CREATE INDEX IF NOT EXISTS idx_rfi_analyses_rfi ON rfi_analyses(rfi_id);
 `);
 
 // Which contract an invoice was reviewed against, recorded on the review itself. Without it

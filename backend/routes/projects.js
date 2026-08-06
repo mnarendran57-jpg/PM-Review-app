@@ -10,7 +10,18 @@ function decorate(project) {
   if (!project) return project;
   const counts = db.prepare(`
     SELECT
-      (SELECT COUNT(*) FROM rfis r WHERE r.project_id = ? AND r.status = 'Open') AS open_rfis,
+      -- RFIs still needing someone to act, read the same way as the submittal count below:
+      -- an RFI's state lives on its newest revision, so an unanswered one is out with the
+      -- A/E and one returned as "Needs More Information" is back with the contractor. Only
+      -- the three closing dispositions take it off the count.
+      (SELECT COUNT(*) FROM rfis r
+        WHERE r.project_id = ?
+          AND COALESCE((
+                SELECT rr.response_action FROM rfi_revisions rr
+                WHERE rr.rfi_id = r.id
+                ORDER BY rr.revision_number DESC LIMIT 1
+              ), '') NOT IN ('Answered', 'Answered with Conditions', 'Void / Withdrawn')
+      ) AS open_rfis,
       -- Submittals still needing someone to act. A submittal's state lives on its newest
       -- revision, so that is what decides: an unanswered revision is out for review, and one
       -- returned as "Revise and Resubmit" or "Rejected" is waiting on the contractor. Only
