@@ -80,7 +80,7 @@ async function analyzeOnePass(entries, { projectName, reviewFocus, passNumber, p
       'they are being reviewed separately and will be combined with your findings.';
   }
 
-  const response = await client.messages.create({
+  const response = await sendWithRetry({
     model: 'claude-sonnet-4-5',
     max_tokens: 8192,
     messages: [{ role: 'user', content: [...contentBlocks, { type: 'text', text: prompt }] }],
@@ -90,6 +90,33 @@ async function analyzeOnePass(entries, { projectName, reviewFocus, passNumber, p
     throw new Error('The review was too large to complete in one pass. Try again with fewer documents at once.');
   }
   return safeJsonFromText(response.content[0].text);
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// A long set is read in several passes, and the account's allowance (10,000 input tokens and
+// 5 requests a minute) is comfortably exceeded by two dense drawing passes back to back. So a
+// rate-limit answer is expected here, not exceptional, and has to be waited out rather than
+// treated as a failure. This module was the only one without it, which is why a large upload
+// reported that it could not be processed: the first 429 aborted the whole review.
+//
+// The wait comes from the API's own retry-after where it gives one, since it knows when the
+// window resets better than a guess does.
+async function sendWithRetry(request, attempts = 4) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await client.messages.create(request);
+    } catch (err) {
+      const retryable = err?.status === 429 || err?.status === 529 || err?.status === 503;
+      if (!retryable || attempt >= attempts) throw err;
+      const advertised = Number(err?.headers?.['retry-after']);
+      const wait = Number.isFinite(advertised) && advertised > 0
+        ? Math.min(advertised, 90) * 1000
+        : Math.min(20000 * attempt, 60000);
+      console.warn(`[precon] ${err.status} on attempt ${attempt}; waiting ${Math.round(wait / 1000)}s`);
+      await sleep(wait);
+    }
+  }
 }
 
 // Same finding reported against two parts of one document should appear once. Compared on
@@ -127,17 +154,51 @@ function mergeAnalyses(results) {
 // A long document is read in several passes and the findings combined, so no upload is
 // refused for being too long. Passes run one at a time rather than in parallel: the account's
 // per-minute token allowance is low enough that concurrent passes would rate-limit each other.
+//
+// A pass that still fails after its retries no longer sinks the review. On a 300-page set
+// that is eight calls, and throwing away seven good ones because the eighth failed is the
+// worst possible outcome for the PM — an incomplete review that says which pages are missing
+// is far more use than no review at all.
 async function analyzePreconDocuments(files, { projectName, reviewFocus }) {
   const passes = await planPasses(files);
   const results = [];
+  const failed = [];
 
   for (const [index, entries] of passes.entries()) {
-    results.push(await analyzeOnePass(entries, {
-      projectName, reviewFocus, passNumber: index + 1, passTotal: passes.length,
-    }));
+    try {
+      results.push(await analyzeOnePass(entries, {
+        projectName, reviewFocus, passNumber: index + 1, passTotal: passes.length,
+      }));
+    } catch (err) {
+      console.error(`[precon] pass ${index + 1}/${passes.length} failed:`, err.message);
+      failed.push({ label: entries.map(passLabel).join(', '), reason: err.message });
+    }
   }
 
-  return mergeAnalyses(results);
+  // Every pass failed — there is nothing to report, so surface the reason rather than an
+  // empty review that looks like a considered "nothing found".
+  if (results.length === 0) {
+    const err = new Error(failed[0]?.reason || 'The documents could not be analyzed.');
+    err.status = 502;
+    throw err;
+  }
+
+  const merged = mergeAnalyses(results);
+  merged.coverage = {
+    passesTotal: passes.length,
+    passesRead: results.length,
+    skipped: failed,
+  };
+  // Said in the report itself, not only in the metadata, because a PM reading the findings
+  // needs to know they are partial at the point they are reading them.
+  if (failed.length > 0) {
+    merged.insufficientInfoNote = [
+      merged.insufficientInfoNote,
+      `Only ${results.length} of ${passes.length} sections of this document set could be read — ` +
+      `${failed.map(f => f.label).join('; ')} could not be processed. The findings below cover the rest.`,
+    ].filter(Boolean).join(' ');
+  }
+  return merged;
 }
 
 module.exports = { analyzePreconDocuments, SUPPORTED_IMAGE_TYPES };

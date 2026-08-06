@@ -156,6 +156,17 @@ export default function PreconReview() {
                 <span className="flex items-center gap-2"><SparklesIcon className="w-4 h-4" /> Generate Review</span>
               )}
             </button>
+
+            {/* A full drawing set is read 40 pages at a time, one pass after another, with a
+                pause between them to stay inside the account's per-minute allowance. That is
+                genuinely minutes of work, and a spinner with no explanation reads as a hang —
+                which is what a large upload looked like before. */}
+            {generating && (
+              <p className="text-[11px] text-gray-500 text-center leading-relaxed">
+                Large sets are read in sections, a few minutes each. Leave this tab open —
+                closing it cancels the review.
+              </p>
+            )}
           </div>
         </div>
 
@@ -165,6 +176,9 @@ export default function PreconReview() {
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">Review Result</h2>
                 <div className="flex items-center gap-2">
+                  <button className="btn-primary px-3 py-1.5" onClick={() => preconReviewApi.downloadPdf(result.id)}>
+                    <ArrowDownTrayIcon className="w-4 h-4" /> PDF
+                  </button>
                   <button className="btn-secondary px-3 py-1.5" onClick={() => preconReviewApi.downloadMarkdown(result.id)}>
                     <DocumentTextIcon className="w-4 h-4" /> .md
                   </button>
@@ -180,6 +194,9 @@ export default function PreconReview() {
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">Stored Review</h2>
                 <div className="flex items-center gap-2">
+                  <button className="btn-primary px-3 py-1.5" onClick={() => preconReviewApi.downloadPdf(viewing.id)}>
+                    <ArrowDownTrayIcon className="w-4 h-4" /> PDF
+                  </button>
                   <button className="btn-secondary px-3 py-1.5" onClick={() => preconReviewApi.downloadMarkdown(viewing.id)}>
                     <DocumentTextIcon className="w-4 h-4" /> .md
                   </button>

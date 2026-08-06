@@ -4,6 +4,7 @@ const multer = require('multer');
 const db = require('../database');
 const { analyzePreconDocuments } = require('../lib/preconReview');
 const { renderMarkdown } = require('../lib/preconReport');
+const { renderPreconReportPdf } = require('../lib/preconReportPdf');
 const { friendlyAiError } = require('../lib/aiErrors');
 const storage = require('../lib/storage');
 
@@ -111,6 +112,38 @@ router.get('/:id/report.md', (req, res) => {
   res.setHeader('Content-Type', 'text/markdown');
   res.setHeader('Content-Disposition', `attachment; filename="Precon_Review_${(row.project_name || 'report').replace(/[^a-z0-9]+/gi, '_')}.md"`);
   res.send(row.report_markdown);
+});
+
+// The PDF is what actually gets sent on to an owner or a design team, so it is generated from
+// the stored analysis rather than from the markdown — same source as the .md export, no risk
+// of the two saying different things.
+router.get('/:id/report.pdf', async (req, res) => {
+  try {
+    const row = visibleRow(req);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+
+    // Reuses the letterhead the proposal memo prints, so editing it in one place keeps every
+    // outgoing document consistent.
+    const tpl = db.prepare(
+      `SELECT company_name FROM memo_templates ORDER BY is_default DESC, id ASC LIMIT 1`
+    ).get();
+
+    const pdf = await renderPreconReportPdf({
+      projectName: row.project_name,
+      reviewFocus: row.review_focus,
+      fileNames: JSON.parse(row.file_names || '[]'),
+      analysis: JSON.parse(row.report_json),
+      companyName: tpl?.company_name || undefined,
+    });
+
+    const stem = (row.project_name || 'Precon').replace(/[^a-z0-9]+/gi, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${stem}_Precon_Review.pdf"`);
+    res.send(pdf);
+  } catch (err) {
+    console.error('Precon PDF error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.get('/:id/files/:fileId', async (req, res) => {

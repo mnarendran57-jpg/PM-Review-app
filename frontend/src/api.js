@@ -17,6 +17,11 @@ const apiBaseUrl = configuredBase.endsWith('/api')
 // behind it: without a timeout, every request spins indefinitely and the app "lags".
 const DEFAULT_TIMEOUT = 20000;   // 20s — plenty for any DB-backed request
 const AI_TIMEOUT = 180000;       // 3min — document extraction / report generation
+// A whole drawing set is read in one request, 40 pages at a time, one pass after another, and
+// the account's per-minute allowance forces a wait between them. Eight passes is realistic for
+// a 300-page set, so three minutes guaranteed a timeout on exactly the uploads this feature
+// exists for — the browser gave up long before the server had finished.
+const LONG_AI_TIMEOUT = 1200000; // 20min — multi-pass review of a full document set
 
 const api = axios.create({ baseURL: apiBaseUrl, timeout: DEFAULT_TIMEOUT });
 
@@ -514,11 +519,15 @@ export const preconReviewApi = {
   list: params => api.get('/precon-review', { params }).then(r => r.data),
   get: id => api.get(`/precon-review/${id}`).then(r => r.data),
   create: formData => api.post('/precon-review', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: LONG_AI_TIMEOUT
   }).then(r => r.data),
   downloadMarkdown: async (id, fileName) => {
     const res = await api.get(`/precon-review/${id}/report.md`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `precon_review_${id}.md`);
+  },
+  downloadPdf: async (id, fileName) => {
+    const res = await api.get(`/precon-review/${id}/report.pdf`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `precon_review_${id}.pdf`);
   },
   downloadFile: async (reviewId, fileId, fileName) => {
     const res = await api.get(`/precon-review/${reviewId}/files/${fileId}`, { responseType: 'blob' });
