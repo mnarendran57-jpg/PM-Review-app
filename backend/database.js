@@ -709,13 +709,31 @@ db.exec(`UPDATE project_contracts SET doc_type = 'contract' WHERE doc_type IS NU
 // replaced rather than migrated. The row check is what makes that safe: if a deployment
 // somehow did put data in it, the old table is left exactly where it is and the new tables
 // are created alongside under different names, so nothing is ever destroyed silently.
-const legacySubmittals = tableExists('submittals')
-  && columnsOf('submittals').includes('review_action')
-  && db.prepare(`SELECT COUNT(*) AS c FROM submittals`).get().c === 0;
-if (legacySubmittals) {
-  db.exec(`DROP TABLE submittals`);
-  console.log('[submittals] replaced the unused flat submittal table with the revision-aware log');
+// Clears a superseded table out of the way so the definition below can create the new one.
+// An empty one is dropped; one holding rows is renamed aside instead, because the data may be
+// the only copy. Either way the name is freed — simply leaving the old table in place would
+// turn the CREATE below into a no-op and every query would then fail on a missing column,
+// protecting the rows while breaking the feature that reads them.
+function retireLegacyTable(name, legacyColumn, what) {
+  if (!tableExists(name) || !columnsOf(name).includes(legacyColumn)) return;
+
+  if (db.prepare(`SELECT COUNT(*) AS c FROM ${name}`).get().c === 0) {
+    db.exec(`DROP TABLE ${name}`);
+    console.log(`[${name}] replaced the unused flat ${what} table with the revision-aware log`);
+    return;
+  }
+  // Keep looking until an unused name is found, so a second upgrade cannot clobber the
+  // archive left by the first.
+  let archive = `${name}_legacy`;
+  for (let n = 2; tableExists(archive); n++) archive = `${name}_legacy_${n}`;
+  db.exec(`ALTER TABLE ${name} RENAME TO ${archive}`);
+  console.warn(
+    `[${name}] the old ${what} table held rows, so it has been kept as "${archive}" ` +
+    `and the new log starts empty. Nothing was deleted.`
+  );
 }
+
+retireLegacyTable('submittals', 'review_action', 'submittal');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS submittals (
@@ -782,13 +800,7 @@ db.exec(`
 // The old flat table had one row per RFI with the answer written onto it, so a re-ask
 // overwrote the previous answer. It was never reachable from the app; it is replaced only
 // when it holds no rows, so no deployment can lose data to this.
-const legacyRfis = tableExists('rfis')
-  && columnsOf('rfis').includes('response')
-  && db.prepare(`SELECT COUNT(*) AS c FROM rfis`).get().c === 0;
-if (legacyRfis) {
-  db.exec(`DROP TABLE rfis`);
-  console.log('[rfis] replaced the unused flat RFI table with the revision-aware log');
-}
+retireLegacyTable('rfis', 'response', 'RFI');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS rfis (
