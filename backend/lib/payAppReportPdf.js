@@ -103,7 +103,15 @@ async function renderPayAppReportPdf({ report, companyName }) {
   text(`Application #: ${h.applicationNumber}     Period To: ${h.periodTo}`, { gapAfter: 10 });
 
   text('Summary', { bold: true, size: 12, gapAfter: 5 });
-  text(report.plainEnglish, { gapAfter: 12 });
+  // The audit's own summary wins where there is one. The generated sentence describes only
+  // the arithmetic checks, so on an application that adds up but fails the audit it would
+  // read "no issues found" directly above a list of failures.
+  text(
+    report.compliance?.audit && !report.compliance.audit.unavailable && report.compliance.audit.summary
+      ? report.compliance.audit.summary
+      : report.plainEnglish,
+    { gapAfter: 12 }
+  );
 
   text('The Numbers', { bold: true, size: 12, gapAfter: 5 });
   const rows = [
@@ -123,8 +131,54 @@ async function renderPayAppReportPdf({ report, companyName }) {
   }
   y -= 8;
 
+  const audit = report.compliance?.audit && !report.compliance.audit.unavailable
+    ? report.compliance.audit : null;
+
+  // Where the audit's recomputation disagrees with the extracted figures, both are shown.
+  // One is wrong, and the person releasing payment is the right one to decide which.
+  if (audit?.recomputationDisagreements?.length) {
+    text('Recomputation Disagreements', { bold: true, size: 12, gapAfter: 3 });
+    text('The audit recalculated these from the documents and did not reach the same number. Resolve each before certifying.',
+      { size: 9, italic: true, color: GREY, gapAfter: 5 });
+    table(
+      [
+        { label: 'Figure', width: 0.40, align: 'left' },
+        { label: 'On the form', width: 0.20, align: 'right' },
+        { label: 'Recomputed', width: 0.20, align: 'right' },
+        { label: 'Difference', width: 0.20, align: 'right' },
+      ],
+      report.compliance.audit.recomputationDisagreements.map(d => [
+        d.field, money(d.stated), money(d.recomputed), { text: money(d.difference), bold: true },
+      ])
+    );
+  }
+
   const issues = [...report.critical, ...report.mathErrors];
   text('Issues Found', { bold: true, size: 12, gapAfter: 5 });
+
+  // The six questions the audit standard requires an explicit answer to, each marked plainly
+  // rather than left for the reader to infer from the prose below.
+  if (audit?.verdicts) {
+    for (const v of Object.values(audit.verdicts)) {
+      ensureSpace(BODY_SIZE * 3 + 10);
+      const failed = v.pass === false;
+      const mark = v.pass === true ? 'PASS' : failed ? 'FAIL' : 'UNKNOWN';
+      const colour = v.pass === true ? rgb(0.08, 0.5, 0.24) : failed ? RED : GREY;
+      page.drawText(mark, { x: MARGIN, y, size: 7.5, font: fontBold, color: colour });
+      text(v.label, { bold: failed, indent: 46, gapAfter: 1, color: failed ? RED : INK });
+      if (v.detail) text(v.detail, { indent: 46, size: 9, color: GREY, gapAfter: 6 });
+    }
+    y -= 4;
+  }
+
+  if (audit?.notarization) {
+    const n = audit.notarization;
+    const state = n.valid === true ? 'Notarization valid'
+      : n.valid === false ? 'NOTARIZATION NOT VALID' : 'Notarization could not be confirmed';
+    text(state, { bold: true, size: 10, color: n.valid === false ? RED : INK, gapAfter: 2 });
+    if (n.detail) text(n.detail, { indent: 12, size: 9, color: GREY, gapAfter: 8 });
+  }
+
   if (issues.length === 0) {
     text('None. Every figure checked was internally consistent and within contract limits.', { italic: true, gapAfter: 12 });
   } else {
@@ -231,11 +285,39 @@ async function renderPayAppReportPdf({ report, companyName }) {
     y -= 4;
   }
 
+  // The standard closes with one numbered checklist, so that everything raised above has a
+  // single place where it becomes an action rather than being scattered through the report.
+  if (audit) {
+    const actions = [];
+    for (const d of audit.recomputationDisagreements || []) {
+      actions.push(`Resolve the ${d.field} disagreement — the form shows ${money(d.stated)}, recomputation gives ${money(d.recomputed)}.`);
+    }
+    if (audit.notarization?.valid === false) actions.push('Return the application for proper notarization.');
+    for (const s of audit.subcontractors || []) {
+      for (const issue of s.issues || []) actions.push(`${s.name}: ${issue}`);
+    }
+    if (audit.taxTotalCharged > 0) {
+      actions.push(`Deduct ${money(audit.taxTotalCharged)} of sales tax before certifying.`);
+    }
+    for (const u of audit.untracedBilling || []) {
+      actions.push(`Obtain backup for ${u.item}, or remove it from this application.`);
+    }
+    if (actions.length) {
+      ensureSpace(60);
+      text('Before Approving, or Needing Correction', { bold: true, size: 12, gapAfter: 5 });
+      actions.forEach((a, i) => text(`${i + 1}. ${a}`, { indent: 8, gapAfter: 4 }));
+      y -= 6;
+    }
+  }
+
   rule();
   const passed = report.cleanBill.length;
   const skipped = report.warnings.length;
   text(
-    `Checks performed: ${passed} passed, ${issues.length} flagged, ${skipped} not applicable to this application.`,
+    // Counts the arithmetic checks only, and says so — the audit's findings are listed above
+    // and counting them here would imply one tally covers both.
+    `Arithmetic checks: ${passed} passed, ${issues.length} flagged, ${skipped} not applicable.`
+    + (audit ? ` Audit findings are listed above.` : ''),
     { size: 9, color: GREY, gapAfter: 4 }
   );
   text(

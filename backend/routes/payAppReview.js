@@ -8,7 +8,7 @@ const { buildReport } = require('../lib/payAppReport');
 const { renderPayAppReportPdf } = require('../lib/payAppReportPdf');
 const { annotatePayAppPdf } = require('../lib/payAppAnnotate');
 const { extractContractTerms } = require('../lib/contractExtract');
-const { scanCompliance } = require('../lib/payAppCompliance');
+const { auditPayApp } = require('../lib/payAppAudit');
 const { buildSubReconciliation, runMissedItemChecks } = require('../lib/payAppReconcile');
 const { buildSiteVerificationChecklist } = require('../lib/payAppChecklist');
 const { backfillPayApp } = require('../lib/payAppNormalize');
@@ -486,29 +486,75 @@ router.post('/', upload.fields([
     // tax status and unallowable items, and compare billed lines to the agreed scope.
     // Never let this sink the review — the math checks above are the load-bearing part
     // and have already succeeded.
-    let compliance = null;
-    if (contractTerms || scopeBaseline) {
-      try {
-        compliance = await scanCompliance({
-          payAppBuffer: currentFile.buffer,
-          backupBuffers: backupFiles.map(f => f.buffer),
-          contractTerms,
-          scopeBaseline,
-          currentItems: current.lineItems.map(li => ({
-            itemNo: li.itemNo, description: li.description, scheduledValue: li.c ?? null, billedToDate: li.g ?? null,
-          })),
-          coLog: changeOrderLog,
-        });
-      } catch (err) {
-        console.error('Compliance scan failed (review continues):', err.message);
-        compliance = {
-          scopeComparison: null, scopeSource: null,
-          taxFindings: [], unallowableFindings: [], backupCoverage: null,
-          notes: `The contract compliance scan could not be completed (${friendlyAiError(err)}). The math checks are unaffected.`,
-          incomplete: true,
-        };
+    // The prior application's certified figure, so Line 7 can be checked against the document
+    // it should tie to rather than only for internal consistency, as the standard requires.
+    let priorApplication = null;
+    if (projectId) {
+      const prior = db.prepare(`
+        SELECT application_number, extracted_data FROM pay_app_reviews
+        WHERE project_id = ? AND application_number IS NOT NULL AND application_number < ?
+        ORDER BY application_number DESC LIMIT 1
+      `).get(projectId, current.summary.applicationNumber ?? Number.MAX_SAFE_INTEGER);
+      const priorSummary = prior && JSON.parse(prior.extracted_data)?.current?.summary;
+      if (priorSummary?.line6 != null) {
+        priorApplication = { applicationNumber: prior.application_number, line6: priorSummary.line6 };
       }
     }
+
+    // The audit half, conducted against backend/standards/cmar-pay-app-audit.md. It carries
+    // the checks the arithmetic cannot make — notarisation, subcontractor certification dates,
+    // retainage against the GC's own rate, change orders landing in contingency, lien waivers,
+    // and the tax sweep — and recomputes the G702 lines itself so a disagreement with the
+    // figures computed here becomes a visible finding rather than two silent versions.
+    //
+    // Never allowed to sink the review: the deterministic checks above have already run and
+    // are what the report's figures come from.
+    let audit = null;
+    try {
+      audit = await auditPayApp({
+        payAppBuffer: currentFile.buffer,
+        backupBuffers: backupFiles.map(f => f.buffer),
+        contractTerms,
+        scopeBaseline,
+        priorApplication,
+        retainageRate: retainagePolicy?.rate ?? null,
+        codeFigures: {
+          line3_contractSumToDate: current.summary.line3 ?? null,
+          line4_totalCompletedAndStored: current.summary.line4 ?? null,
+          line5_retainage: current.summary.line5 ?? null,
+          line6_totalEarnedLessRetainage: current.summary.line6 ?? null,
+          line7_lessPreviousCertificates: current.summary.line7 ?? null,
+          line8_currentPaymentDue: current.summary.line8 ?? null,
+          line9_balanceToFinish: current.summary.line9 ?? null,
+        },
+      });
+    } catch (err) {
+      console.error('Pay app audit failed (review continues):', err.message);
+      audit = {
+        unavailable: true,
+        notes: `The contract audit could not be completed (${friendlyAiError(err)}). The arithmetic checks are unaffected.`,
+      };
+    }
+
+    // Kept on the same field the report and the stored reviews already read, so existing
+    // records and the new ones render through one path.
+    const compliance = audit && !audit.unavailable ? {
+      audit,
+      scopeComparison: audit.scopeComparison,
+      scopeSource: scopeBaseline?.source ?? null,
+      taxFindings: (audit.taxInvoices || []).filter(t => !t.exemptionApplied).map(t => ({
+        where: [t.vendor, t.invoiceRef].filter(Boolean).join(' — '),
+        description: t.vendor || t.invoiceRef,
+        amount: t.taxAmount,
+        detail: t.detail,
+      })),
+      unallowableFindings: [],
+      backupCoverage: audit.untracedBilling?.length
+        ? `${audit.untracedBilling.length} billed item(s) have no traceable backup.`
+        : null,
+      notes: audit.notCheckable?.length ? audit.notCheckable.join(' ') : null,
+      incomplete: false,
+    } : { audit, scopeComparison: null, scopeSource: null, taxFindings: [], unallowableFindings: [], backupCoverage: null, notes: audit?.notes || null, incomplete: true };
 
     const report = buildReport({ data, results, compliance, contractTerms, subReconciliation: subRecon.rows });
 
