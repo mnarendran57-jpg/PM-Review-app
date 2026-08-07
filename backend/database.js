@@ -507,6 +507,94 @@ for (const row of db.prepare(`SELECT id, sections FROM memo_templates`).all()) {
   }
 }
 
+
+// --- Tenancy migration ---------------------------------------------------------------
+// Every record a user can reach carries an org_id, so a query can be constrained to one
+// organization with a single WHERE clause rather than a chain of joins that a newly added
+// route might forget to write.
+const TENANT_TABLES = [
+  'projects', 'proposal_intakes', 'pay_app_reviews', 'pco_reviews', 'invoice_reviews',
+  'progress_reports', 'preconstruction_reviews', 'memo_templates', 'team_members',
+  'document_reviews', 'rfis', 'submittals', 'pay_applications', 'invoices',
+];
+for (const table of TENANT_TABLES) {
+  if (!columnsOf(table).length) continue;
+  renameColumn(table, 'firm_id', 'org_id');
+  if (!columnsOf(table).includes('org_id')) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN org_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE`);
+  }
+}
+// A project always belongs to a program; the column may predate that rule.
+if (!columnsOf('projects').includes('program_id')) {
+  db.exec(`ALTER TABLE projects ADD COLUMN program_id INTEGER REFERENCES programs(id) ON DELETE SET NULL`);
+}
+
+// One-time bootstrap for a database that predates organizations entirely.
+if (db.prepare(`SELECT COUNT(*) AS c FROM organizations`).get().c === 0) {
+  const orgName = process.env.DEFAULT_ORG_NAME || process.env.DEFAULT_FIRM_NAME || 'Coaster';
+  const orgId = db.prepare(`INSERT INTO organizations (name) VALUES (?)`).run(orgName).lastInsertRowid;
+
+  for (const table of TENANT_TABLES) {
+    if (columnsOf(table).includes('org_id')) {
+      db.exec(`UPDATE ${table} SET org_id = ${orgId} WHERE org_id IS NULL`);
+    }
+  }
+  // Programs are derived from the client names already typed onto projects.
+  const names = db.prepare(`
+    SELECT DISTINCT TRIM(client_name) AS name FROM projects
+    WHERE client_name IS NOT NULL AND TRIM(client_name) <> ''
+  `).all().map(r => r.name);
+  const insertProgram = db.prepare(`INSERT INTO programs (org_id, name) VALUES (?, ?)`);
+  for (const name of names) {
+    const programId = insertProgram.run(orgId, name).lastInsertRowid;
+    db.prepare(`UPDATE projects SET program_id=? WHERE TRIM(client_name)=? AND program_id IS NULL`).run(programId, name);
+  }
+  console.log(`[access] created organization "${orgName}" and moved existing data into it (${names.length} program(s) derived)`);
+}
+
+// --- Organization letterhead and memo templates -----------------------------------------
+// Deliberately placed after the tenancy migration above. Everything below reads
+// organizations.letterhead and memo_templates.org_id, and both columns are added by that
+// migration — running earlier threw "no such column" on any database that did not already
+// have them, which is every database except a developer machine that had been through a
+// half-applied edit. That is exactly how it reached a deploy without being noticed.
+
+// --- Per-organization letterhead ---------------------------------------------------------
+// The memo logo used to be a single file on disk (assets/olivier-logo.jpg) and the address
+// block came from whichever memo template happened to sort first, with no regard for which
+// organization was asking. Every customer's outgoing documents therefore carried Olivier's
+// branding. The logo now belongs to the organization that owns it.
+if (!columnsOf('organizations').includes('logo_key')) {
+  db.exec(`ALTER TABLE organizations ADD COLUMN logo_key TEXT`);
+}
+if (!columnsOf('organizations').includes('logo_blob')) {
+  db.exec(`ALTER TABLE organizations ADD COLUMN logo_blob BLOB`);
+}
+if (!columnsOf('organizations').includes('logo_mime')) {
+  db.exec(`ALTER TABLE organizations ADD COLUMN logo_mime TEXT`);
+}
+// The letterhead address, kept on the organization rather than only on a memo template, so a
+// customer with no template still has an identity for the documents that need one.
+if (!columnsOf('organizations').includes('letterhead')) {
+  db.exec(`ALTER TABLE organizations ADD COLUMN letterhead TEXT`);
+}
+
+// A memo template created before templates belonged to anyone has no org_id, and the tenancy
+// bootstrap above only fills that in for a database with no organizations at all. On a live
+// deployment the organization already exists, so those templates stay orphaned — invisible to
+// every org-scoped query, and replaced by a blank one by the seeding below. They are adopted
+// by the oldest organization, which is the one they were made under before tenancy existed.
+const orphanTemplates = db.prepare(
+  `SELECT COUNT(*) AS c FROM memo_templates WHERE org_id IS NULL`
+).get().c;
+if (orphanTemplates > 0) {
+  const oldest = db.prepare(`SELECT id FROM organizations ORDER BY id ASC LIMIT 1`).get();
+  if (oldest) {
+    db.prepare(`UPDATE memo_templates SET org_id = ? WHERE org_id IS NULL`).run(oldest.id);
+    console.log(`[memo] adopted ${orphanTemplates} memo template(s) into organization ${oldest.id}`);
+  }
+}
+
 // The letterhead an existing template carries is that organization's, so it is copied onto
 // the organization itself. Everything that prints a letterhead reads it from there now, which
 // is what stops one customer's address appearing on another's documents.
@@ -558,50 +646,6 @@ for (const org of orgsNeedingTemplate) {
     INSERT INTO memo_templates (org_id, name, is_default, company_name, header_title, sections)
     VALUES (?, ?, 1, ?, ?, ?)
   `).run(org.id, 'Standard Proposal Memo', existingLetterhead?.letterhead || '', '', defaultSections);
-}
-
-// --- Tenancy migration ---------------------------------------------------------------
-// Every record a user can reach carries an org_id, so a query can be constrained to one
-// organization with a single WHERE clause rather than a chain of joins that a newly added
-// route might forget to write.
-const TENANT_TABLES = [
-  'projects', 'proposal_intakes', 'pay_app_reviews', 'pco_reviews', 'invoice_reviews',
-  'progress_reports', 'preconstruction_reviews', 'memo_templates', 'team_members',
-  'document_reviews', 'rfis', 'submittals', 'pay_applications', 'invoices',
-];
-for (const table of TENANT_TABLES) {
-  if (!columnsOf(table).length) continue;
-  renameColumn(table, 'firm_id', 'org_id');
-  if (!columnsOf(table).includes('org_id')) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN org_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE`);
-  }
-}
-// A project always belongs to a program; the column may predate that rule.
-if (!columnsOf('projects').includes('program_id')) {
-  db.exec(`ALTER TABLE projects ADD COLUMN program_id INTEGER REFERENCES programs(id) ON DELETE SET NULL`);
-}
-
-// One-time bootstrap for a database that predates organizations entirely.
-if (db.prepare(`SELECT COUNT(*) AS c FROM organizations`).get().c === 0) {
-  const orgName = process.env.DEFAULT_ORG_NAME || process.env.DEFAULT_FIRM_NAME || 'Coaster';
-  const orgId = db.prepare(`INSERT INTO organizations (name) VALUES (?)`).run(orgName).lastInsertRowid;
-
-  for (const table of TENANT_TABLES) {
-    if (columnsOf(table).includes('org_id')) {
-      db.exec(`UPDATE ${table} SET org_id = ${orgId} WHERE org_id IS NULL`);
-    }
-  }
-  // Programs are derived from the client names already typed onto projects.
-  const names = db.prepare(`
-    SELECT DISTINCT TRIM(client_name) AS name FROM projects
-    WHERE client_name IS NOT NULL AND TRIM(client_name) <> ''
-  `).all().map(r => r.name);
-  const insertProgram = db.prepare(`INSERT INTO programs (org_id, name) VALUES (?, ?)`);
-  for (const name of names) {
-    const programId = insertProgram.run(orgId, name).lastInsertRowid;
-    db.prepare(`UPDATE projects SET program_id=? WHERE TRIM(client_name)=? AND program_id IS NULL`).run(programId, name);
-  }
-  console.log(`[access] created organization "${orgName}" and moved existing data into it (${names.length} program(s) derived)`);
 }
 
 // Users used to belong to exactly one firm. That column is replaced by org_members, so
@@ -1000,26 +1044,6 @@ db.exec(`
 // the architect" are two different people to a PM.
 if (!columnsOf('team_members').includes('company')) {
   db.exec(`ALTER TABLE team_members ADD COLUMN company TEXT`);
-}
-
-// --- Per-organization letterhead ---------------------------------------------------------
-// The memo logo used to be a single file on disk (assets/olivier-logo.jpg) and the address
-// block came from whichever memo template happened to sort first, with no regard for which
-// organization was asking. Every customer's outgoing documents therefore carried Olivier's
-// branding. The logo now belongs to the organization that owns it.
-if (!columnsOf('organizations').includes('logo_key')) {
-  db.exec(`ALTER TABLE organizations ADD COLUMN logo_key TEXT`);
-}
-if (!columnsOf('organizations').includes('logo_blob')) {
-  db.exec(`ALTER TABLE organizations ADD COLUMN logo_blob BLOB`);
-}
-if (!columnsOf('organizations').includes('logo_mime')) {
-  db.exec(`ALTER TABLE organizations ADD COLUMN logo_mime TEXT`);
-}
-// The letterhead address, kept on the organization rather than only on a memo template, so a
-// customer with no template still has an identity for the documents that need one.
-if (!columnsOf('organizations').includes('letterhead')) {
-  db.exec(`ALTER TABLE organizations ADD COLUMN letterhead TEXT`);
 }
 
 // Which contract an invoice was reviewed against, recorded on the review itself. Without it
