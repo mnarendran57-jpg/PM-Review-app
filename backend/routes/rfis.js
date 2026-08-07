@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
 const multer = require('multer');
 const db = require('../database');
 const access = require('../lib/access');
@@ -8,7 +9,7 @@ const { requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../lib/plans');
 const { friendlyAiError } = require('../lib/aiErrors');
 const { extractRfi, extractRfiResponse } = require('../lib/rfiExtract');
-const { analyzeRfi } = require('../lib/rfiAnalysis');
+const { analyzeRfi, renderMarkdown } = require('../lib/rfiAnalysis');
 const {
   RESPONSE_ACTIONS, DISCIPLINES, isReopening, buildLogRow, summarize, dueDateFor,
   toIsoDay, todayUtc,
@@ -115,22 +116,76 @@ async function attachFile({ rfiId, revisionId, kind, file }) {
 
 const touch = rfiId => db.prepare(`UPDATE rfis SET updated_at=datetime('now') WHERE id=?`).run(rfiId);
 
+// Document ids arrive as a JSON array from the form, but tolerate a bare comma-separated
+// string so a hand-made request is not silently ignored.
+function parseIdList(raw) {
+  let ids = raw;
+  if (typeof ids === 'string') {
+    try { ids = JSON.parse(ids); } catch { ids = ids.split(','); }
+  }
+  if (!Array.isArray(ids)) return [];
+  return ids.map(Number).filter(Number.isInteger);
+}
+
 // The Shared Documents chosen for an RFI, replaced wholesale. Ids are checked against the
 // RFI's own project so a document from another project cannot be attached.
 function setDocuments(rfiId, projectId, rawIds) {
-  let ids = rawIds;
-  if (typeof ids === 'string') {
-    try { ids = JSON.parse(ids); } catch { ids = ids.split(',').map(s => s.trim()); }
-  }
-  if (!Array.isArray(ids)) return;
-
+  if (rawIds == null) return;
   db.prepare(`DELETE FROM rfi_documents WHERE rfi_id=?`).run(rfiId);
   const valid = db.prepare(`SELECT id FROM project_contracts WHERE id=? AND project_id=?`);
   const insert = db.prepare(`INSERT OR IGNORE INTO rfi_documents (rfi_id, contract_id) VALUES (?, ?)`);
-  for (const raw of ids) {
-    const id = Number(raw);
-    if (Number.isInteger(id) && valid.get(id, projectId)) insert.run(rfiId, id);
+  for (const id of parseIdList(rawIds)) {
+    if (valid.get(id, projectId)) insert.run(rfiId, id);
   }
+}
+
+// Pulls the bytes of the chosen Shared Documents. Scoped by project inside the query, so an
+// id from another project reads as missing rather than as a permission error.
+async function loadDocumentBuffers(projectId, ids) {
+  const find = db.prepare(
+    `SELECT file_name, label, doc_type, file_key, file_blob
+     FROM project_contracts WHERE id=? AND project_id=?`
+  );
+  const out = [];
+  for (const id of ids) {
+    const doc = find.get(id, projectId);
+    if (!doc) continue;
+    const buffer = await storage.readFile({ key: doc.file_key, blob: doc.file_blob });
+    if (buffer) {
+      out.push({ label: (doc.label || '').trim() || doc.file_name, doc_type: doc.doc_type, buffer });
+    }
+  }
+  return out;
+}
+
+// --- Suggested answers held between the analysis and the log entry -------------------------
+//
+// The PM sees the suggested answer while entering the RFI, before there is a row to hang it
+// on. The result waits here under a one-use token and is written against the entry the moment
+// it is created, so what informed their judgement is what ends up on the record — rather than
+// a second, differently-worded run of the same question.
+//
+// Memory only, deliberately: the token is claimed seconds after it is issued, and a restart
+// in that window costs nothing but the analysis, which can be re-run from the entry itself.
+const previews = new Map();
+const PREVIEW_TTL_MS = 60 * 60 * 1000;
+
+function stashPreview(req, payload) {
+  const now = Date.now();
+  for (const [key, held] of previews) if (held.expires <= now) previews.delete(key);
+  const token = crypto.randomBytes(18).toString('hex');
+  previews.set(token, { ...payload, userId: req.user.id, expires: now + PREVIEW_TTL_MS });
+  return token;
+}
+
+function claimPreview(req, token, projectId) {
+  const key = nullable(token);
+  if (!key) return null;
+  const held = previews.get(key);
+  if (!held) return null;
+  previews.delete(key);
+  const mine = held.userId === req.user.id && held.projectId === projectId;
+  return mine && held.expires > Date.now() ? held : null;
 }
 
 // --- Reading the log --------------------------------------------------------------------
@@ -223,6 +278,46 @@ router.post('/extract', upload.single('file'), async (req, res) => {
   }
 });
 
+// Finds the sheets that bear on the question and suggests an answer, before the RFI has been
+// logged. This is the order the work actually happens in: the PM opens the contractor's RFI,
+// wants to know what the drawings say about it, and logs it once they do.
+//
+// Nothing is written. The result is held under a token and saved by POST "/" below.
+router.post('/preview-analysis', upload.array('files', 6), async (req, res) => {
+  try {
+    const project = projectInScope(req, req.body.project_id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const discipline = nullable(req.body.discipline);
+    if (!DISCIPLINES.includes(discipline)) {
+      return res.status(400).json({
+        error: `Choose what the RFI is about first (${DISCIPLINES.join(', ')}) — it decides which drawings are read.`,
+      });
+    }
+
+    const documents = await loadDocumentBuffers(project.id, parseIdList(req.body.document_ids));
+    const extraFiles = (req.files || []).map(f => ({ label: f.originalname, buffer: f.buffer }));
+    if (documents.length === 0 && extraFiles.length === 0) {
+      return res.status(400).json({
+        error: 'Choose at least one of the project\'s shared documents for this RFI to be read against, or attach the RFI itself.',
+      });
+    }
+
+    const rfi = {
+      rfi_number: nullable(req.body.rfi_number) || '(not yet numbered)',
+      subject: nullable(req.body.subject) || '(no subject given)',
+      question: nullable(req.body.question),
+    };
+
+    const { analysis, sources } = await analyzeRfi({ rfi, discipline, documents, extraFiles });
+    const token = stashPreview(req, { projectId: project.id, discipline, analysis, sources });
+    res.json({ token, discipline, analysis, sources });
+  } catch (err) {
+    console.error('RFI preview analysis error:', err);
+    res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });
+  }
+});
+
 // Logs an RFI and its first revision together. The two are always created as a pair: an RFI
 // with no revision has no dates and no status, and would render as a permanently blank row.
 router.post('/', upload.array('files', 6), async (req, res) => {
@@ -271,6 +366,24 @@ router.post('/', upload.array('files', 6), async (req, res) => {
     );
 
     setDocuments(rfiId, project.id, req.body.document_ids);
+
+    // The suggested answer the PM was shown while entering this, if there was one. Its
+    // markdown is re-rendered now that the RFI has a number, so an export does not carry the
+    // placeholder it was analysed under.
+    const preview = claimPreview(req, req.body.analysis_token, project.id);
+    if (preview) {
+      const named = { rfi_number: rfiNumber, subject, question: nullable(req.body.question) };
+      db.prepare(`
+        INSERT INTO rfi_analyses (rfi_id, revision_id, discipline, sources_json, analysis_json,
+          analysis_markdown, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        rfiId, revision.lastInsertRowid, preview.discipline,
+        JSON.stringify(preview.sources), JSON.stringify(preview.analysis),
+        renderMarkdown({ rfi: named, discipline: preview.discipline, analysis: preview.analysis, sources: preview.sources }),
+        req.user.name || req.user.email
+      );
+    }
 
     // The first upload is the RFI itself; anything after it is supporting material the
     // contractor sent with it, which the analysis reads alongside the Shared Documents.
@@ -486,23 +599,9 @@ router.post('/:id/analysis', upload.array('files', 4), async (req, res) => {
     }
     if ('document_ids' in req.body) setDocuments(rfi.id, rfi.project_id, req.body.document_ids);
 
-    const chosen = db.prepare(`
-      SELECT pc.id, pc.file_name, pc.label, pc.doc_type, pc.file_key, pc.file_blob
-      FROM rfi_documents rd JOIN project_contracts pc ON pc.id = rd.contract_id
-      WHERE rd.rfi_id = ?
-    `).all(rfi.id);
-
-    const documents = [];
-    for (const doc of chosen) {
-      const buffer = await storage.readFile({ key: doc.file_key, blob: doc.file_blob });
-      if (buffer) {
-        documents.push({
-          label: (doc.label || '').trim() || doc.file_name,
-          doc_type: doc.doc_type,
-          buffer,
-        });
-      }
-    }
+    const chosenIds = db.prepare(`SELECT contract_id FROM rfi_documents WHERE rfi_id=?`)
+      .all(rfi.id).map(r => r.contract_id);
+    const documents = await loadDocumentBuffers(rfi.project_id, chosenIds);
 
     // The RFI's own attachments travel with it: a marked-up sketch from the contractor is
     // often what the question is really about.

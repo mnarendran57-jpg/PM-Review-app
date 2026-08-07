@@ -20,7 +20,7 @@ const styles = {
   'Awaiting resubmittal': { bg: '#fff7ed', color: '#c2410c', dot: '#f97316' },
   // RFI dispositions and the one status the RFI log adds. Same colour language: green
   // closes it, amber puts the ball back with the contractor, grey is inert.
-  Answered:                 { bg: '#f0fdf4', color: '#15803d', dot: '#22c55e' },
+  // ("Answered" itself is already defined above, under Status.)
   'Answered with Conditions': { bg: '#f0fdfa', color: '#0f766e', dot: '#14b8a6' },
   'Needs More Information': { bg: '#fff7ed', color: '#c2410c', dot: '#f97316' },
   'Void / Withdrawn':       { bg: '#f9fafb', color: '#6b7280', dot: '#9ca3af' },

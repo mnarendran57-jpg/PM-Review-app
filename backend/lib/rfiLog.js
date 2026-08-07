@@ -100,6 +100,9 @@ function buildLogRow(rfi, revisions, options = {}) {
     revisions: ordered,
     revisionCount: ordered.length,
     currentRevision: current ? (current.revision_number ?? 0) : null,
+    // The log lets the PM fill in the sent-to-A/E date from the table itself, and that writes
+    // to a revision rather than to the RFI — so the row has to carry which one is current.
+    currentRevisionId: current ? current.id : null,
     status: current ? current.status : STATUS.DRAFT.key,
     statusLabel: current ? current.statusLabel : STATUS.DRAFT.label,
     ballInCourt: current ? current.ballInCourt : STATUS.DRAFT.ballInCourt,

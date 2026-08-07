@@ -106,8 +106,8 @@ function DocumentPicker({ projectId, selected, onChange }) {
   if (docs.length === 0) {
     return (
       <p className="text-xs text-gray-500">
-        This project has no shared documents yet. Add the drawings, specifications or contract on the
-        project's Overview page, then they can be chosen here.
+        This project has no shared documents yet. Add the drawings, specifications or contract under
+        Shared Documents, then they can be chosen here.
       </p>
     );
   }
@@ -132,11 +132,127 @@ function DocumentPicker({ projectId, selected, onChange }) {
   );
 }
 
+// --- Showing a suggested answer ----------------------------------------------------------------
+
+const CONFIDENCE = {
+  high: { label: 'High confidence', bg: '#f0fdf4', color: '#15803d' },
+  medium: { label: 'Medium confidence', bg: '#fefce8', color: '#a16207' },
+  low: { label: 'Low confidence', bg: '#fef2f2', color: '#b91c1c' },
+};
+
+// Which sheets the answer actually turned on. The sheet numbers the model read off the title
+// blocks are the truthful ones — the index-derived picks are only what it went looking for —
+// so those come first and the picks are the fallback.
+function sheetsRead(analysis, sources) {
+  const printed = (analysis?.basis || []).map(b => b.sheet).filter(Boolean);
+  if (printed.length) return [...new Set(printed)];
+  return [...new Set((sources || [])
+    .flatMap(s => (s.sheets || []).map(x => x.sheetNumber))
+    .filter(Boolean))];
+}
+
+// The answer as the PM reads it: the sheets it came from, one sentence, and how much to trust
+// it. Everything that justifies those three things is a click away rather than on the page —
+// the whole request here was for something concise and minimal.
+function AnswerBody({ analysis: a, sources }) {
+  const [open, setOpen] = useState(false);
+  const conf = CONFIDENCE[a?.confidence] || CONFIDENCE.low;
+  const sheets = sheetsRead(a, sources);
+  const headline = a?.shortAnswer || a?.likelyAnswer;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        {sheets.length > 0 ? sheets.map(s => (
+          <span key={s} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-mono text-[11px] font-bold"
+            style={{ background: '#eff6ff', color: '#1d4ed8' }}>
+            <DocumentTextIcon className="w-3 h-3" />{s}
+          </span>
+        )) : (
+          <span className="text-[11px] text-gray-400">No specific sheet could be tied to the question.</span>
+        )}
+        <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold ml-auto flex-shrink-0"
+          style={{ background: conf.bg, color: conf.color }}>{conf.label}</span>
+      </div>
+
+      <p className="text-[14px] font-semibold text-gray-900 leading-snug">
+        {headline || 'No answer could be drawn from the documents provided.'}
+      </p>
+
+      {a?.costScheduleFlag && (
+        <p className="text-[12px] px-2.5 py-1.5 rounded-lg" style={{ background: '#fefce8', color: '#854d0e' }}>
+          <span className="font-semibold">Watch: </span>{a.costScheduleFlag}
+        </p>
+      )}
+
+      <button type="button" onClick={() => setOpen(v => !v)}
+        className="text-[12px] font-semibold text-blue-600 hover:text-blue-700">
+        {open ? 'Hide the detail' : 'Why — the reasoning and the sheets it read'}
+      </button>
+
+      {open && (
+        <div className="space-y-3 pt-1">
+          {a.likelyAnswer && a.likelyAnswer !== headline && (
+            <p className="text-[12px] text-gray-700 leading-relaxed whitespace-pre-wrap">{a.likelyAnswer}</p>
+          )}
+          {a.confidenceReason && <p className="text-[11px] text-gray-500">{a.confidenceReason}</p>}
+
+          {a.basis?.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Based on</p>
+              {a.basis.map((b, i) => (
+                <p key={i} className="text-[12px] text-gray-700 mb-1">
+                  <span className="font-semibold">{b.document}{b.sheet ? ` — ${b.sheet}` : ''}:</span> {b.shows}
+                </p>
+              ))}
+            </div>
+          )}
+
+          {a.conflicts?.length > 0 && (
+            <div className="p-2.5 rounded-lg" style={{ background: '#fff7ed', border: '1px solid #fed7aa' }}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#c2410c' }}>
+                Conflicts between documents
+              </p>
+              {a.conflicts.map((c, i) => (
+                <p key={i} className="text-[12px] text-gray-700"><span className="font-semibold">{c.between}:</span> {c.detail}</p>
+              ))}
+            </div>
+          )}
+
+          {a.missingInformation && (
+            <p className="text-[12px] text-gray-600"><span className="font-semibold">Missing:</span> {a.missingInformation}</p>
+          )}
+
+          {a.questionsForAE?.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Press the A/E on</p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {a.questionsForAE.map((q, i) => <li key={i} className="text-[12px] text-gray-700">{q}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {sources?.length > 0 && (
+            <p className="text-[11px] text-gray-400">
+              Read: {sources.map(s => {
+                const what = s.wholeDocument ? 'in full'
+                  : s.sheets?.length ? s.sheets.map(x => x.sheetNumber).join(', ')
+                  : `first ${s.pagesUsed} pages`;
+                return `${s.label} (${what})`;
+              }).join(' · ')}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- Entering an RFI ------------------------------------------------------------------------
 
 const EMPTY = {
   rfi_number: '', subject: '', question: '', discipline: '', submitted_by: '',
-  date_received: today(), date_forwarded: '', notes: '',
+  date_received: today(), notes: '',
 };
 
 function NewRfiForm({ onSaved, onCancel }) {
@@ -152,7 +268,41 @@ function NewRfiForm({ onSaved, onCancel }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  // Whether the PM has already forwarded this to the A/E. Asked outright rather than left as
+  // a bare date field, because a blank date is ambiguous — it could mean "not sent" or
+  // "sent, but I didn't fill this in", and the response clock depends on which.
+  const [sent, setSent] = useState('no');
+  const [sentDate, setSentDate] = useState(today());
+
+  // The suggested answer, run before the entry exists. Held here until the RFI is saved, at
+  // which point the token hands it to the new log entry.
+  const [preview, setPreview] = useState(null);
+  const [analysing, setAnalysing] = useState(false);
+  const [analysisError, setAnalysisError] = useState('');
+
   const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
+
+  const canAnalyse = !!form.discipline && (documentIds.length > 0 || !!file || extras.length > 0);
+
+  const suggest = async () => {
+    setAnalysing(true); setAnalysisError(''); setPreview(null);
+    try {
+      const fd = new FormData();
+      fd.append('project_id', projectId);
+      fd.append('discipline', form.discipline);
+      fd.append('rfi_number', form.rfi_number);
+      fd.append('subject', form.subject);
+      fd.append('question', form.question);
+      fd.append('document_ids', JSON.stringify(documentIds));
+      // The RFI itself is read alongside the drawings — often the marked-up sketch on it is
+      // what the question is really about.
+      if (file) fd.append('files', file);
+      for (const extra of extras) fd.append('files', extra);
+      setPreview(await rfisApi.previewAnalysis(fd));
+    } catch (err) {
+      setAnalysisError(errorText(err, 'Could not produce a suggested answer. You can still log the RFI and try again from the entry.'));
+    } finally { setAnalysing(false); }
+  };
 
   const read = async () => {
     if (!file) return;
@@ -190,6 +340,10 @@ function NewRfiForm({ onSaved, onCancel }) {
       fd.append('project_id', projectId);
       Object.entries(form).forEach(([k, v]) => fd.append(k, v ?? ''));
       fd.append('document_ids', JSON.stringify(documentIds));
+      // Blank when it has not gone out yet, which leaves the log's sent date open for the PM
+      // to fill in from the calendar there on the day they send it.
+      fd.append('date_forwarded', sent === 'yes' ? sentDate : '');
+      if (preview?.token) fd.append('analysis_token', preview.token);
       // The RFI itself goes first; the backend treats the rest as supporting material.
       if (file) fd.append('files', file);
       for (const extra of extras) fd.append('files', extra);
@@ -265,6 +419,77 @@ function NewRfiForm({ onSaved, onCancel }) {
             Optional — a marked-up sketch, a photo, a spec page that isn't in the shared documents.
           </p>
         </div>
+
+        <div className="pt-1" style={{ borderTop: '1px solid #dbeafe' }}>
+          {!preview && (
+            <div className="pt-3">
+              <button type="button" className="btn-secondary w-full justify-center py-1.5 text-sm"
+                onClick={suggest} disabled={analysing || !canAnalyse}>
+                <SparklesIcon className="w-4 h-4" />
+                {analysing ? 'Finding the sheets and reading them…' : 'Find the sheets and suggest an answer'}
+              </button>
+              <p className="text-[11px] text-gray-400 mt-1.5">
+                {canAnalyse
+                  ? 'Optional, and it takes a minute or two on a full drawing set. It has no bearing on the log.'
+                  : 'Choose what the RFI asks about, and at least one document, first.'}
+              </p>
+            </div>
+          )}
+
+          {analysing && (
+            <p className="text-[11px] mt-2" style={{ color: '#1d4ed8' }}>
+              Reading the drawing index, then the sheets it points to. Leave this open.
+            </p>
+          )}
+
+          {analysisError && <p className="text-xs mt-2" style={{ color: '#b91c1c' }}>{analysisError}</p>}
+
+          {preview && (
+            <div className="pt-3">
+              <AnswerBody analysis={preview.analysis} sources={preview.sources} />
+              <div className="flex items-center gap-3 mt-3">
+                <button type="button" className="text-[12px] font-semibold text-gray-500 hover:text-gray-700"
+                  onClick={suggest} disabled={analysing}>Run it again</button>
+                <span className="text-[11px] text-gray-400">
+                  Saved with the RFI when you add it to the log.
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Asked here rather than left to a date field, because the answer decides whether the
+          response clock has started. "Not yet" leaves the date open in the log. */}
+      <div className="p-4 rounded-xl" style={{ background: '#fafbfc', border: '1px solid #eef1f4' }}>
+        <label className="label">Has this RFI been sent to the A/E?</label>
+        <div className="flex gap-2">
+          {[['no', 'Not yet'], ['yes', 'Yes — sent']].map(([value, label]) => (
+            <button key={value} type="button" onClick={() => setSent(value)}
+              className="px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors"
+              style={sent === value
+                ? { background: '#2563eb', color: '#fff' }
+                : { background: '#fff', color: '#4b5563', border: '1px solid #e8edf2' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {sent === 'yes' ? (
+          <div className="mt-3">
+            <Field label="Date sent">
+              <input className="input" type="date" value={sentDate} max={today()}
+                onChange={e => setSentDate(e.target.value)} />
+            </Field>
+            <p className="text-[11px] text-gray-400 mt-1">
+              The response due date is worked out from this, using the project's response window.
+            </p>
+          </div>
+        ) : (
+          <p className="text-[11px] text-gray-400 mt-2">
+            It will sit in the log as "Not yet sent". Fill the sent date in from the log's calendar
+            on the day you forward it, and the response clock starts then.
+          </p>
+        )}
       </div>
 
       <div>
@@ -282,9 +507,6 @@ function NewRfiForm({ onSaved, onCancel }) {
             </Field>
             <Field label="Date received from contractor">
               <input className="input" type="date" value={form.date_received} onChange={set('date_received')} />
-            </Field>
-            <Field label="Date sent to A/E">
-              <input className="input" type="date" value={form.date_forwarded} onChange={set('date_forwarded')} />
             </Field>
             <Field label="Notes" className="col-span-2">
               <textarea className="input" rows={2} value={form.notes} onChange={set('notes')} />
@@ -305,13 +527,7 @@ function NewRfiForm({ onSaved, onCancel }) {
   );
 }
 
-// --- The predicted answer ---------------------------------------------------------------------
-
-const CONFIDENCE = {
-  high: { label: 'High confidence', bg: '#f0fdf4', color: '#15803d' },
-  medium: { label: 'Medium confidence', bg: '#fefce8', color: '#a16207' },
-  low: { label: 'Low confidence', bg: '#fef2f2', color: '#b91c1c' },
-};
+// --- The predicted answer, on an RFI already in the log -----------------------------------------
 
 function AnalysisPanel({ rfi, onRan }) {
   const { projectId } = useProject();
@@ -337,21 +553,12 @@ function AnalysisPanel({ rfi, onRan }) {
   };
 
   const a = stored?.analysis;
-  const conf = CONFIDENCE[a?.confidence] || CONFIDENCE.low;
 
   return (
     <div className="p-4 rounded-xl" style={{ background: '#fbfdff', border: '1px solid #dbeafe' }}>
-      <div className="flex items-start justify-between gap-3 mb-2">
-        <div className="flex items-center gap-2">
-          <LightBulbIcon className="w-4 h-4 flex-shrink-0" style={{ color: '#2563eb' }} />
-          <p className="text-[13px] font-bold text-gray-900">Suggested answer</p>
-        </div>
-        {stored && (
-          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold flex-shrink-0"
-            style={{ background: conf.bg, color: conf.color }}>
-            {conf.label}
-          </span>
-        )}
+      <div className="flex items-center gap-2 mb-2">
+        <LightBulbIcon className="w-4 h-4 flex-shrink-0" style={{ color: '#2563eb' }} />
+        <p className="text-[13px] font-bold text-gray-900">Suggested answer</p>
       </div>
 
       <p className="text-[11px] text-gray-500 mb-3">
@@ -407,63 +614,7 @@ function AnalysisPanel({ rfi, onRan }) {
 
       {stored && !editing && (
         <div className="space-y-3">
-          <p className="text-[13px] text-gray-800 leading-relaxed whitespace-pre-wrap">{a.likelyAnswer}</p>
-          {a.confidenceReason && <p className="text-[11px] text-gray-500">{a.confidenceReason}</p>}
-
-          {a.basis?.length > 0 && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Based on</p>
-              {a.basis.map((b, i) => (
-                <p key={i} className="text-[12px] text-gray-700 mb-1">
-                  <span className="font-semibold">{b.document}{b.sheet ? ` — ${b.sheet}` : ''}:</span> {b.shows}
-                </p>
-              ))}
-            </div>
-          )}
-
-          {a.conflicts?.length > 0 && (
-            <div className="p-2.5 rounded-lg" style={{ background: '#fff7ed', border: '1px solid #fed7aa' }}>
-              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#c2410c' }}>
-                Conflicts between documents
-              </p>
-              {a.conflicts.map((c, i) => (
-                <p key={i} className="text-[12px] text-gray-700"><span className="font-semibold">{c.between}:</span> {c.detail}</p>
-              ))}
-            </div>
-          )}
-
-          {a.missingInformation && (
-            <p className="text-[12px] text-gray-600"><span className="font-semibold">Missing:</span> {a.missingInformation}</p>
-          )}
-
-          {a.questionsForAE?.length > 0 && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Press the A/E on</p>
-              <ul className="list-disc pl-4 space-y-0.5">
-                {a.questionsForAE.map((q, i) => <li key={i} className="text-[12px] text-gray-700">{q}</li>)}
-              </ul>
-            </div>
-          )}
-
-          {a.costScheduleFlag && (
-            <div className="p-2.5 rounded-lg" style={{ background: '#fefce8', border: '1px solid #fde68a' }}>
-              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#a16207' }}>
-                Cost or schedule exposure
-              </p>
-              <p className="text-[12px] text-gray-700">{a.costScheduleFlag}</p>
-            </div>
-          )}
-
-          {stored.sources?.length > 0 && (
-            <p className="text-[11px] text-gray-400">
-              Read: {stored.sources.map(s => {
-                const what = s.wholeDocument ? 'in full'
-                  : s.sheets?.length ? s.sheets.map(x => x.sheetNumber).join(', ')
-                  : `first ${s.pagesUsed} pages`;
-                return `${s.label} (${what})`;
-              }).join(' · ')}
-            </p>
-          )}
+          <AnswerBody analysis={a} sources={stored.sources} />
 
           <div className="flex gap-2 pt-1">
             <button className="btn-secondary text-[12px] py-1" onClick={() => setEditing(true)}>
@@ -597,7 +748,9 @@ function ResponseForm({ rfi, revision, onSaved, onCancel }) {
 function FollowUpForm({ rfi, onSaved, onCancel }) {
   const nextRev = (rfi.currentRevision ?? 0) + 1;
   const [file, setFile] = useState(null);
-  const [form, setForm] = useState({ date_received: today(), date_forwarded: '' });
+  const [form, setForm] = useState({ date_received: today() });
+  const [sent, setSent] = useState('no');
+  const [sentDate, setSentDate] = useState(today());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -609,6 +762,7 @@ function FollowUpForm({ rfi, onSaved, onCancel }) {
     try {
       const fd = new FormData();
       Object.entries(form).forEach(([k, v]) => fd.append(k, v ?? ''));
+      fd.append('date_forwarded', sent === 'yes' ? sentDate : '');
       if (file) fd.append('files', file);
       onSaved(await rfisApi.addRevision(rfi.id, fd));
     } catch (err) {
@@ -625,13 +779,35 @@ function FollowUpForm({ rfi, onSaved, onCancel }) {
 
       <FileDrop file={file} onChange={setFile} label="The contractor's follow-up (PDF)" />
 
-      <div className="grid grid-cols-2 gap-4">
-        <Field label="Date received from contractor">
-          <input className="input" type="date" value={form.date_received} onChange={set('date_received')} />
-        </Field>
-        <Field label="Date sent to A/E">
-          <input className="input" type="date" value={form.date_forwarded} onChange={set('date_forwarded')} />
-        </Field>
+      <Field label="Date received from contractor">
+        <input className="input w-52" type="date" value={form.date_received} onChange={set('date_received')} />
+      </Field>
+
+      <div className="p-4 rounded-xl" style={{ background: '#fafbfc', border: '1px solid #eef1f4' }}>
+        <label className="label">Has this follow-up been sent to the A/E?</label>
+        <div className="flex gap-2">
+          {[['no', 'Not yet'], ['yes', 'Yes — sent']].map(([value, label]) => (
+            <button key={value} type="button" onClick={() => setSent(value)}
+              className="px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors"
+              style={sent === value
+                ? { background: '#2563eb', color: '#fff' }
+                : { background: '#fff', color: '#4b5563', border: '1px solid #e8edf2' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {sent === 'yes' ? (
+          <div className="mt-3">
+            <Field label="Date sent">
+              <input className="input w-52" type="date" value={sentDate} max={today()}
+                onChange={e => setSentDate(e.target.value)} />
+            </Field>
+          </div>
+        ) : (
+          <p className="text-[11px] text-gray-400 mt-2">
+            Fill the sent date in from the log's calendar on the day you forward it.
+          </p>
+        )}
       </div>
 
       {error && <p className="text-xs" style={{ color: '#b91c1c' }}>{error}</p>}
@@ -721,6 +897,7 @@ function RfiDetail({ id, onChanged, onDeleted }) {
   const [error, setError] = useState('');
   const [sub, setSub] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [sentDate, setSentDate] = useState(today());
 
   const load = useCallback(() => {
     rfisApi.get(id).then(setRecord).catch(err => setError(errorText(err, 'Could not open this RFI.')));
@@ -729,11 +906,15 @@ function RfiDetail({ id, onChanged, onDeleted }) {
 
   const applyUpdate = updated => { setRecord(updated); setSub(null); onChanged(); };
 
+  // The sent date is chosen, not assumed to be today: an RFI is often logged the day it
+  // arrives and forwarded a day or two later, and the response deadline counts from the day
+  // it actually went out.
   const sendToAe = async () => {
+    if (!sentDate) return;
     const current = record.revisions[record.revisions.length - 1];
     setBusy(true);
     try {
-      applyUpdate(await rfisApi.updateRevision(record.id, current.id, { date_forwarded: today() }));
+      applyUpdate(await rfisApi.updateRevision(record.id, current.id, { date_forwarded: sentDate }));
     } catch (err) {
       setError(errorText(err, 'Could not record that it was sent.'));
     } finally { setBusy(false); }
@@ -782,7 +963,7 @@ function RfiDetail({ id, onChanged, onDeleted }) {
       )}
 
       <div className="p-3 rounded-xl text-[12px]" style={{ background: '#fafbfc', border: '1px solid #eef1f4' }}>
-        {record.status === 'not_sent' && <span className="text-gray-700">Logged, but not yet forwarded to the A/E. The response clock starts when you send it.</span>}
+        {record.status === 'not_sent' && <span className="text-gray-700">Logged, but not yet forwarded to the A/E. Pick the date you sent it below and the response clock starts from then.</span>}
         {record.status === 'with_ae' && !record.isOverdue && <span className="text-gray-700">With the A/E — response due {formatDate(record.dueDate)}.</span>}
         {record.isOverdue && <span style={{ color: '#b91c1c' }}>Overdue — the A/E is {record.daysOverdue} day{record.daysOverdue === 1 ? '' : 's'} past the {formatDate(record.dueDate)} deadline.</span>}
         {record.status === 'awaiting_clarification' && <span className="text-gray-700">The A/E needs more information. Waiting on the contractor.</span>}
@@ -791,9 +972,15 @@ function RfiDetail({ id, onChanged, onDeleted }) {
 
       <div className="flex flex-wrap gap-2">
         {record.status === 'not_sent' && (
-          <button className="btn-primary" onClick={sendToAe} disabled={busy}>
-            <PaperAirplaneIcon className="w-4 h-4" /> Sent to A/E today
-          </button>
+          <div className="flex items-center gap-2 p-2 rounded-xl"
+            style={{ background: '#fafbfc', border: '1px solid #eef1f4' }}>
+            <span className="text-[12px] font-semibold text-gray-600 pl-1">Sent to A/E on</span>
+            <input className="input py-1 text-sm w-40" type="date" value={sentDate} max={today()}
+              onChange={e => setSentDate(e.target.value)} />
+            <button className="btn-primary py-1.5" onClick={sendToAe} disabled={busy || !sentDate}>
+              <PaperAirplaneIcon className="w-4 h-4" /> Record
+            </button>
+          </div>
         )}
         {record.status === 'with_ae' && (
           <button className="btn-primary" onClick={() => setSub('response')}>
@@ -867,6 +1054,19 @@ export default function RfiLog() {
       .catch(err => setError(errorText(err, 'Could not load the RFI log.')));
   }, [projectId]);
   useEffect(() => { load(); }, [load]);
+
+  // Filling the sent date in from the log itself, which is where the PM is standing when they
+  // forward the RFI. Opening the entry to record one date is a step too many, and a date left
+  // unrecorded means the response clock never starts.
+  const recordSent = async (row, value) => {
+    if (!value || !row.currentRevisionId) return;
+    try {
+      await rfisApi.updateRevision(row.id, row.currentRevisionId, { date_forwarded: value });
+      load();
+    } catch (err) {
+      setError(errorText(err, `Could not record when ${row.rfi_number} was sent to the A/E.`));
+    }
+  };
 
   const rows = useMemo(() => {
     const all = data?.rfis || [];
@@ -954,15 +1154,16 @@ export default function RfiLog() {
                 <th className="table-th">Submitted By</th>
                 <th className="table-th">Status</th>
                 <th className="table-th">Ball in Court</th>
+                <th className="table-th">Sent to A/E</th>
                 <th className="table-th">Response Due</th>
                 <th className="table-th">A/E Answer</th>
               </tr>
             </thead>
             <tbody>
-              {!data && <tr><td colSpan={9} className="table-td text-center text-gray-400 py-12">Loading…</td></tr>}
+              {!data && <tr><td colSpan={10} className="table-td text-center text-gray-400 py-12">Loading…</td></tr>}
               {data && rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="table-td text-center text-gray-400 py-12">
+                  <td colSpan={10} className="table-td text-center text-gray-400 py-12">
                     {data.rfis.length === 0
                       ? 'No RFIs logged yet. Add the first one to start the log.'
                       : 'No RFIs match this filter.'}
@@ -984,6 +1185,16 @@ export default function RfiLog() {
                   <td className="table-td text-gray-500 text-xs">{r.submitted_by || '—'}</td>
                   <td className="table-td"><StatusBadge status={statusLabelFor(r)} /></td>
                   <td className="table-td text-xs text-gray-500">{r.ballInCourt || '—'}</td>
+                  <td className="table-td text-xs" onClick={e => e.stopPropagation()}>
+                    {r.status === 'not_sent' ? (
+                      <input type="date" value="" max={today()}
+                        className="input py-0.5 px-1.5 text-[11px] w-[130px]"
+                        title={`Enter the date ${r.rfi_number} went to the A/E`}
+                        onChange={e => recordSent(r, e.target.value)} />
+                    ) : (
+                      <span className="text-gray-500">{formatDate(r.dateForwarded)}</span>
+                    )}
+                  </td>
                   <td className={`table-td text-xs ${r.isOverdue ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
                     {r.isOpen ? formatDate(r.dueDate) : '—'}
                   </td>

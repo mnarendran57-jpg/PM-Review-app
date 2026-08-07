@@ -225,7 +225,8 @@ ${inventory}${extraCount ? `\n${extraCount} further document(s) attached to this
 Return ONLY valid JSON in this exact shape:
 
 {
-  "likelyAnswer": "<your best answer to the contractor's question, in plain English, based only on what these documents show. 2-5 sentences. If the documents do not answer it, say exactly that instead of constructing an answer.>",
+  "shortAnswer": "<the answer in ONE sentence, two at the very most. Plain English, no preamble, no hedging phrases like \\"based on the documents provided\\". This is the only line most readers will read, so it must carry the actual answer — or say plainly that the documents do not settle it.>",
+  "likelyAnswer": "<the same answer with the reasoning, in plain English, based only on what these documents show. 2-5 sentences. If the documents do not answer it, say exactly that instead of constructing an answer.>",
   "confidence": "<\\"high\\" | \\"medium\\" | \\"low\\">",
   "confidenceReason": "<one sentence on why — what you could and could not see>",
   "basis": [
@@ -247,6 +248,9 @@ Return ONLY valid JSON in this exact shape:
 }
 
 Rules:
+- "shortAnswer" is the whole point of this. The PM reads it between meetings. One sentence
+  that answers the question, or one sentence saying the documents do not answer it. Never
+  restate the question back, never describe your process.
 - Ground every statement in something visible on the pages provided. Quote the note, the
   dimension or the schedule value you are relying on. If you cannot point to it, leave it out.
 - IMPORTANT: for each entry in "basis", report the sheet number ACTUALLY PRINTED in the title
@@ -270,6 +274,12 @@ function renderMarkdown({ rfi, discipline, analysis, sources }) {
   lines.push(`**Discipline:** ${discipline}  `);
   lines.push(`**Confidence:** ${analysis.confidence}${analysis.confidenceReason ? ` — ${analysis.confidenceReason}` : ''}`);
   lines.push('');
+  if (analysis.shortAnswer) {
+    lines.push('## In short');
+    lines.push('');
+    lines.push(`**${analysis.shortAnswer}**`);
+    lines.push('');
+  }
   lines.push('## What the documents appear to say');
   lines.push('');
   lines.push(analysis.likelyAnswer || '_No answer could be drawn from the documents provided._');
@@ -355,6 +365,9 @@ async function analyzeRfi({ rfi, discipline, documents = [], extraFiles = [] }) 
   const parsed = safeJsonFromText(response.content[0].text);
 
   const analysis = {
+    // The one-line version leads every display of this. Falling back to the long answer
+    // keeps an older stored analysis, produced before this field existed, readable.
+    shortAnswer: parsed.shortAnswer || parsed.likelyAnswer || null,
     likelyAnswer: parsed.likelyAnswer || null,
     confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low',
     confidenceReason: parsed.confidenceReason || null,

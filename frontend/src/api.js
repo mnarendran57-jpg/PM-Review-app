@@ -230,6 +230,11 @@ export const rfisApi = {
   analyze: (id, formData) => api.post(`/rfis/${id}/analysis`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),
+  // The same two passes, run while the RFI is still being entered. Saves nothing until the
+  // token it returns is handed back to create().
+  previewAnalysis: formData => api.post('/rfis/preview-analysis', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => r.data),
   downloadAnalysis: async (id, fileName) => {
     const res = await api.get(`/rfis/${id}/analysis.md`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `rfi_${id}_suggested_answer.md`);
