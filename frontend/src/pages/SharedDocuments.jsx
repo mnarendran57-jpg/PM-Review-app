@@ -25,12 +25,24 @@ const CATEGORIES = [
   { key: 'estimate', label: 'Cost Estimate', hint: 'Estimates and budgets', accent: '#dc2626' },
   { key: 'schedule', label: 'Schedule', hint: 'Baseline and updated programmes', accent: '#0d9488' },
   { key: 'permit', label: 'Permits & Approvals', hint: 'Permits, approvals, authority letters', accent: '#65a30d' },
+  { key: 'memo-cover', label: 'Memo Cover', hint: 'Your Word memo letter — Proposal Intake fills it in', accent: '#e11d48', docx: true },
   { key: 'other', label: 'Other', hint: 'Anything else the team needs on file', accent: '#64748b' },
   { key: 'reference', label: 'Other', hint: 'Anything else the team needs on file', accent: '#64748b' },
 ];
 
 // Only these are offered on upload — 'reference' is legacy and folds into 'other'.
 const UPLOAD_CATEGORIES = CATEGORIES.filter(c => c.key !== 'reference');
+
+// Mirrors FIELDS in backend/lib/memoCover.js. Kept in step by hand; the backend rejects
+// anything not on its own list, so a drift here fails loudly rather than silently.
+const MEMO_FIELDS = [
+  ['date', "Today's date"], ['to_name', 'Addressed to'], ['from_name', 'From'],
+  ['project_name', 'Project name'], ['vendor_name', 'Vendor name'], ['memo_type', 'Proposal / Change Order'],
+  ['po_number', 'PO number'], ['po_reference', 'PO reference wording'], ['scope_of_work', 'Scope of work'],
+  ['total_price', 'Total price'], ['change_order_price', 'Change order amount'],
+  ['original_po_amount', 'Original PO amount'], ['new_total_amount', 'New PO total'],
+  ['request_sentence', 'The request sentence'],
+];
 
 const categoryFor = key => CATEGORIES.find(c => c.key === key) || CATEGORIES.find(c => c.key === 'other');
 const docName = doc => (doc.label || '').trim() || doc.file_name;
@@ -72,8 +84,12 @@ function UploadForm({ projectId, onSaved, onCancel }) {
 
   return (
     <form onSubmit={save} className="space-y-4">
-      <FileDrop file={file} onChange={f => { setFile(f); if (!label && f) setLabel(f.name.replace(/\.pdf$/i, '')); }}
-        label="The document (PDF)" />
+      {/* A memo cover is the one category that is not a PDF: it stays a Word file so it can be
+          filled in and handed back as one. */}
+      <FileDrop file={file} onChange={f => { setFile(f); if (!label && f) setLabel(f.name.replace(/\.(pdf|docx)$/i, '')); }}
+        label={chosen.docx ? 'Your memo cover (Word .docx)' : 'The document (PDF)'}
+        accept={chosen.docx ? '.docx' : '.pdf'}
+        hint={chosen.docx ? 'Word document — the memo letter you already use' : 'PDF · no size limit'} />
 
       <div>
         <label className="label">What is it?</label>
@@ -100,6 +116,16 @@ function UploadForm({ projectId, onSaved, onCancel }) {
 
       {/* Uploading a contract triggers a model read of the whole agreement, which takes a
           while and is worth saying before the user waits on a spinner. */}
+      {chosen.docx && (
+        <div className="p-3 rounded-xl text-[11px] leading-relaxed"
+          style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#9f1239' }}>
+          <SparklesIcon className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
+          Upload the memo letter you already use — filled in or blank, it does not need placeholders.
+          Coaster reads it and shows you which parts it thinks change from memo to memo, for you to
+          confirm. After that every proposal is generated into your own document.
+        </div>
+      )}
+
       {docType === 'contract' && (
         <div className="p-3 rounded-xl text-[11px] leading-relaxed"
           style={{ background: '#eff6ff', border: '1px solid #dbeafe', color: '#1e40af' }}>
@@ -121,7 +147,98 @@ function UploadForm({ projectId, onSaved, onCancel }) {
   );
 }
 
-function DocumentRow({ doc, projectId, onChanged }) {
+// Confirming what Coaster read out of the memo. Every proposal is shown with the exact text
+// it matched, so the user is approving something concrete rather than a field name — and a
+// memo goes to an owner for signature, which is why nothing is applied until this is done.
+function MemoCoverReview({ doc, projectId, onDone, onCancel }) {
+  const initial = (doc.terms?.replacements || []).map(r => ({ ...r, keep: true }));
+  const [rows, setRows] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const setRow = (i, patch) => setRows(rs => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+
+  const confirm = async () => {
+    setBusy(true); setError('');
+    try {
+      await projectDocumentsApi.update(projectId, doc.id, {
+        terms: {
+          ...doc.terms,
+          confirmed: true,
+          replacements: rows.filter(r => r.keep).map(({ keep, ...r }) => r),
+        },
+      });
+      onDone();
+    } catch (err) {
+      setError(errorText(err, 'Could not save the mapping.'));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-gray-600 leading-relaxed">
+        Coaster read <span className="font-semibold">{doc.file_name}</span> and marked the parts it
+        thinks change from memo to memo. Untick anything that should stay fixed, and correct any
+        field that was matched to the wrong thing.
+      </p>
+
+      {doc.terms?.notes && (
+        <div className="p-3 rounded-xl text-[11px] leading-relaxed"
+          style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>
+          {doc.terms.notes}
+        </div>
+      )}
+
+      <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+        {rows.length === 0 && (
+          <p className="text-[12px] text-gray-500">
+            Nothing variable was found. If the memo already uses {'{{field}}'} placeholders it will
+            work as-is — just confirm.
+          </p>
+        )}
+        {rows.map((r, i) => (
+          <div key={i} className="p-3 rounded-xl flex items-start gap-2.5"
+            style={{ background: r.keep ? '#fff' : '#f9fafb', border: '1px solid #e8edf2', opacity: r.keep ? 1 : 0.55 }}>
+            <input type="checkbox" className="mt-1 flex-shrink-0" checked={r.keep}
+              onChange={e => setRow(i, { keep: e.target.checked })} />
+            <div className="min-w-0 flex-1">
+              <p className="text-[12px] text-gray-900 font-mono break-words">"{r.find}"</p>
+              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                <span className="text-[10px] text-gray-400">becomes</span>
+                <select className="input py-0.5 text-[11px] w-auto" value={r.field}
+                  onChange={e => setRow(i, { field: e.target.value })}>
+                  {MEMO_FIELDS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                </select>
+                {r.occurrences > 1 && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold"
+                    style={{ background: '#eff6ff', color: '#1d4ed8' }}>
+                    appears {r.occurrences}×
+                  </span>
+                )}
+                {r.confidence === 'low' && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold"
+                    style={{ background: '#fff7ed', color: '#c2410c' }}>check this one</span>
+                )}
+              </div>
+              {r.why && <p className="text-[10px] text-gray-400 mt-1">{r.why}</p>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {error && <p className="text-xs" style={{ color: '#b91c1c' }}>{error}</p>}
+
+      <div className="flex justify-end gap-2">
+        <button className="btn-secondary" onClick={onCancel}>Cancel</button>
+        <button className="btn-primary" onClick={confirm} disabled={busy}>
+          {busy ? 'Saving…' : `Use this memo cover (${rows.filter(r => r.keep).length} fields)`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DocumentRow({ doc, projectId, onChanged, onReview }) {
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(docName(doc));
   const [busy, setBusy] = useState(false);
@@ -183,6 +300,17 @@ function DocumentRow({ doc, projectId, onChanged }) {
               {doc.created_at ? ` · added ${formatDate(doc.created_at)}` : ''}
               {doc.terms_edited === 1 ? ' · terms corrected by you' : ''}
             </p>
+            {doc.doc_type === 'memo-cover' && (
+              <p className="text-[11px] mt-1">
+                {terms?.confirmed
+                  ? <span style={{ color: '#15803d' }}>
+                      Ready — {(terms.replacements || []).length} field{(terms.replacements || []).length === 1 ? '' : 's'} will be filled in on every memo.
+                    </span>
+                  : <span style={{ color: '#c2410c' }}>
+                      Needs review — Coaster found {(terms?.replacements || []).length} variable part(s). Confirm them before it is used.
+                    </span>}
+              </p>
+            )}
             {terms && doc.doc_type === 'contract' && (
               <p className="text-[11px] text-gray-500 mt-1">
                 {terms.taxExempt === true ? 'Tax exempt' : terms.taxExempt === false ? 'Not tax exempt' : 'Tax status not stated'}
@@ -195,6 +323,12 @@ function DocumentRow({ doc, projectId, onChanged }) {
 
       {!renaming && (
         <div className="flex items-center gap-1 flex-shrink-0">
+          {doc.doc_type === 'memo-cover' && (
+            <button className={doc.terms?.confirmed ? 'btn-secondary px-2 py-1' : 'btn-primary px-2 py-1'}
+              title="Review what Coaster will fill in" onClick={() => onReview(doc)}>
+              <SparklesIcon className="w-4 h-4" />
+            </button>
+          )}
           {doc.doc_type === 'contract' && doc.is_primary !== 1 && (
             <button className="btn-secondary px-2 py-1" title="Use this contract for reviews"
               onClick={makePrimary} disabled={busy}>
@@ -222,6 +356,7 @@ export default function SharedDocuments() {
   const [docs, setDocs] = useState(null);
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [reviewing, setReviewing] = useState(null);
 
   const load = useCallback(() => {
     if (!projectId) return;
@@ -309,17 +444,29 @@ export default function SharedDocuments() {
             </div>
             <div className="space-y-2">
               {group.docs.map(doc => (
-                <DocumentRow key={doc.id} doc={doc} projectId={projectId} onChanged={load} />
+                <DocumentRow key={doc.id} doc={doc} projectId={projectId}
+                  onChanged={load} onReview={setReviewing} />
               ))}
             </div>
           </div>
         ))}
       </div>
 
+      {reviewing && (
+        <Modal title="What Coaster will fill in" onClose={() => setReviewing(null)} size="lg">
+          <MemoCoverReview doc={reviewing} projectId={projectId}
+            onDone={() => { setReviewing(null); load(); }}
+            onCancel={() => setReviewing(null)} />
+        </Modal>
+      )}
       {uploading && (
         <Modal title="Add a Document" onClose={() => setUploading(false)} size="lg">
           <UploadForm projectId={projectId}
-            onSaved={() => { setUploading(false); load(); }}
+            onSaved={saved => {
+              setUploading(false);
+              load();
+              if (saved?.doc_type === 'memo-cover') setReviewing(saved);
+            }}
             onCancel={() => setUploading(false)} />
         </Modal>
       )}

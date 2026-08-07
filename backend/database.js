@@ -417,6 +417,14 @@ if (!intakeCols.includes('new_total_amount')) {
   db.exec(`ALTER TABLE proposal_intakes ADD COLUMN new_total_amount TEXT`);
 }
 
+// The organization's own memo cover, filled in — their Word document with their formatting,
+// kept alongside the merged PDF package. The PDF is what gets circulated; this is what they
+// edit or print on their own letterhead when they need the real thing.
+const memoDocxCols = db.prepare(`PRAGMA table_info(proposal_intakes)`).all().map(c => c.name);
+for (const [col, type] of [['memo_docx', 'BLOB'], ['memo_docx_key', 'TEXT'], ['memo_docx_name', 'TEXT']]) {
+  if (!memoDocxCols.includes(col)) db.exec(`ALTER TABLE proposal_intakes ADD COLUMN ${col} ${type}`);
+}
+
 // Pay app reviews used to be tied to a project by the project-name text read off the
 // PDF, which silently failed whenever a vendor spelled the name differently between
 // applications. Link them to projects.id instead, and backfill existing rows by
@@ -454,12 +462,15 @@ const insertSetting = db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?
 if (!existingKeys.has('rfi_response_days')) insertSetting.run('rfi_response_days', '10');
 if (!existingKeys.has('submittal_review_days')) insertSetting.run('submittal_review_days', '14');
 
-// Migrate the seeded default template's letterhead if it still has the old placeholder values
+// This once wrote Olivier's address onto any template still carrying the 'MEMORANDUM'
+// placeholder, and it ran on every boot. Harmless while Olivier was the only customer;
+// actively wrong once there are others, since a newly seeded template for a different
+// organization matched the same condition and was stamped with Olivier's letterhead. Only
+// the placeholder is cleared now — the address belongs to whoever owns the template.
 db.prepare(`
-  UPDATE memo_templates
-  SET company_name = ?, header_title = ''
+  UPDATE memo_templates SET header_title = ''
   WHERE name = 'Standard Proposal Memo' AND header_title = 'MEMORANDUM'
-`).run('Olivier Inc\n3934 Cypress Creek Pkwy, Suite 355\nHouston, Texas 77068\nwww.olivier-inc.com');
+`).run();
 
 // Migrate any template still using the old static Request wording to the
 // backend-computed {{request_sentence}} placeholder (differs for New Vendor vs Change Order).
@@ -496,9 +507,26 @@ for (const row of db.prepare(`SELECT id, sections FROM memo_templates`).all()) {
   }
 }
 
-// Default memo template
-const templateCount = db.prepare(`SELECT COUNT(*) AS c FROM memo_templates`).get().c;
-if (templateCount === 0) {
+// The letterhead an existing template carries is that organization's, so it is copied onto
+// the organization itself. Everything that prints a letterhead reads it from there now, which
+// is what stops one customer's address appearing on another's documents.
+for (const org of db.prepare(`SELECT id FROM organizations WHERE letterhead IS NULL`).all()) {
+  const tpl = db.prepare(`
+    SELECT company_name FROM memo_templates
+    WHERE org_id = ? AND company_name IS NOT NULL AND TRIM(company_name) <> ''
+    ORDER BY is_default DESC, id ASC LIMIT 1
+  `).get(org.id);
+  if (tpl) db.prepare(`UPDATE organizations SET letterhead = ? WHERE id = ?`).run(tpl.company_name, org.id);
+}
+
+// Default memo template. Seeded per organization rather than once globally: the old check
+// counted every template in the database, so the second customer to sign up got no template
+// at all and fell through to the first customer's.
+const orgsNeedingTemplate = db.prepare(`
+  SELECT id FROM organizations o
+  WHERE NOT EXISTS (SELECT 1 FROM memo_templates m WHERE m.org_id = o.id)
+`).all();
+for (const org of orgsNeedingTemplate) {
   const defaultSections = JSON.stringify([
     {
       label: 'Header Info',
@@ -522,15 +550,14 @@ if (templateCount === 0) {
       content: '\n\n\n_________________________\n{{from_name}}, Senior Project Manager\n\n\n\n_________________________\n{{to_name}}, Associate Vice Chancellor (AVC), Facilities Management'
     }
   ]);
+  // No letterhead is invented for a new organization — it uploads its own. An empty
+  // company_name simply prints no address, which is the right default for a customer whose
+  // details the app does not know.
+  const existingLetterhead = db.prepare(`SELECT letterhead FROM organizations WHERE id=?`).get(org.id);
   db.prepare(`
-    INSERT INTO memo_templates (name, is_default, company_name, header_title, sections)
-    VALUES (?, 1, ?, ?, ?)
-  `).run(
-    'Standard Proposal Memo',
-    'Olivier Inc\n3934 Cypress Creek Pkwy, Suite 355\nHouston, Texas 77068\nwww.olivier-inc.com',
-    '',
-    defaultSections
-  );
+    INSERT INTO memo_templates (org_id, name, is_default, company_name, header_title, sections)
+    VALUES (?, ?, 1, ?, ?, ?)
+  `).run(org.id, 'Standard Proposal Memo', existingLetterhead?.letterhead || '', '', defaultSections);
 }
 
 // --- Tenancy migration ---------------------------------------------------------------
@@ -973,6 +1000,26 @@ db.exec(`
 // the architect" are two different people to a PM.
 if (!columnsOf('team_members').includes('company')) {
   db.exec(`ALTER TABLE team_members ADD COLUMN company TEXT`);
+}
+
+// --- Per-organization letterhead ---------------------------------------------------------
+// The memo logo used to be a single file on disk (assets/olivier-logo.jpg) and the address
+// block came from whichever memo template happened to sort first, with no regard for which
+// organization was asking. Every customer's outgoing documents therefore carried Olivier's
+// branding. The logo now belongs to the organization that owns it.
+if (!columnsOf('organizations').includes('logo_key')) {
+  db.exec(`ALTER TABLE organizations ADD COLUMN logo_key TEXT`);
+}
+if (!columnsOf('organizations').includes('logo_blob')) {
+  db.exec(`ALTER TABLE organizations ADD COLUMN logo_blob BLOB`);
+}
+if (!columnsOf('organizations').includes('logo_mime')) {
+  db.exec(`ALTER TABLE organizations ADD COLUMN logo_mime TEXT`);
+}
+// The letterhead address, kept on the organization rather than only on a memo template, so a
+// customer with no template still has an identity for the documents that need one.
+if (!columnsOf('organizations').includes('letterhead')) {
+  db.exec(`ALTER TABLE organizations ADD COLUMN letterhead TEXT`);
 }
 
 // Which contract an invoice was reviewed against, recorded on the review itself. Without it

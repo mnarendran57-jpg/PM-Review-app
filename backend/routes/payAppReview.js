@@ -6,8 +6,10 @@ const { analyzePayApps } = require('../lib/payAppExtract');
 const { runChecks } = require('../lib/payAppChecks');
 const { buildReport } = require('../lib/payAppReport');
 const { renderPayAppReportPdf } = require('../lib/payAppReportPdf');
+const { brandingFor } = require('../lib/orgBranding');
 const { annotatePayAppPdf } = require('../lib/payAppAnnotate');
 const { extractContractTerms } = require('../lib/contractExtract');
+const { proposePlaceholders, applyPlaceholders, readDocx } = require('../lib/memoCover');
 const { auditPayApp } = require('../lib/payAppAudit');
 const { buildSubReconciliation, runMissedItemChecks } = require('../lib/payAppReconcile');
 const { buildSiteVerificationChecklist } = require('../lib/payAppChecklist');
@@ -162,16 +164,23 @@ router.get('/project/:id/history', (req, res) => {
 // presents it as "Other".
 const DOC_TYPES = [
   'contract', 'drawings', 'design', 'specifications', 'scope',
-  'proposal', 'estimate', 'schedule', 'permit', 'other', 'reference',
+  'proposal', 'estimate', 'schedule', 'permit', 'memo-cover', 'other', 'reference',
 ];
+
+// The only category that is not a PDF. A memo cover is the organization's own Word letter,
+// filled in and handed back as a Word file, so it has to stay a .docx all the way through —
+// converting it to PDF on upload would throw away the thing that makes it useful.
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 // Falls back to the filename so a document is never nameless in a dropdown.
 const docLabel = (label, fileName) =>
   (label || '').trim() || fileName.replace(/\.pdf$/i, '');
 
 function listDocuments(projectId) {
+  // `terms` travels with the list so a memo cover can show whether its placeholder mapping has
+  // been confirmed without a second request per row.
   return db.prepare(`
-    SELECT id, project_id, file_name, label, doc_type, is_primary, terms_edited, created_at, updated_at
+    SELECT id, project_id, file_name, label, doc_type, is_primary, terms, terms_edited, created_at, updated_at
     FROM project_contracts WHERE project_id = ?
     ORDER BY (doc_type = 'contract') DESC, is_primary DESC, doc_type ASC, created_at ASC
   `).all(projectId);
@@ -179,15 +188,22 @@ function listDocuments(projectId) {
 
 router.get('/project/:id/documents', (req, res) => {
   if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
-  res.json(listDocuments(req.params.id));
+  res.json(listDocuments(req.params.id).map(d => ({ ...d, terms: JSON.parse(d.terms || '{}') })));
 });
 
 async function addDocument(req, res) {
   try {
     const file = req.file;
-    if (!file) return res.status(400).json({ error: 'A PDF is required' });
-    if (file.mimetype !== 'application/pdf') return res.status(400).json({ error: 'The document must be a PDF' });
+    if (!file) return res.status(400).json({ error: 'A file is required' });
     if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
+
+    const wantsMemoCover = req.body.doc_type === 'memo-cover';
+    if (wantsMemoCover && file.mimetype !== DOCX_MIME) {
+      return res.status(400).json({ error: 'A memo cover must be a Word document (.docx).' });
+    }
+    if (!wantsMemoCover && file.mimetype !== 'application/pdf') {
+      return res.status(400).json({ error: 'The document must be a PDF' });
+    }
 
     // Falls back to 'other', never to 'contract'. Being a contract is the one consequential
     // choice here — it spends an AI call reading the document and can become the agreement
@@ -199,7 +215,20 @@ async function addDocument(req, res) {
     // Only an agreement is worth reading: extracting "terms" from a schedule or an estimate
     // would spend tokens to produce nonsense.
     let storedTerms = {};
-    if (docType === 'contract') {
+    if (docType === 'memo-cover') {
+      // Stored on the document row alongside the file. The column is named `terms` because a
+      // contract's terms were the first thing kept here; for a memo cover it holds the
+      // placeholder mapping and whether the user has confirmed it yet.
+      const proposal = await proposePlaceholders(file.buffer);
+      storedTerms = {
+        kind: 'memo-cover',
+        confirmed: false,
+        hasPlaceholders: proposal.hasPlaceholders,
+        replacements: proposal.replacements,
+        notes: proposal.notes,
+        paragraphs: proposal.paragraphs,
+      };
+    } else if (docType === 'contract') {
       const terms = await extractContractTerms(file.buffer);
       const { usage, ...rest } = terms;
       storedTerms = rest;
@@ -290,16 +319,39 @@ router.delete('/project/:id/documents/:docId', async (req, res) => {
   res.json({ success: true });
 });
 
+// Named file.pdf for historical reasons and kept so existing links work, but a memo cover is
+// a Word file, so the type is taken from the row rather than assumed.
 router.get('/project/:id/documents/:docId/file.pdf', async (req, res) => {
   if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
-  const row = db.prepare(`SELECT file_name, file_blob, file_key FROM project_contracts WHERE id=? AND project_id=?`)
+  const row = db.prepare(`SELECT file_name, file_blob, file_key, doc_type FROM project_contracts WHERE id=? AND project_id=?`)
     .get(req.params.docId, req.params.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
   const bytes = await storage.readFile({ key: row.file_key, blob: row.file_blob });
   if (!bytes) return res.status(404).json({ error: 'Not found' });
-  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Type', row.doc_type === 'memo-cover' ? DOCX_MIME : 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${row.file_name}"`);
   res.send(bytes);
+});
+
+// The memo cover with its confirmed placeholders written in — what the organization gets back
+// so they can see, and keep, the template Coaster will fill from now on.
+router.get('/project/:id/documents/:docId/template.docx', async (req, res) => {
+  try {
+    if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
+    const row = db.prepare(`SELECT * FROM project_contracts WHERE id=? AND project_id=? AND doc_type='memo-cover'`)
+      .get(req.params.docId, req.params.id);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    const bytes = await storage.readFile({ key: row.file_key, blob: row.file_blob });
+    if (!bytes) return res.status(404).json({ error: 'Not found' });
+
+    const terms = JSON.parse(row.terms || '{}');
+    const { buffer } = applyPlaceholders(bytes, terms.replacements || []);
+    res.setHeader('Content-Type', DOCX_MIME);
+    res.setHeader('Content-Disposition', `attachment; filename="${row.file_name.replace(/\.docx$/i, '')}_template.docx"`);
+    res.send(buffer);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
 });
 
 // --- The project's primary contract --------------------------------------------------
@@ -676,7 +728,9 @@ router.get('/:id/report.pdf', async (req, res) => {
       subReconciliation: buildSubReconciliation(data.current).rows,
     });
 
-    const pdf = await renderPayAppReportPdf({ report, companyName: 'Coaster' });
+    // The reviewing organization's letterhead, not a hardcoded name.
+    const branding = await brandingFor(req.orgId);
+    const pdf = await renderPayAppReportPdf({ report, companyName: branding.companyName || undefined });
     const safeProject = (row.project_name || 'report').replace(/[^a-z0-9]+/gi, '_');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="PayApp_${row.application_number || row.id}_${safeProject}_Review.pdf"`);

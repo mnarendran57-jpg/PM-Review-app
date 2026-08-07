@@ -1,12 +1,15 @@
-const fs = require('fs');
 const path = require('path');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+const { embedLogo } = require('./orgBranding');
 
 const PAGE_WIDTH = 612; // 8.5in
 const PAGE_HEIGHT = 792; // 11in
 const MARGIN = 56;
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
-const LOGO_PATH = path.join(__dirname, '..', 'assets', 'olivier-logo.jpg');
+// The logo is no longer a file on disk. It belongs to the organization printing the document
+// and arrives as a parameter — see lib/orgBranding.js. The constant is kept only because the
+// path is still referenced by the one-off asset that shipped with the first deployment.
+const LEGACY_LOGO_PATH = path.join(__dirname, '..', 'assets', 'olivier-logo.jpg');
 
 function fillPlaceholders(text, fields) {
   return (text || '').replace(/\{\{(\w+)\}\}/g, (_, key) => fields[key] ?? '');
@@ -35,16 +38,17 @@ function wrapLine(line, font, size, maxWidth) {
 // using the Olivier Inc. letterhead (logo + address) on every page.
 const BODY_SIZE = 10;
 
-async function renderMemoPdf(template, fields) {
+async function renderMemoPdf(template, fields, branding = {}) {
   const pdfDoc = await PDFDocument.create();
   const font = await pdfDoc.embedFont(StandardFonts.TimesRoman);
   const fontBold = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
   const fontItalic = await pdfDoc.embedFont(StandardFonts.TimesRomanItalic);
 
-  let logoImage = null;
+  // Whatever this organization uploaded, or nothing. An organization that has uploaded no
+  // logo prints an address-only letterhead rather than borrowing someone else's mark.
+  let logoImage = await embedLogo(pdfDoc, branding.logo);
   let logoDims = { width: 0, height: 0 };
-  if (fs.existsSync(LOGO_PATH)) {
-    logoImage = await pdfDoc.embedJpg(fs.readFileSync(LOGO_PATH));
+  if (logoImage) {
     const scale = 158 / logoImage.width; // ~2.2in wide
     logoDims = { width: logoImage.width * scale, height: logoImage.height * scale };
   }
@@ -60,8 +64,12 @@ async function renderMemoPdf(template, fields) {
     if (logoImage) {
       page.drawImage(logoImage, { x: MARGIN - 8, y: PAGE_HEIGHT - 40 - logoDims.height, width: logoDims.width, height: logoDims.height });
     }
-    // Address block is right-aligned along the page's right margin.
-    const addressLines = (template.company_name || '').split('\n');
+    // Address block is right-aligned along the page's right margin. The organization's own
+    // letterhead wins over the copy stored on the template, so editing it in one place
+    // updates every memo rather than only newly created templates. Blank lines are dropped
+    // so a trailing newline does not push the block up the page.
+    const addressLines = String(branding.companyName || template.company_name || '')
+      .split('\n').map(l => l.trim()).filter(Boolean);
     let ay = PAGE_HEIGHT - 48;
     for (const line of addressLines) {
       const lineWidth = font.widthOfTextAtSize(line, BODY_SIZE);
@@ -129,5 +137,5 @@ async function mergePdfBuffers(buffers) {
 
 module.exports = {
   renderMemoPdf, mergePdfBuffers, fillPlaceholders, wrapLine,
-  PAGE_WIDTH, PAGE_HEIGHT, MARGIN, CONTENT_WIDTH, LOGO_PATH,
+  PAGE_WIDTH, PAGE_HEIGHT, MARGIN, CONTENT_WIDTH, LEGACY_LOGO_PATH,
 };

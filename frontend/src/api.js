@@ -376,7 +376,27 @@ export const proposalIntakeApi = {
     a.remove();
     window.URL.revokeObjectURL(url);
   },
+  // The memo as the organization's own Word document, when a confirmed memo cover exists on
+  // the project. Absent otherwise, so callers check before offering it.
+  downloadMemoDocx: async (id, fileName) => {
+    const res = await api.get(`/proposal-intake/${id}/memo.docx`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `memo_${id}.docx`);
+  },
   delete: id => api.delete(`/proposal-intake/${id}`).then(r => r.data),
+};
+
+// The organization's own letterhead — the address block and the logo that print at the top of
+// a memo. Per organization, so one customer's branding never reaches another's documents.
+export const brandingApi = {
+  get: () => api.get('/memo-templates/branding').then(r => r.data),
+  setCompanyName: companyName =>
+    api.put('/memo-templates/branding', { companyName }).then(r => r.data),
+  uploadLogo: formData => api.post('/memo-templates/branding/logo', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data),
+  removeLogo: () => api.delete('/memo-templates/branding/logo').then(r => r.data),
+  // Cache-busted so a freshly uploaded logo actually appears rather than the previous one.
+  logoUrl: () => `${apiBaseUrl}/memo-templates/branding/logo?t=${Date.now()}`,
 };
 
 export const memoTemplatesApi = {

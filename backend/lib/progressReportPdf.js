@@ -1,30 +1,27 @@
-const fs = require('fs');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
-const { PAGE_WIDTH, PAGE_HEIGHT, MARGIN, CONTENT_WIDTH, wrapLine, LOGO_PATH } = require('./pdfGen');
+const { PAGE_WIDTH, PAGE_HEIGHT, MARGIN, CONTENT_WIDTH, wrapLine } = require('./pdfGen');
+const { embedLogo } = require('./orgBranding');
 
 const INK = rgb(0.1, 0.1, 0.1);
 const GREY = rgb(0.4, 0.4, 0.4);
 const BODY = 11;
 
-// Falls back to the Olivier letterhead the proposal memo uses; the route passes the
-// memo template's company_name so the two stay in sync if the address is edited.
-const DEFAULT_COMPANY = 'Olivier Inc\n3934 Cypress Creek Pkwy, Suite 355\nHouston, Texas 77068\nwww.olivier-inc.com';
-
-// Renders a site progress report to PDF on the Olivier letterhead (logo top-left, address
-// right-aligned — the same header the memo uses), matching the standard report template:
+// Renders a site progress report on the reporting organization's letterhead (logo top-left,
+// address right-aligned — the same header the memo uses), matching the standard template:
 // a header block (Date/Time/Weather, Submitted By, Project, Contractor), a bulleted Progress
 // list, and a two-column grid of site photos each captioned underneath.
-async function renderProgressReportPdf({ report, header, photos = [], companyName = DEFAULT_COMPANY }) {
+// There is deliberately no default letterhead. An organization that has uploaded none gets a
+// clean report rather than another company's address, which is what used to happen.
+async function renderProgressReportPdf({ report, header, photos = [], companyName = null, logo = null }) {
   const pdf = await PDFDocument.create();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
 
-  // Olivier logo for the letterhead, embedded once (matches pdfGen.renderMemoPdf).
-  let logoImage = null;
+  // Whatever this organization uploaded, or nothing at all.
+  const logoImage = await embedLogo(pdf, logo);
   let logoDims = { width: 0, height: 0 };
-  if (fs.existsSync(LOGO_PATH)) {
-    logoImage = await pdf.embedJpg(fs.readFileSync(LOGO_PATH));
-    const scale = 158 / logoImage.width; // ~2.2in wide
+  if (logoImage) {
+    const scale = 158 / logoImage.width;
     logoDims = { width: logoImage.width * scale, height: logoImage.height * scale };
   }
 
@@ -146,4 +143,4 @@ async function renderProgressReportPdf({ report, header, photos = [], companyNam
   return Buffer.from(await pdf.save());
 }
 
-module.exports = { renderProgressReportPdf, DEFAULT_COMPANY };
+module.exports = { renderProgressReportPdf };

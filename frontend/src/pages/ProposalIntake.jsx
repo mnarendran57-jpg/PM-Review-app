@@ -2,13 +2,14 @@ import { useState, useEffect } from 'react';
 import {
   CloudArrowUpIcon, SparklesIcon, DocumentTextIcon, ArrowDownTrayIcon,
   TrashIcon, ClockIcon, CheckCircleIcon, BuildingOfficeIcon, ArrowPathRoundedSquareIcon,
-  Cog6ToothIcon, InboxArrowDownIcon,
+  Cog6ToothIcon, InboxArrowDownIcon, BuildingOffice2Icon,
 } from '@heroicons/react/24/outline';
 import { proposalIntakeApi, memoTemplatesApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import { useConfirm } from '../components/ConfirmDialog';
 import MemoTemplateEditor from '../components/MemoTemplateEditor';
+import LetterheadEditor from '../components/LetterheadEditor';
 import FileDrop from '../components/FileDrop';
 
 const TYPE_INFO = {
@@ -130,6 +131,9 @@ export default function ProposalIntake() {
     try {
       const fd = new FormData();
       fd.append('intake_type', intakeType);
+      // Sent so the server can find this project's memo cover in Shared Documents. Without
+      // it the memo falls back to the built-in layout even when a cover has been confirmed.
+      if (ctx?.projectId) fd.append('project_id', ctx.projectId);
       fd.append('vendor_name', fields.vendor_name || '');
       fd.append('project_name', routeProjectName || fields.project_name || '');
       fd.append('proposal_date', fields.proposal_date || '');
@@ -182,6 +186,7 @@ export default function ProposalIntake() {
       <div className="flex items-center gap-2 mb-6">
         {[
           { key: 'intake', label: 'Process Proposals', icon: SparklesIcon },
+          { key: 'letterhead', label: 'Letterhead', icon: BuildingOffice2Icon },
           { key: 'template', label: 'Memo Template', icon: Cog6ToothIcon },
         ].map(({ key, label, icon: Icon }) => (
           <button
@@ -198,7 +203,19 @@ export default function ProposalIntake() {
         ))}
       </div>
 
-      {tab === 'template' ? (
+      {tab === 'letterhead' ? (
+        // Each organization prints its own memos. Before this the logo was a single file on
+        // the server and the address came from whichever template sorted first, so every
+        // customer's memo carried the first customer's branding.
+        <div className="card p-6 max-w-2xl">
+          <h2 className="text-base font-bold text-gray-900 mb-1">Your letterhead</h2>
+          <p className="text-sm text-gray-500 mb-5 leading-relaxed">
+            The logo and address that print at the top of every memo this organization generates.
+            Upload yours once and every proposal package uses it.
+          </p>
+          <LetterheadEditor />
+        </div>
+      ) : tab === 'template' ? (
         <MemoTemplateEditor />
       ) : (
       <div className="grid grid-cols-5 gap-6">
@@ -356,6 +373,14 @@ export default function ProposalIntake() {
                   <p className="text-sm font-semibold" style={{ color: '#065f46' }}>Memo package ready</p>
                 </div>
                 <div className="flex items-center gap-2">
+                  {/* Only when a confirmed memo cover produced one. */}
+                  {result.memo_docx_name && (
+                    <button className="btn-primary px-3 py-1.5"
+                      title="Your memo in Word, on your own template"
+                      onClick={() => proposalIntakeApi.downloadMemoDocx(result.id, result.memo_docx_name)}>
+                      <DocumentTextIcon className="w-4 h-4" /> Word memo
+                    </button>
+                  )}
                   <button className="btn-secondary px-3 py-1.5" onClick={() => proposalIntakeApi.download(result.id, result.merged_file_name)}>
                     <ArrowDownTrayIcon className="w-4 h-4" /> Download
                   </button>

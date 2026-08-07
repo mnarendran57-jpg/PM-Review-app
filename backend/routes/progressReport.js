@@ -9,6 +9,7 @@ const storage = require('../lib/storage');
 const access = require('../lib/access');
 const { requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../lib/plans');
+const { brandingFor } = require('../lib/orgBranding');
 
 // Everything here belongs to one organization, and within it a member sees only the
 // projects they are on. Applied to the whole router so a new endpoint cannot be added
@@ -191,13 +192,14 @@ router.get('/:id/report.pdf', async (req, res) => {
       if (buffer) photos.push({ caption: p.caption, mimeType: p.mime_type, buffer });
     }
 
-    // Use the same letterhead address the proposal memo prints, so editing it in one
-    // place keeps both documents consistent.
-    const tpl = db.prepare(
-      `SELECT company_name FROM memo_templates ORDER BY is_default DESC, id ASC LIMIT 1`
-    ).get();
+    // The reporting organization's own letterhead. The previous lookup took whichever memo
+    // template sorted first across the whole database, which put one customer's address on
+    // another's report.
+    const branding = await brandingFor(req.orgId);
 
-    const pdf = await renderProgressReportPdf({ report, header, photos, companyName: tpl?.company_name || undefined });
+    const pdf = await renderProgressReportPdf({
+      report, header, photos, companyName: branding.companyName, logo: branding.logo,
+    });
     const stem = (header.projectName || 'Progress').replace(/[^a-z0-9]+/gi, '_');
     const num = header.reportNumber != null ? `-${header.reportNumber}` : '';
     res.setHeader('Content-Type', 'application/pdf');

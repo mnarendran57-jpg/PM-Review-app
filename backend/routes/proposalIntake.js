@@ -4,6 +4,10 @@ const multer = require('multer');
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('../database');
 const { renderMemoPdf, mergePdfBuffers } = require('../lib/pdfGen');
+const { applyPlaceholders, fillDocx } = require('../lib/memoCover');
+
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const { brandingFor } = require('../lib/orgBranding');
 const { friendlyAiError } = require('../lib/aiErrors');
 const storage = require('../lib/storage');
 
@@ -111,9 +115,12 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
     }
     const poFile = req.files?.po_file?.[0];
 
+    // Scoped to the caller's organization. The unscoped version picked whichever template
+    // happened to be default anywhere in the database, so a second customer's memo came out
+    // on the first customer's letterhead.
     const templateRow = memo_template_id
-      ? db.prepare('SELECT * FROM memo_templates WHERE id=?').get(memo_template_id)
-      : db.prepare('SELECT * FROM memo_templates WHERE is_default=1').get();
+      ? db.prepare('SELECT * FROM memo_templates WHERE id=? AND org_id=?').get(memo_template_id, req.orgId)
+      : db.prepare('SELECT * FROM memo_templates WHERE org_id=? ORDER BY is_default DESC, id ASC LIMIT 1').get(req.orgId);
     if (!templateRow) return res.status(400).json({ error: 'No memo template found' });
     const template = { ...templateRow, sections: JSON.parse(templateRow.sections) };
 
@@ -145,7 +152,31 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
         : ''
     };
 
-    const memoPdf = await renderMemoPdf(template, fields);
+    // The organization's own memo cover, if one has been confirmed on this project's Shared
+    // Documents. Filling their .docx keeps their exact formatting — their fonts, their
+    // letterhead, their signature block — which redrawing the memo here cannot do.
+    let memoDocx = null;
+    const coverRow = req.body.project_id ? db.prepare(`
+      SELECT * FROM project_contracts
+      WHERE project_id = ? AND doc_type = 'memo-cover'
+      ORDER BY updated_at DESC, id DESC LIMIT 1
+    `).get(req.body.project_id) : null;
+
+    if (coverRow) {
+      try {
+        const coverTerms = JSON.parse(coverRow.terms || '{}');
+        if (coverTerms.confirmed) {
+          const coverBytes = await storage.readFile({ key: coverRow.file_key, blob: coverRow.file_blob });
+          const { buffer: prepared } = applyPlaceholders(coverBytes, coverTerms.replacements || []);
+          memoDocx = fillDocx(prepared, fields);
+        }
+      } catch (err) {
+        // A broken cover must not stop the memo going out — the PDF below still renders.
+        console.error('Memo cover could not be filled (falling back to the built-in memo):', err.message);
+      }
+    }
+
+    const memoPdf = await renderMemoPdf(template, fields, await brandingFor(req.orgId));
     const mergedPdf = await mergePdfBuffers([memoPdf, proposalFile.buffer, poFile?.buffer]);
 
     const baseName = proposalFile.originalname.replace(/\.pdf$/i, '');
@@ -154,6 +185,10 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
     const proposalKey = (await storage.storeFile('proposal', proposalFile.buffer, proposalFile.mimetype, proposalFile.originalname)).key;
     const poKey = poFile ? (await storage.storeFile('proposal', poFile.buffer, poFile.mimetype, poFile.originalname)).key : null;
     const mergedKey = (await storage.storeFile('proposal', mergedPdf, 'application/pdf', mergedFileName)).key;
+    const memoDocxName = memoDocx ? `${baseName}_memo.docx` : null;
+    const memoDocxKey = memoDocx
+      ? (await storage.storeFile('proposal', memoDocx, DOCX_MIME, memoDocxName)).key
+      : null;
 
     const result = db.prepare(`
       INSERT INTO proposal_intakes (
@@ -161,8 +196,9 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
         scope_of_work, total_price, change_order_price, original_po_amount, new_total_amount,
         memo_template_id,
         proposal_file_name, proposal_file, proposal_file_key, po_file_name, po_file, po_file_key,
-        merged_file_name, merged_pdf, merged_pdf_key, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        merged_file_name, merged_pdf, merged_pdf_key, created_by,
+        memo_docx, memo_docx_key, memo_docx_name
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.orgId,
       intake_type, fields.vendor_name, fields.project_name, fields.po_number, fields.date,
@@ -171,10 +207,16 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
       template.id,
       proposalFile.originalname, proposalKey ? Buffer.alloc(0) : proposalFile.buffer, proposalKey,
       poFile?.originalname || null, poFile ? (poKey ? Buffer.alloc(0) : poFile.buffer) : null, poKey,
-      mergedFileName, mergedKey ? Buffer.alloc(0) : mergedPdf, mergedKey, fields.from_name
+      mergedFileName, mergedKey ? Buffer.alloc(0) : mergedPdf, mergedKey, fields.from_name,
+      memoDocx ? (memoDocxKey ? Buffer.alloc(0) : memoDocx) : null, memoDocxKey, memoDocxName
     );
 
-    res.json({ id: result.lastInsertRowid, merged_file_name: mergedFileName });
+    res.json({
+      id: result.lastInsertRowid,
+      merged_file_name: mergedFileName,
+      // Tells the page whether to offer the Word download alongside the PDF package.
+      memo_docx_name: memoDocxName,
+    });
   } catch (err) {
     console.error('Proposal intake error:', err);
     res.status(500).json({ error: err.message });
@@ -209,11 +251,27 @@ router.get('/:id/download', async (req, res) => {
   res.send(bytes);
 });
 
+// The memo as the organization's own Word document, filled in. Offered alongside the merged
+// PDF package rather than instead of it: the PDF is what gets circulated for signature, this
+// is what they edit or print themselves.
+router.get('/:id/memo.docx', async (req, res) => {
+  const row = visibleRow(req);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  if (!row.memo_docx_key && !row.memo_docx) {
+    return res.status(404).json({ error: 'No Word memo was produced for this intake.' });
+  }
+  const bytes = await storage.readFile({ key: row.memo_docx_key, blob: row.memo_docx });
+  if (!bytes) return res.status(404).json({ error: 'Not found' });
+  res.setHeader('Content-Type', DOCX_MIME);
+  res.setHeader('Content-Disposition', `attachment; filename="${row.memo_docx_name || 'memo.docx'}"`);
+  res.send(bytes);
+});
+
 router.delete('/:id', async (req, res) => {
   const row = visibleRow(req);
   if (!row) return res.status(404).json({ error: 'Not found' });
   db.prepare('DELETE FROM proposal_intakes WHERE id=?').run(req.params.id);
-  await storage.remove([row?.proposal_file_key, row?.po_file_key, row?.merged_pdf_key]);
+  await storage.remove([row?.proposal_file_key, row?.po_file_key, row?.merged_pdf_key, row?.memo_docx_key]);
   res.json({ success: true });
 });
 

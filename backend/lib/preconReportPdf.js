@@ -6,13 +6,16 @@ const INK = rgb(0.1, 0.1, 0.1);
 const GREY = rgb(0.35, 0.35, 0.35);
 const AMBER = rgb(0.71, 0.33, 0.05);
 
-// Renders the pre-construction review as a client-facing PDF on the Coaster letterhead. Built
-// from the same analysis object the markdown export uses, so the two cannot drift apart.
+// Renders the pre-construction review as a plain, unbranded report. Deliberately carries no
+// company letterhead: this is a standard output every organization gets the same way, and the
+// previous version printed whichever letterhead happened to be first in the database — which
+// meant one customer's address on another customer's report.
 //
+// Built from the same analysis object the markdown export uses, so the two cannot drift apart.
 // Every finding is tagged confirmed or assumption, and that distinction is carried into the
 // PDF rather than flattened: this document leaves the office, and a reader has to be able to
 // tell what the drawings actually say from what the model inferred.
-async function renderPreconReportPdf({ projectName, reviewFocus, fileNames, analysis, companyName }) {
+async function renderPreconReportPdf({ projectName, reviewFocus, fileNames, analysis }) {
   const pdfDoc = await PDFDocument.create();
   const font = await pdfDoc.embedFont(StandardFonts.TimesRoman);
   const fontBold = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
@@ -21,29 +24,29 @@ async function renderPreconReportPdf({ projectName, reviewFocus, fileNames, anal
   let page;
   let y;
 
-  const drawLetterhead = () => {
+  // A running head rather than a letterhead: what the document is and who it is for, with no
+  // company identity attached. The project name carries onto later pages so a printed report
+  // does not come apart once the first page is separated from it.
+  const drawRunningHead = () => {
     const label = 'Client Confidential';
     page.drawText(label, {
       x: (PAGE_WIDTH - fontItalic.widthOfTextAtSize(label, BODY_SIZE)) / 2,
       y: PAGE_HEIGHT - 28, size: BODY_SIZE, font: fontItalic, color: GREY,
     });
-    // The stored letterhead is a whole address block — the firm on the first line, then
-    // street, city and website. Only the first line is the wordmark; setting the rest at
-    // 18pt would run it straight through the report title.
-    const [wordmark, ...address] = String(companyName || 'Coaster').split('\n').map(l => l.trim()).filter(Boolean);
-    page.drawText(wordmark, {
-      x: MARGIN, y: PAGE_HEIGHT - 52, size: 18, font: fontBold, color: INK,
-    });
-    address.forEach((line, i) => {
-      const width = font.widthOfTextAtSize(line, 8);
-      page.drawText(line, {
-        x: PAGE_WIDTH - MARGIN - width, y: PAGE_HEIGHT - 44 - i * 10, size: 8, font, color: GREY,
+    if (pdfDoc.getPageCount() > 1 && projectName) {
+      const width = font.widthOfTextAtSize(projectName, 8);
+      page.drawText(projectName, {
+        x: PAGE_WIDTH - MARGIN - width, y: PAGE_HEIGHT - 44, size: 8, font, color: GREY,
       });
-    });
-    return PAGE_HEIGHT - Math.max(76, 52 + address.length * 10);
+      page.drawText('Pre-Construction Review', {
+        x: MARGIN, y: PAGE_HEIGHT - 44, size: 8, font, color: GREY,
+      });
+      return PAGE_HEIGHT - 62;
+    }
+    return PAGE_HEIGHT - 48;
   };
 
-  const newPage = () => { page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]); y = drawLetterhead(); };
+  const newPage = () => { page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]); y = drawRunningHead(); };
   newPage();
 
   const ensureSpace = needed => { if (y - needed < MARGIN) newPage(); };

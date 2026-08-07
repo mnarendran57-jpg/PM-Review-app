@@ -122,18 +122,11 @@ router.get('/:id/report.pdf', async (req, res) => {
     const row = visibleRow(req);
     if (!row) return res.status(404).json({ error: 'Not found' });
 
-    // Reuses the letterhead the proposal memo prints, so editing it in one place keeps every
-    // outgoing document consistent.
-    const tpl = db.prepare(
-      `SELECT company_name FROM memo_templates ORDER BY is_default DESC, id ASC LIMIT 1`
-    ).get();
-
     const pdf = await renderPreconReportPdf({
       projectName: row.project_name,
       reviewFocus: row.review_focus,
       fileNames: JSON.parse(row.file_names || '[]'),
       analysis: JSON.parse(row.report_json),
-      companyName: tpl?.company_name || undefined,
     });
 
     const stem = (row.project_name || 'Precon').replace(/[^a-z0-9]+/gi, '_');
