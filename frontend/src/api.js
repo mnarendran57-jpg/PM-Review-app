@@ -463,6 +463,27 @@ export const payAppReviewApi = {
   delete: id => api.delete(`/pay-app-review/${id}`).then(r => r.data),
 };
 
+// Shared Documents — the project's contracts, drawings, specs and the rest, uploaded once and
+// read by every tool that needs them. The endpoints still sit under the pay-app-review router
+// on the server, which is where they were first written; the naming here reflects what they
+// actually are now that this is a tool in its own right.
+export const projectDocumentsApi = {
+  list: projectId => api.get(`/pay-app-review/project/${projectId}/documents`).then(r => r.data),
+  get: (projectId, docId) =>
+    api.get(`/pay-app-review/project/${projectId}/documents/${docId}`).then(r => r.data),
+  // Uploading a contract also extracts its terms, so this one call can be slow.
+  add: (projectId, formData) =>
+    api.post(`/pay-app-review/project/${projectId}/documents`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+    }).then(r => r.data),
+  update: (projectId, docId, data) =>
+    api.patch(`/pay-app-review/project/${projectId}/documents/${docId}`, data).then(r => r.data),
+  remove: (projectId, docId) =>
+    api.delete(`/pay-app-review/project/${projectId}/documents/${docId}`).then(r => r.data),
+  fileUrl: (projectId, docId) =>
+    `${apiBaseUrl}/pay-app-review/project/${projectId}/documents/${docId}/file.pdf`,
+};
+
 export const pcoReviewApi = {
   list: params => api.get('/pco-review', { params }).then(r => r.data),
   get: id => api.get(`/pco-review/${id}`).then(r => r.data),

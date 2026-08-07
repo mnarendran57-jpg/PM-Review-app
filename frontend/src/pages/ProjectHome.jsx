@@ -1,15 +1,19 @@
-import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   InboxArrowDownIcon, DocumentMagnifyingGlassIcon, ClipboardDocumentCheckIcon,
-  ScaleIcon, ArrowRightIcon, DocumentTextIcon, TrashIcon, CheckCircleIcon,
-  ReceiptPercentIcon, CameraIcon, ClipboardDocumentListIcon, QuestionMarkCircleIcon,
-  CheckCircleIcon as CheckCircleToolIcon,
+  ScaleIcon, ArrowRightIcon, ReceiptPercentIcon, CameraIcon,
+  ClipboardDocumentListIcon, QuestionMarkCircleIcon, CheckCircleIcon, FolderOpenIcon,
 } from '@heroicons/react/24/outline';
-import { payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import { usePlanFeatures } from '../hooks/usePlanFeatures';
-import FileDrop from '../components/FileDrop';
+
+// Shared Documents is not plan-gated — see the sidebar for why — so it is held apart from
+// TOOLS and always rendered first.
+const SHARED_DOCUMENTS = {
+  slug: 'shared-documents', label: 'Shared Documents',
+  description: 'The contract, drawings, specs and estimates — uploaded once and read by every tool below.',
+  icon: FolderOpenIcon, bg: 'linear-gradient(135deg, #facc15, #ca8a04)', glow: 'rgba(234,179,8,0.28)',
+};
 
 const TOOLS = [
   { slug: 'proposal-intake', label: 'Proposal Intake',
@@ -38,85 +42,9 @@ const TOOLS = [
     icon: QuestionMarkCircleIcon, bg: 'linear-gradient(135deg, #38bdf8, #0284c7)', glow: 'rgba(14,165,233,0.28)' },
   { slug: 'meeting-actions', label: 'Meeting Actions',
     description: 'Turn meeting minutes into a running list of who owes what, with overdue items front and centre.',
-    icon: CheckCircleToolIcon, bg: 'linear-gradient(135deg, #4ade80, #16a34a)', glow: 'rgba(34,197,94,0.28)' },
+    icon: CheckCircleIcon, bg: 'linear-gradient(135deg, #4ade80, #16a34a)', glow: 'rgba(34,197,94,0.28)' },
 ];
 
-// The shared contract — uploaded once for the whole project and read by every tool.
-function ContractSection({ projectId }) {
-  const [contract, setContract] = useState(undefined); // undefined = loading, null = none
-  const [file, setFile] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  const load = () => payAppReviewApi.getContract(projectId)
-    .then(c => setContract(c || null)).catch(() => setContract(null));
-  useEffect(() => { if (projectId) load(); }, [projectId]);
-
-  const upload = async () => {
-    if (!file) return;
-    setBusy(true); setError('');
-    try {
-      const fd = new FormData();
-      fd.append('contract_file', file);
-      await payAppReviewApi.uploadContract(projectId, fd);
-      setFile(null); load();
-    } catch (err) {
-      setError(err.response?.data?.error || 'Could not read this contract.');
-    } finally { setBusy(false); }
-  };
-
-  const remove = async () => {
-    setBusy(true);
-    try { await payAppReviewApi.deleteContract(projectId); setContract(null); }
-    finally { setBusy(false); }
-  };
-
-  const t = contract?.terms || {};
-  const taxLabel = t.taxExempt === true ? 'Tax exempt' : t.taxExempt === false ? 'Not tax exempt' : 'Tax status not stated';
-
-  return (
-    <div className="card p-6">
-      <div className="flex items-center gap-2 mb-1">
-        <DocumentTextIcon className="w-5 h-5 text-blue-600" />
-        <h2 className="text-base font-bold text-gray-900">Shared Documents</h2>
-      </div>
-      <p className="text-sm text-gray-500 mb-4">
-        The executed contract is uploaded once here and read automatically by every tool in this project —
-        you never attach it again per review.
-      </p>
-
-      {contract === undefined ? (
-        <p className="text-sm text-gray-400">Loading…</p>
-      ) : contract ? (
-        <div className="p-4 rounded-xl flex items-start justify-between gap-3" style={{ background: '#f6faf7', border: '1px solid #dcf0e2' }}>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <CheckCircleIcon className="w-4 h-4 flex-shrink-0" style={{ color: '#059669' }} />
-              <span className="text-sm font-semibold text-gray-900 truncate">{contract.file_name}</span>
-            </div>
-            <p className="text-xs text-gray-500">
-              {taxLabel} · {(t.unallowableItems || []).length} unallowable item{(t.unallowableItems || []).length === 1 ? '' : 's'} on file
-              {contract.terms_edited ? ' · terms corrected by you' : ' · read from the contract'}
-            </p>
-          </div>
-          <button className="btn-danger flex-shrink-0" onClick={remove} disabled={busy} title="Remove contract">
-            <TrashIcon className="w-4 h-4" />
-          </button>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          <FileDrop file={file} onChange={setFile} label="Executed Contract (PDF)" />
-          {error && <p className="text-xs" style={{ color: '#b91c1c' }}>{error}</p>}
-          {file && (
-            <button className="btn-secondary w-full justify-center py-1.5 text-sm" onClick={upload} disabled={busy}>
-              {busy ? 'Reading contract…' : 'Read contract terms'}
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default function ProjectHome() {
   const navigate = useNavigate();
@@ -135,10 +63,8 @@ export default function ProjectHome() {
         {project?.client_name && <p className="text-gray-500 mt-1 text-[15px]">{project.client_name}</p>}
       </div>
 
-      <div className="grid grid-cols-3 gap-6 items-start">
-        {/* Tools */}
-        <div className="col-span-2 grid grid-cols-2 gap-5">
-          {TOOLS.filter(tool => hasFeature(tool.slug)).map((tool, i) => {
+      <div className="grid grid-cols-3 gap-5 items-start">
+          {[SHARED_DOCUMENTS, ...TOOLS.filter(tool => hasFeature(tool.slug))].map((tool, i) => {
             const Icon = tool.icon;
             return (
               <button key={tool.slug} onClick={() => navigate(`/project/${projectId}/${tool.slug}`)}
@@ -155,12 +81,6 @@ export default function ProjectHome() {
               </button>
             );
           })}
-        </div>
-
-        {/* Shared documents */}
-        <div className="animate-fade-up stagger-2">
-          <ContractSection projectId={projectId} />
-        </div>
       </div>
     </div>
   );

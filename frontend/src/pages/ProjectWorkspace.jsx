@@ -13,6 +13,7 @@ import PreconReview from './PreconReview';
 import SubmittalLog from './SubmittalLog';
 import RfiLog from './RfiLog';
 import MeetingActions from './MeetingActions';
+import SharedDocuments from './SharedDocuments';
 
 // Everything under /project/:projectId lives here. The project is fetched once and
 // handed to every tool through ProjectContext, so no tool re-asks which project it
@@ -47,6 +48,7 @@ export default function ProjectWorkspace() {
             <Route path="submittal-log" element={<SubmittalLog />} />
             <Route path="rfi-log" element={<RfiLog />} />
             <Route path="meeting-actions" element={<MeetingActions />} />
+            <Route path="shared-documents" element={<SharedDocuments />} />
           </Routes>
         )}
       </Layout>

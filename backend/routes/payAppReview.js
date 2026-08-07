@@ -153,10 +153,17 @@ router.get('/project/:id/history', (req, res) => {
 // uploaded once and, if it is a contract, its terms are extracted once; later reviews read
 // the stored terms instead of re-sending a long PDF to the API every period.
 //
-// doc_type 'contract' has terms and can be reviewed against. 'reference' is storage for the
-// team: downloadable, never sent to the model.
-
-const DOC_TYPES = ['contract', 'reference'];
+// doc_type 'contract' is the load-bearing value: only a contract has its terms extracted, can
+// be marked primary, and is what Pay App and Change Order Review read. Every other value is
+// simply what kind of document it is — stored for the team, downloadable, and selectable by
+// tools that read documents on request (the RFI log reads drawings this way).
+//
+// 'reference' predates the richer list and is kept so existing rows stay valid; the app
+// presents it as "Other".
+const DOC_TYPES = [
+  'contract', 'drawings', 'design', 'specifications', 'scope',
+  'proposal', 'estimate', 'schedule', 'permit', 'other', 'reference',
+];
 
 // Falls back to the filename so a document is never nameless in a dropdown.
 const docLabel = (label, fileName) =>
@@ -166,7 +173,7 @@ function listDocuments(projectId) {
   return db.prepare(`
     SELECT id, project_id, file_name, label, doc_type, is_primary, terms_edited, created_at, updated_at
     FROM project_contracts WHERE project_id = ?
-    ORDER BY doc_type ASC, is_primary DESC, created_at ASC
+    ORDER BY (doc_type = 'contract') DESC, is_primary DESC, doc_type ASC, created_at ASC
   `).all(projectId);
 }
 
@@ -182,7 +189,11 @@ async function addDocument(req, res) {
     if (file.mimetype !== 'application/pdf') return res.status(400).json({ error: 'The document must be a PDF' });
     if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
 
-    const docType = DOC_TYPES.includes(req.body.doc_type) ? req.body.doc_type : 'contract';
+    // Falls back to 'other', never to 'contract'. Being a contract is the one consequential
+    // choice here — it spends an AI call reading the document and can become the agreement
+    // every review is checked against — so it has to be asked for explicitly rather than
+    // arrived at because a value was missing or misspelt.
+    const docType = DOC_TYPES.includes(req.body.doc_type) ? req.body.doc_type : 'other';
     const label = docLabel(req.body.label, file.originalname);
 
     // Only an agreement is worth reading: extracting "terms" from a schedule or an estimate

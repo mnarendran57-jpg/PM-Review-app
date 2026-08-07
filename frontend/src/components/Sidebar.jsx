@@ -4,7 +4,7 @@ import {
   InboxArrowDownIcon, ArrowRightOnRectangleIcon, DocumentMagnifyingGlassIcon,
   ClipboardDocumentCheckIcon, Squares2X2Icon, ScaleIcon, ArrowLeftIcon,
   Cog6ToothIcon, EnvelopeIcon, FolderIcon, ReceiptPercentIcon, CameraIcon, UserGroupIcon,
-  ClipboardDocumentListIcon, QuestionMarkCircleIcon, CheckCircleIcon,
+  ClipboardDocumentListIcon, QuestionMarkCircleIcon, CheckCircleIcon, FolderOpenIcon,
 } from '@heroicons/react/24/outline';
 import { authApi, selectedOrg, selectedProgram, orgsApi, programsApi, projectsApi } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -176,6 +176,11 @@ export default function Sidebar() {
             <div className="space-y-1">
               <NavRow to={`/project/${projectId}`} end label="Overview" Icon={Squares2X2Icon}
                 color="#3b82f6" glow="rgba(37,99,235,0.2)" />
+              {/* Deliberately outside the plan filter. Shared Documents is not a tool a
+                  customer buys — it is where the contract and drawings live, and every tool
+                  below reads from it, so hiding it would strand whatever they did buy. */}
+              <NavRow to={`/project/${projectId}/shared-documents`} label="Shared Documents"
+                Icon={FolderOpenIcon} color="#facc15" glow="rgba(234,179,8,0.16)" />
               {projectTools.filter(t => hasFeature(t.slug)).map(t => (
                 <NavRow key={t.slug} to={`/project/${projectId}/${t.slug}`}
                   label={t.label} Icon={t.icon} color={t.color} glow={t.glow} />

@@ -31,6 +31,15 @@ const STATUS_FILTERS = [
   { key: 'closed', label: 'Closed' },
 ];
 
+// Mirrors the categories on the Shared Documents page, so a drawing set reads as "Drawings"
+// here rather than the catch-all "Reference" it was labelled before.
+const DOC_TYPE_LABELS = {
+  contract: 'Contract', drawings: 'Drawings', design: 'Design Documents',
+  specifications: 'Specifications', scope: 'Scope of Work', proposal: 'Proposals',
+  estimate: 'Cost Estimate', schedule: 'Schedule', permit: 'Permits & Approvals',
+  other: 'Other', reference: 'Other',
+};
+
 const today = () => new Date().toISOString().slice(0, 10);
 
 function formatDate(value) {
@@ -114,7 +123,7 @@ function DocumentPicker({ projectId, selected, onChange }) {
           <span className="min-w-0">
             <span className="block text-[12px] font-semibold text-gray-800 truncate">{docName(doc)}</span>
             <span className="block text-[10px] text-gray-400">
-              {doc.doc_type === 'contract' ? 'Contract' : 'Reference'} · {doc.file_name}
+              {DOC_TYPE_LABELS[doc.doc_type] || 'Other'} · {doc.file_name}
             </span>
           </span>
         </label>
