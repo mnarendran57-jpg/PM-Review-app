@@ -1,19 +1,112 @@
-const Anthropic = require('@anthropic-ai/sdk');
 const { splitPdf, analyzeInPasses, partNotice } = require('./pdfChunk');
+const { askForJson } = require('./aiJson');
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Change-order line descriptions carry dimensions written with inch marks, so this comes back
+// through a tool call rather than as parsed text. See lib/aiJson.js.
+//
+// The reference block is only offered when an RFI/ASI was uploaded: a schema that always
+// asked for it would invite the model to invent one.
+function pcoTool(hasReference) {
+  const properties = {
+    pco: {
+      type: 'object',
+      properties: {
+        pcoNumber: { type: 'string' },
+        title: { type: 'string', description: 'A short title.' },
+        contractor: { type: 'string', description: 'Who submitted it.' },
+        date: { type: 'string', description: 'YYYY-MM-DD.' },
+        totalAmount: { type: 'number' },
+        referencesRfi: { type: 'string', description: 'The RFI/ASI number this PCO cites.' },
+        isAllowance: { type: 'boolean' },
+        taxAmount: { type: 'number' },
+        taxRate: { type: 'number', description: 'A decimal.' },
+        markups: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              party: { type: 'string', description: "Who takes this markup, e.g. 'GC' or 'Sub'." },
+              tier: { type: 'string', enum: ['gc', 'sub', 'second-tier'] },
+              label: { type: 'string', description: "The line's own wording, e.g. 'Overhead & Profit 15%'." },
+              rate: { type: 'number', description: 'A decimal.' },
+              base: { type: 'number', description: 'The number the markup is applied to.' },
+              amount: { type: 'number' },
+            },
+            required: ['label'],
+          },
+        },
+        lineItems: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              description: { type: 'string' },
+              qty: { type: 'number' },
+              unit: { type: 'string' },
+              unitPrice: { type: 'number' },
+              total: { type: 'number' },
+              hasBreakdown: {
+                type: 'boolean',
+                description: 'True if qty/unit/unitPrice are given, false if it is a bare lump sum.',
+              },
+            },
+            required: ['description'],
+          },
+        },
+      },
+      required: ['lineItems'],
+    },
+    observations: {
+      type: 'object',
+      properties: {
+        lumpSumConcerns: {
+          type: 'string',
+          description: 'Plain English: which amounts are lump sums a PM should ask to see '
+            + 'broken down, and why.',
+        },
+        pricingSanity: {
+          type: 'string',
+          description: 'Plain English: based on general construction cost knowledge (which may '
+            + 'be out of date), do any unit prices or totals look far outside the normal range? '
+            + 'Be specific about which line and why. Say nothing definitive — this is a prompt '
+            + 'for the PM to check, not a verdict.',
+        },
+      },
+    },
+  };
 
-function safeJsonFromText(text) {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('No JSON found in AI response');
-  try {
-    return JSON.parse(match[0]);
-  } catch (err) {
-    throw new Error(
-      'The PCO could not be read back as valid data — it may be longer or more complex than one ' +
-      `pass can handle. Try again, or upload just the PCO pricing pages. (${err.message})`
-    );
+  if (hasReference) {
+    properties.reference = {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['RFI', 'ASI'] },
+        number: { type: 'string' },
+        subject: { type: 'string' },
+        scopeSummary: {
+          type: 'string',
+          description: '2-3 sentences: what work the RFI/ASI actually calls for.',
+        },
+      },
+    };
+    properties.observations.properties.scopeAlignment = {
+      type: 'object',
+      properties: {
+        aligned: { type: 'boolean' },
+        notes: {
+          type: 'string',
+          description: 'Plain English: does the PCO price the work the RFI/ASI describes, '
+            + 'nothing more, nothing less? Name anything in the PCO that the RFI/ASI does not '
+            + 'call for.',
+        },
+      },
+    };
   }
+
+  return {
+    name: 'record_pco_review',
+    description: 'Record a potential change order\'s figures and what is worth the PM\'s attention.',
+    input_schema: { type: 'object', properties, required: ['pco'] },
+  };
 }
 
 // The extraction returns two clearly separated things:
@@ -27,55 +120,11 @@ owner's project manager.${hasReference ? ' The second document is the RFI or ASI
 
 ${contractTerms ? `The executed contract's relevant terms (already verified by the PM):
 ${JSON.stringify(contractTerms, null, 2)}
-` : ''}Return ONLY valid JSON in this exact shape:
-
-{
-  "pco": {
-    "pcoNumber": "<string or null>",
-    "title": "<short title or null>",
-    "contractor": "<who submitted it, or null>",
-    "date": "<YYYY-MM-DD or null>",
-    "totalAmount": <number or null>,
-    "referencesRfi": "<RFI/ASI number this PCO cites, or null>",
-    "isAllowance": <true | false | null>,
-    "taxAmount": <number or null>,
-    "taxRate": <decimal or null>,
-    "markups": [
-      { "party": "<who takes this markup, e.g. 'GC' or 'Sub' or 'Second-tier sub'>",
-        "tier": "<\\"gc\\" | \\"sub\\" | \\"second-tier\\" | null>",
-        "label": "<the line's own wording, e.g. 'Overhead & Profit 15%'>",
-        "rate": <decimal or null>,
-        "base": <number the markup is applied to, or null>,
-        "amount": <number or null> }
-    ],
-    "lineItems": [
-      { "description": "<string>",
-        "qty": <number or null>,
-        "unit": "<string or null>",
-        "unitPrice": <number or null>,
-        "total": <number or null>,
-        "hasBreakdown": <true if qty/unit/unitPrice are given, false if it is a bare lump sum> }
-    ]
-  },
-  "reference": ${hasReference ? `{
-    "type": "<\\"RFI\\" | \\"ASI\\" | null>",
-    "number": "<string or null>",
-    "subject": "<string or null>",
-    "scopeSummary": "<2-3 sentences: what work the RFI/ASI actually calls for>"
-  }` : 'null'},
-  "observations": {
-    "scopeAlignment": ${hasReference ? `{
-      "aligned": <true | false | null>,
-      "notes": "<plain-English: does the PCO price the work the RFI/ASI describes, nothing more, nothing less? Name anything in the PCO that the RFI/ASI does not call for.>"
-    }` : 'null'},
-    "lumpSumConcerns": "<plain-English: which amounts are lump sums a PM should ask to see broken down, and why — or null if none>",
-    "pricingSanity": "<plain-English: based on general construction cost knowledge (which may be out of date), do any unit prices or totals look far outside the normal range? Be specific about which line and why. Say nothing definitive — this is a prompt for the PM to check, not a verdict. Or null.>"
-  }
-}
+` : ''}Record what you find with the record_pco_review tool.
 
 Rules:
 - Dollar amounts are plain numbers (no "$", no commas). Rates are decimals (15% -> 0.15).
-- If a field cannot be found with confidence, use null. Never invent a number.
+- If a field cannot be found with confidence, omit it. Never invent a number.
 - "isAllowance" is true only if the PCO or its reference explicitly presents this as an
   allowance (an owner's set-aside amount), not ordinary changed work.
 - Every markup/OH&P/fee line on the PCO must appear in "markups", each tagged with the
@@ -85,34 +134,21 @@ Rules:
   no jargon. Ground every concern in something visible in the documents.`;
 }
 
-async function callClaude(content) {
-  return client.messages.create({
-    model: 'claude-sonnet-4-5',
-    max_tokens: 12000,
-    messages: [{ role: 'user', content }],
-  });
-}
+const TOO_MANY_LINE_ITEMS = 'This change order has more pricing detail than one response can '
+  + 'hold. Try uploading it without its largest backup attachment.';
 
 // Single Claude call: PCO PDF + optional RFI/ASI PDF + the contract's stored terms as
 // text. The contract PDF itself is deliberately NOT re-sent — its terms were extracted
 // once at upload and re-billing a long contract every PCO would swamp the review cost.
-async function callWithRetry(content) {
-  try {
-    return await callClaude(content);
-  } catch (err) {
-    if (err.status === 429) {
-      await new Promise(resolve => setTimeout(resolve, 20000));
-      return callClaude(content);
-    }
-    throw err;
-  }
-}
-
-function tooManyLineItems() {
-  return new Error(
-    'This change order has more pricing detail than one response can hold. ' +
-    'Try uploading it without its largest backup attachment.'
-  );
+async function callWithRetry(content, hasReference) {
+  const { data } = await askForJson({
+    content,
+    tool: pcoTool(hasReference),
+    maxTokens: 12000,
+    label: 'pco extract',
+    truncatedMessage: TOO_MANY_LINE_ITEMS,
+  });
+  return data;
 }
 
 async function analyzePco({ pcoBuffer, referenceBuffer, contractTerms }) {
@@ -129,12 +165,7 @@ async function analyzePco({ pcoBuffer, referenceBuffer, contractTerms }) {
     }
     content.push({ type: 'text', text: buildPrompt({ hasReference: !!referenceBuffer, contractTerms }) });
 
-    const response = await callWithRetry(content);
-    if (response.stop_reason === 'max_tokens') throw tooManyLineItems();
-    const parsed = safeJsonFromText(response.content[0].text);
-    if (response.usage) {
-      console.log(`[pco extract] in=${response.usage.input_tokens} out=${response.usage.output_tokens} tokens`);
-    }
+    const parsed = await callWithRetry(content, !!referenceBuffer);
     return {
       pco: parsed.pco || {},
       reference: parsed.reference || null,
@@ -149,9 +180,7 @@ async function analyzePco({ pcoBuffer, referenceBuffer, contractTerms }) {
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
       { type: 'text', text: buildPrompt({ hasReference: false, contractTerms }) + partNotice(context) },
     ];
-    const response = await callWithRetry(content);
-    if (response.stop_reason === 'max_tokens') throw tooManyLineItems();
-    return safeJsonFromText(response.content[0].text);
+    return callWithRetry(content, false);
   };
 
   const main = await analyzeInPasses(pcoBuffer, readPco);

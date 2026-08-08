@@ -1,22 +1,77 @@
-const Anthropic = require('@anthropic-ai/sdk');
 const { planPasses, passLabel } = require('./pdfChunk');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const { askForJson } = require('./aiJson');
 
 const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
-function safeJsonFromText(text) {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('No JSON found in AI response');
-  try {
-    return JSON.parse(match[0]);
-  } catch (err) {
-    throw new Error(
-      'The AI response could not be parsed as JSON — this can happen with a very large or unusual set of ' +
-      `documents. Try again with fewer documents at once. (${err.message})`
-    );
-  }
-}
+// A finding about a duct or a pipe carries its dimension, written with an inch mark, so the
+// review comes back through a tool call rather than as parsed text. See lib/aiJson.js.
+const FINDING_LIST = description => ({
+  type: 'array',
+  description,
+  items: {
+    type: 'object',
+    properties: {
+      text: { type: 'string' },
+      basis: {
+        type: 'string',
+        enum: ['confirmed', 'assumption'],
+        description: '"confirmed" means directly supported by something explicitly stated or '
+          + 'shown in the documents. "assumption" means a reasonable concern based on typical '
+          + 'construction practice or an inference — be honest about which is which.',
+      },
+    },
+    required: ['text', 'basis'],
+  },
+});
+
+const REVIEW_TOOL = {
+  name: 'record_precon_review',
+  description: 'Record a pre-construction review of a project document set.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      documentSummary: {
+        type: 'string',
+        description: '2-5 sentence summary of what the documents appear to cover (scope, '
+          + 'discipline, project type).',
+      },
+      insufficientInfo: {
+        type: 'boolean',
+        description: 'True if the documents genuinely do not contain enough information to do '
+          + 'a meaningful review.',
+      },
+      insufficientInfoNote: {
+        type: 'string',
+        description: 'If insufficientInfo is true, a short note on what else is needed.',
+      },
+      risks: FINDING_LIST('Scope gaps, unclear design intent, missing information, coordination '
+        + 'issues, constructability concerns, schedule impact, procurement concerns, site '
+        + 'constraints, code/permitting concerns, or operational disruptions.'),
+      highCostItems: FINDING_LIST('Items that may significantly affect cost: major '
+        + 'electrical/mechanical equipment, switchgear, HVAC units, structural work, specialty '
+        + 'finishes, long-lead items, demolition, phasing, utility shutdowns, fire/life safety '
+        + 'work, complex installation requirements.'),
+      changeOrderAreas: FINDING_LIST('Areas that could reasonably lead to a change order: vague '
+        + 'scope, incomplete details, conflicts between drawings/specs, unknown field '
+        + 'conditions, allowance items, exclusions, deferred design, missing quantities, '
+        + 'unclear trade responsibility.'),
+      missingInfo: {
+        type: 'array',
+        description: 'Specific questions the PM should ask the architect, engineer, contractor '
+          + 'or owner before bidding or construction.',
+        items: { type: 'string' },
+      },
+      actionItems: {
+        type: 'array',
+        description: 'Specific, practical next steps: an RFI to issue, a clarification to '
+          + 'request, a site walk to schedule, a cost item to verify, an approval needed, a '
+          + 'document to request.',
+        items: { type: 'string' },
+      },
+    },
+    required: ['documentSummary', 'risks', 'highCostItems', 'changeOrderAreas', 'missingInfo', 'actionItems'],
+  },
+};
 
 function fileToContentBlock(file) {
   const mimeType = file.mimetype;
@@ -36,31 +91,9 @@ function fileToContentBlock(file) {
 
 const PROMPT_TEMPLATE = ({ projectName, reviewFocus }) => `You are assisting a Construction Project Manager with a pre-construction document review. The PM has uploaded one or more construction drawings, design documents, specifications, proposals, sketches, narratives, reports, or contractor/architect/engineer documents for a project${projectName ? ` called "${projectName}"` : ''}.${reviewFocus ? `\n\nThe PM has asked you to pay particular attention to: ${reviewFocus}` : ''}
 
-Analyze all the documents together as one project package and produce a structured pre-construction review. Respond with ONLY a raw JSON object (no markdown, no commentary) matching this exact shape:
-
-{
-  "documentSummary": "2-5 sentence summary of what the documents appear to cover (scope, discipline, project type)",
-  "insufficientInfo": <true/false — true if the documents genuinely don't contain enough information to do a meaningful review>,
-  "insufficientInfoNote": "<if insufficientInfo is true, a short note on what additional information/documents are needed; otherwise null>",
-  "risks": [
-    { "text": "<a specific risk: scope gaps, unclear design intent, missing information, coordination issues, constructability concerns, schedule impact, procurement concerns, site constraints, code/permitting concerns, or operational disruptions>", "basis": "confirmed" | "assumption" }
-  ],
-  "highCostItems": [
-    { "text": "<a specific item that may significantly affect cost: major electrical/mechanical equipment, switchgear, HVAC units, structural work, specialty finishes, long-lead items, demolition, phasing, utility shutdowns, fire/life safety work, complex installation requirements>", "basis": "confirmed" | "assumption" }
-  ],
-  "changeOrderAreas": [
-    { "text": "<a specific area that could reasonably lead to a change order: vague scope, incomplete details, conflicts between drawings/specs, unknown field conditions, allowance items, exclusions, deferred design, missing quantities, unclear trade responsibility>", "basis": "confirmed" | "assumption" }
-  ],
-  "missingInfo": [
-    "<a specific question the PM should ask the architect, engineer, contractor, or owner before bidding or construction>"
-  ],
-  "actionItems": [
-    "<a specific, practical next step: RFI to issue, clarification to request, site walk to schedule, cost item to verify, stakeholder approval needed, document to request>"
-  ]
-}
+Analyze all the documents together as one project package and produce a structured pre-construction review, recorded with the record_precon_review tool.
 
 Rules:
-- "basis": "confirmed" means the risk/item is directly supported by something explicitly stated or shown in the documents. "assumption" means it's a reasonable concern you're flagging based on typical construction practice or an inference, not something explicitly stated — be honest about which is which.
 - Do not invent details that are not supported by the documents. If you are not confident about something, mark it as an assumption or leave it out.
 - If the documents genuinely don't contain enough information for a meaningful review, set insufficientInfo to true and still fill in whatever partial findings are possible in the arrays (they can be short or empty), explaining the gap in insufficientInfoNote.
 - Keep each bullet concise, practical, and specific to these documents — not generic boilerplate.
@@ -80,43 +113,19 @@ async function analyzeOnePass(entries, { projectName, reviewFocus, passNumber, p
       'they are being reviewed separately and will be combined with your findings.';
   }
 
-  const response = await sendWithRetry({
-    model: 'claude-sonnet-4-5',
-    max_tokens: 8192,
-    messages: [{ role: 'user', content: [...contentBlocks, { type: 'text', text: prompt }] }],
+  // A long set is read in several passes, and the account's allowance (10,000 input tokens and
+  // 5 requests a minute) is comfortably exceeded by two dense drawing passes back to back. So a
+  // rate-limit answer is expected here, not exceptional, and is waited out rather than treated
+  // as a failure — hence four attempts where most callers take the default two.
+  const { data } = await askForJson({
+    content: [...contentBlocks, { type: 'text', text: prompt }],
+    tool: REVIEW_TOOL,
+    maxTokens: 8192,
+    attempts: 4,
+    label: `precon pass ${passNumber}/${passTotal}`,
+    truncatedMessage: 'The review was too large to complete in one pass. Try again with fewer documents at once.',
   });
-
-  if (response.stop_reason === 'max_tokens') {
-    throw new Error('The review was too large to complete in one pass. Try again with fewer documents at once.');
-  }
-  return safeJsonFromText(response.content[0].text);
-}
-
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-// A long set is read in several passes, and the account's allowance (10,000 input tokens and
-// 5 requests a minute) is comfortably exceeded by two dense drawing passes back to back. So a
-// rate-limit answer is expected here, not exceptional, and has to be waited out rather than
-// treated as a failure. This module was the only one without it, which is why a large upload
-// reported that it could not be processed: the first 429 aborted the whole review.
-//
-// The wait comes from the API's own retry-after where it gives one, since it knows when the
-// window resets better than a guess does.
-async function sendWithRetry(request, attempts = 4) {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await client.messages.create(request);
-    } catch (err) {
-      const retryable = err?.status === 429 || err?.status === 529 || err?.status === 503;
-      if (!retryable || attempt >= attempts) throw err;
-      const advertised = Number(err?.headers?.['retry-after']);
-      const wait = Number.isFinite(advertised) && advertised > 0
-        ? Math.min(advertised, 90) * 1000
-        : Math.min(20000 * attempt, 60000);
-      console.warn(`[precon] ${err.status} on attempt ${attempt}; waiting ${Math.round(wait / 1000)}s`);
-      await sleep(wait);
-    }
-  }
+  return data;
 }
 
 // Same finding reported against two parts of one document should appear once. Compared on

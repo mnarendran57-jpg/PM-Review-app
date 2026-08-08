@@ -1,9 +1,7 @@
-const Anthropic = require('@anthropic-ai/sdk');
 const { PDFDocument } = require('pdf-lib');
 const { pageCount } = require('./pdfChunk');
+const { askForJson } = require('./aiJson');
 const { DISCIPLINE_SHEET_HINTS } = require('./rfiLog');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // Predicts how the A/E is likely to answer an RFI, by reading it against the project
 // documents the PM selected. Advisory only: it exists so the PM understands the question
@@ -30,32 +28,124 @@ const MAX_ANALYSIS_PAGES = 16;
 // unnumbered cover.
 const PAGE_WINDOW = 1;
 
-function safeJsonFromText(text) {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('No JSON found in AI response');
-  try {
-    return JSON.parse(match[0]);
-  } catch (err) {
-    throw new Error(`The analysis could not be read back as valid data. (${err.message})`);
-  }
-}
+// The two shapes this module asks for. Declared as tool schemas rather than described in the
+// prompt, because a suggested answer about ductwork is full of inch marks and quoted spec
+// notes — see lib/aiJson.js for why that used to break the reply.
+const SHEET_PICKER_TOOL = {
+  name: 'report_relevant_sheets',
+  description: 'Report which sheets of this drawing set bear on the contractor\'s question.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      hasSheetIndex: {
+        type: 'boolean',
+        description: 'True if these pages contain a drawing index or sheet list.',
+      },
+      totalSheetsListed: {
+        type: 'integer',
+        description: 'How many sheets the index names. Omit if there is no index.',
+      },
+      firstSheetPdfPage: {
+        type: 'integer',
+        description: 'The PDF page number where the first sheet in the index appears.',
+      },
+      relevantSheets: {
+        type: 'array',
+        description: 'At most 4 sheets, the ones most likely to actually answer the question.',
+        items: {
+          type: 'object',
+          properties: {
+            sheetNumber: { type: 'string', description: 'The sheet number as printed, e.g. M-401.' },
+            sheetTitle: { type: 'string', description: 'Its title from the index.' },
+            indexPosition: { type: 'integer', description: 'Its 1-based position in the sheet list.' },
+            estimatedPdfPage: { type: 'integer', description: 'Which PDF page you expect it on.' },
+            why: { type: 'string', description: 'One short sentence on why this sheet bears on the question.' },
+          },
+          required: ['sheetNumber', 'estimatedPdfPage'],
+        },
+      },
+    },
+    required: ['hasSheetIndex', 'relevantSheets'],
+  },
+};
 
-async function callClaude(content, maxTokens = 3000) {
-  const send = () => client.messages.create({
-    model: 'claude-sonnet-4-5',
-    max_tokens: maxTokens,
-    messages: [{ role: 'user', content }],
-  });
-  let response;
-  try {
-    response = await send();
-  } catch (err) {
-    if (err.status !== 429) throw err;
-    await new Promise(resolve => setTimeout(resolve, 20000));
-    response = await send();
-  }
-  return response;
-}
+const ANSWER_TOOL = {
+  name: 'report_suggested_answer',
+  description: 'Report what the project documents appear to say about the contractor\'s question.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      shortAnswer: {
+        type: 'string',
+        description: 'The answer in ONE sentence, two at the very most. Plain English, no '
+          + 'preamble, no hedging phrases like "based on the documents provided". This is the '
+          + 'only line most readers will read, so it must carry the actual answer — or say '
+          + 'plainly that the documents do not settle it.',
+      },
+      likelyAnswer: {
+        type: 'string',
+        description: 'The same answer with the reasoning, in plain English, based only on what '
+          + 'these documents show. 2-5 sentences. If the documents do not answer it, say '
+          + 'exactly that instead of constructing an answer.',
+      },
+      confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+      confidenceReason: {
+        type: 'string',
+        description: 'One sentence on why — what you could and could not see.',
+      },
+      basis: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            document: { type: 'string', description: 'Which document.' },
+            sheet: {
+              type: 'string',
+              description: 'The sheet number printed in the title block of the page you used. '
+                + 'Omit if this is not a drawing.',
+            },
+            shows: {
+              type: 'string',
+              description: 'What that sheet or clause actually shows, specifically — dimensions, '
+                + 'notes, schedule values.',
+            },
+          },
+          required: ['document', 'shows'],
+        },
+      },
+      conflicts: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            between: { type: 'string', description: 'Which documents or sheets disagree.' },
+            detail: {
+              type: 'string',
+              description: 'What the discrepancy is — often the real reason the RFI was raised.',
+            },
+          },
+          required: ['between', 'detail'],
+        },
+      },
+      missingInformation: {
+        type: 'string',
+        description: 'What you would need in order to answer properly. Omit if the documents '
+          + 'were sufficient.',
+      },
+      questionsForAE: {
+        type: 'array',
+        description: 'Specific questions the PM should press the A/E on if their answer is vague.',
+        items: { type: 'string' },
+      },
+      costScheduleFlag: {
+        type: 'string',
+        description: 'Plain English: does this look like it will turn into a change order or a '
+          + 'delay claim, and why? Omit if it looks like a straightforward clarification.',
+      },
+    },
+    required: ['shortAnswer', 'likelyAnswer', 'confidence'],
+  },
+};
 
 const asDocument = buffer => ({
   type: 'document',
@@ -99,22 +189,7 @@ Subject: ${rfi.subject}
 Question: ${rfi.question || '(no question text was recorded — go by the subject)'}
 Discipline: ${discipline} — the sheets to look for usually carry the prefix ${DISCIPLINE_SHEET_HINTS[discipline] || 'any'}.
 
-Return ONLY valid JSON in this exact shape:
-
-{
-  "hasSheetIndex": <true if these pages contain a drawing index or sheet list, else false>,
-  "totalSheetsListed": <how many sheets the index names, or null>,
-  "firstSheetPdfPage": <the PDF page number where the FIRST sheet in the index appears, or null>,
-  "relevantSheets": [
-    {
-      "sheetNumber": "<the sheet number as printed, e.g. \\"M-401\\">",
-      "sheetTitle": "<its title from the index>",
-      "indexPosition": <its 1-based position in the sheet list>,
-      "estimatedPdfPage": <which PDF page you expect it on>,
-      "why": "<one short sentence on why this sheet bears on the question>"
-    }
-  ]
-}
+Report your findings with the report_relevant_sheets tool.
 
 Rules:
 - Choose at most 4 sheets, the ones most likely to actually answer the question. Fewer is
@@ -129,8 +204,12 @@ Rules:
   plan, a connection or assembly question needs a detail, a capacity question needs a
   schedule.`;
 
-  const response = await callClaude([asDocument(front.buffer), { type: 'text', text: prompt }], 1500);
-  const parsed = safeJsonFromText(response.content[0].text);
+  const { data: parsed } = await askForJson({
+    content: [asDocument(front.buffer), { type: 'text', text: prompt }],
+    tool: SHEET_PICKER_TOOL,
+    maxTokens: 1500,
+    label: 'rfi sheet pick',
+  });
   return {
     hasSheetIndex: parsed.hasSheetIndex === true,
     sheets: Array.isArray(parsed.relevantSheets) ? parsed.relevantSheets : [],
@@ -222,30 +301,7 @@ Discipline: ${discipline}
 WHAT YOU HAVE BEEN GIVEN
 ${inventory}${extraCount ? `\n${extraCount} further document(s) attached to this RFI by the PM.` : ''}
 
-Return ONLY valid JSON in this exact shape:
-
-{
-  "shortAnswer": "<the answer in ONE sentence, two at the very most. Plain English, no preamble, no hedging phrases like \\"based on the documents provided\\". This is the only line most readers will read, so it must carry the actual answer — or say plainly that the documents do not settle it.>",
-  "likelyAnswer": "<the same answer with the reasoning, in plain English, based only on what these documents show. 2-5 sentences. If the documents do not answer it, say exactly that instead of constructing an answer.>",
-  "confidence": "<\\"high\\" | \\"medium\\" | \\"low\\">",
-  "confidenceReason": "<one sentence on why — what you could and could not see>",
-  "basis": [
-    {
-      "document": "<which document>",
-      "sheet": "<the sheet number printed in the title block of the page you used, or null if not a drawing>",
-      "shows": "<what that sheet or clause actually shows, specifically — dimensions, notes, schedule values>"
-    }
-  ],
-  "conflicts": [
-    {
-      "between": "<which documents or sheets disagree>",
-      "detail": "<what the discrepancy is — this is often the real reason the RFI was raised>"
-    }
-  ],
-  "missingInformation": "<what you would need in order to answer properly, or null if the documents were sufficient>",
-  "questionsForAE": ["<a specific question the PM should press the A/E on, if their answer is vague>"],
-  "costScheduleFlag": "<plain English: does this look like it will turn into a change order or a delay claim, and why? Or null if it looks like a straightforward clarification.>"
-}
+Report your reading with the report_suggested_answer tool.
 
 Rules:
 - "shortAnswer" is the whole point of this. The PM reads it between meetings. One sentence
@@ -358,11 +414,9 @@ async function analyzeRfi({ rfi, discipline, documents = [], extraFiles = [] }) 
     text: buildAnswerPrompt({ rfi, discipline, selections, extraCount: extraFiles.length }),
   });
 
-  const response = await callClaude(content, 3000);
-  if (response.usage) {
-    console.log(`[rfi analysis] in=${response.usage.input_tokens} out=${response.usage.output_tokens} tokens`);
-  }
-  const parsed = safeJsonFromText(response.content[0].text);
+  const { data: parsed } = await askForJson({
+    content, tool: ANSWER_TOOL, maxTokens: 3000, label: 'rfi analysis',
+  });
 
   const analysis = {
     // The one-line version leads every display of this. Falling back to the long answer

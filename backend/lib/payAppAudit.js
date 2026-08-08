@@ -1,9 +1,7 @@
 const fs = require('fs');
 const path = require('path');
-const Anthropic = require('@anthropic-ai/sdk');
 const { splitPdf, partNotice } = require('./pdfChunk');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const { askForJson } = require('./aiJson');
 
 // The CMAR/GMP audit standard, read once at boot and sent verbatim with every review. Held
 // whole rather than parsed into sections: an earlier version split it on headings and
@@ -16,16 +14,6 @@ try {
   STANDARD = fs.readFileSync(STANDARD_PATH, 'utf8');
 } catch (err) {
   console.warn(`[pay app audit] standard not found at ${STANDARD_PATH} — reviews will run without it`);
-}
-
-function safeJsonFromText(text) {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('No JSON found in AI response');
-  try {
-    return JSON.parse(match[0]);
-  } catch (err) {
-    throw new Error(`The audit could not be read back as valid data. (${err.message})`);
-  }
 }
 
 const num = value => (typeof value === 'number' && Number.isFinite(value) ? value : null);
@@ -46,22 +34,223 @@ const VERDICT_QUESTIONS = [
   { key: 'notarizationValid', label: 'Is the notarization valid?' },
 ];
 
+// The audit comes back through a tool call rather than as parsed text. This is the module
+// where that matters most: findings quote the contract's own wording and the invoices' own
+// line descriptions, both full of quotation marks and inch marks, and a single one of them
+// used to lose the entire audit. See lib/aiJson.js.
+//
+// The scope-comparison block is only offered when there is a baseline to compare against —
+// a schema that always asked for it would invite the model to invent one.
+function auditTool(withScopeComparison) {
+  const properties = {
+    verdicts: {
+      type: 'object',
+      description: 'A plain pass or fail on each of the standard\'s six questions.',
+      properties: Object.fromEntries(VERDICT_QUESTIONS.map(q => [q.key, {
+        type: 'object',
+        description: q.label,
+        properties: {
+          pass: { type: 'boolean', description: 'Omit if it cannot be determined.' },
+          detail: {
+            type: 'string',
+            description: 'One or two sentences of evidence — the figures compared, or what was missing.',
+          },
+        },
+        required: ['detail'],
+      }])),
+    },
+    recomputedLines: {
+      type: 'object',
+      description: 'Your own recomputation of the G702 lines from the documents.',
+      properties: Object.fromEntries([
+        'line1_originalContractSum', 'line2_netChangeByChangeOrders', 'line3_contractSumToDate',
+        'line4_totalCompletedAndStored', 'line5_retainage', 'line6_totalEarnedLessRetainage',
+        'line7_lessPreviousCertificates', 'line8_currentPaymentDue', 'line9_balanceToFinish',
+      ].map(k => [k, { type: 'number' }])),
+    },
+    recomputationDisagreements: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          field: { type: 'string', description: 'Which figure.' },
+          stated: { type: 'number', description: 'What the form says.' },
+          recomputed: { type: 'number', description: 'What you calculated.' },
+          difference: { type: 'number' },
+          detail: { type: 'string', description: 'What is wrong and which input drives it.' },
+        },
+        required: ['field', 'detail'],
+      },
+    },
+    notarization: {
+      type: 'object',
+      properties: {
+        signaturePresent: { type: 'boolean' },
+        notaryStampPresent: { type: 'boolean' },
+        notaryDate: { type: 'string', description: 'YYYY-MM-DD.' },
+        certificationDate: { type: 'string', description: 'YYYY-MM-DD.' },
+        commissionExpires: { type: 'string', description: 'YYYY-MM-DD.' },
+        valid: { type: 'boolean' },
+        detail: {
+          type: 'string',
+          description: 'What you actually saw on the signature page. If you could not see it, '
+            + 'say so — never infer that a block is blank.',
+        },
+      },
+      required: ['detail'],
+    },
+    subcontractors: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Firm name as printed.' },
+          billedThisPeriod: { type: 'number' },
+          matchedSovLines: { type: 'string', description: 'Which GC schedule-of-values line(s) this ties to.' },
+          sovAmount: { type: 'number' },
+          tiesToSov: { type: 'boolean' },
+          retainagePct: { type: 'number', description: 'A decimal.' },
+          retainageExceedsGc: { type: 'boolean' },
+          certificationDate: { type: 'string', description: 'YYYY-MM-DD.' },
+          periodTo: { type: 'string', description: 'YYYY-MM-DD.' },
+          certifiedBeforePeriodEnd: {
+            type: 'boolean',
+            description: 'True if the certification predates the period being certified, which is a defect.',
+          },
+          changeOrderThisPeriod: { type: 'number' },
+          changeOrderMappedToContingency: { type: 'boolean' },
+          lienWaiverIncluded: { type: 'boolean' },
+          issues: {
+            type: 'array',
+            description: "Each specific problem with this subcontractor's application.",
+            items: { type: 'string' },
+          },
+        },
+        required: ['name'],
+      },
+    },
+    taxInvoices: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          vendor: { type: 'string' },
+          invoiceRef: { type: 'string', description: 'Invoice number or description.' },
+          taxAmount: { type: 'number' },
+          exemptionApplied: { type: 'boolean' },
+          detail: { type: 'string', description: 'What the invoice shows.' },
+        },
+        required: ['taxAmount'],
+      },
+    },
+    taxTotalCharged: {
+      type: 'number',
+      description: 'The total tax on invoices where the exemption was NOT applied, or 0.',
+    },
+    taxVerdict: {
+      type: 'string',
+      description: 'Plain English. Where the contract makes the owner exempt and puts the burden '
+        + 'of claiming it on the contractor, state directly that this amount is not payable and '
+        + 'should be deducted before certifying. Only hedge where the contract is genuinely '
+        + 'ambiguous. Omit if no tax clause applies.',
+    },
+    untracedBilling: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          item: { type: 'string', description: 'What was billed.' },
+          amount: { type: 'number' },
+          detail: { type: 'string', description: 'Why nothing in the backup supports it.' },
+        },
+        required: ['item'],
+      },
+    },
+    backupMismatches: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          item: { type: 'string', description: 'What was billed.' },
+          detail: { type: 'string', description: 'The backup exists but does not tie — say by how much.' },
+        },
+        required: ['item'],
+      },
+    },
+    contractFindings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          term: { type: 'string', description: 'The contract requirement.' },
+          detail: { type: 'string', description: 'How this application measures against it.' },
+          compliant: { type: 'boolean' },
+        },
+        required: ['term'],
+      },
+    },
+    worthNoting: {
+      type: 'array',
+      description: 'Smaller items that are not full findings but should not be lost: rounding, '
+        + 'date inconsistencies, unusual-but-not-wrong entries.',
+      items: { type: 'string' },
+    },
+    notCheckable: {
+      type: 'array',
+      description: 'Any check from the standard that could not be performed, and what document '
+        + 'would be needed.',
+      items: { type: 'string' },
+    },
+    summary: {
+      type: 'string',
+      description: '2-3 sentences: what is being requested, whether it is arithmetically sound, '
+        + 'and the headline reasons it should not be certified as-is, if any.',
+    },
+  };
+
+  if (withScopeComparison) {
+    properties.scopeComparison = {
+      type: 'array',
+      description: 'Every line billed on the current application, classified against the agreed '
+        + 'schedule of values. Each current line appears exactly once.',
+      items: {
+        type: 'object',
+        properties: {
+          itemNo: { type: 'string', description: "The current application's item number." },
+          description: { type: 'string', description: 'The line description.' },
+          scheduledValue: { type: 'number' },
+          status: {
+            type: 'string',
+            enum: ['in_contract', 'changed', 'covered_by_co', 'not_in_contract'],
+          },
+          matchedTo: {
+            type: 'string',
+            description: 'Which schedule-of-values line it corresponds to.',
+          },
+          coNumber: {
+            type: 'string',
+            description: 'The change order covering it, only when covered_by_co.',
+          },
+          note: { type: 'string', description: 'One plain sentence when the status is not in_contract.' },
+        },
+        required: ['description', 'status'],
+      },
+    };
+  }
+
+  return {
+    name: 'record_pay_app_audit',
+    description: 'Record the audit of a construction pay application against the CMAR standard.',
+    input_schema: { type: 'object', properties, required: ['verdicts', 'summary'] },
+  };
+}
+
 function buildPrompt({ contractTerms, priorApplication, codeFigures, retainageRate, fileGuide, scopeBaseline }) {
   // Carried over from the review this standard replaces: classifying every billed line
   // against the agreed schedule of values is what surfaces work nobody agreed to pay for.
-  // The standard does not describe it, but dropping it would be a silent regression.
-  const scopeBlock = scopeBaseline ? `[
-    {
-      "itemNo": "<the current application's item number>",
-      "description": "<the line description>",
-      "scheduledValue": <number or null>,
-      "status": "<\\"in_contract\\" | \\"changed\\" | \\"covered_by_co\\" | \\"not_in_contract\\">",
-      "matchedTo": "<which schedule-of-values line it corresponds to, or null>",
-      "coNumber": "<the change order covering it, only when covered_by_co, else null>",
-      "note": "<one plain sentence when the status is not in_contract, else null>"
-    }
-  ]` : 'null';
-
+  // The standard does not describe it, but dropping it would be a silent regression. The
+  // shape of that classification now lives in auditTool(), which offers the field only when
+  // there is a baseline to classify against.
   return `${STANDARD}
 
 ---
@@ -95,72 +284,7 @@ above, that disagreement is itself a finding — report it under "recomputationD
 with both numbers, rather than silently preferring either. Do not simply restate the figures
 above as your own work.
 
-Return ONLY valid JSON in this exact shape:
-
-{
-  "verdicts": {
-${VERDICT_QUESTIONS.map(q => `    "${q.key}": { "pass": <true|false|null if it cannot be determined>, "detail": "<one or two sentences of evidence — the figures compared, or what was missing>" }`).join(',\n')}
-  },
-  "recomputedLines": {
-    "line1_originalContractSum": <number or null>,
-    "line2_netChangeByChangeOrders": <number or null>,
-    "line3_contractSumToDate": <number or null>,
-    "line4_totalCompletedAndStored": <number or null>,
-    "line5_retainage": <number or null>,
-    "line6_totalEarnedLessRetainage": <number or null>,
-    "line7_lessPreviousCertificates": <number or null>,
-    "line8_currentPaymentDue": <number or null>,
-    "line9_balanceToFinish": <number or null>
-  },
-  "recomputationDisagreements": [
-    { "field": "<which figure>", "stated": <what the form says>, "recomputed": <what you calculated>, "difference": <number>, "detail": "<what is wrong and which input drives it>" }
-  ],
-  "notarization": {
-    "signaturePresent": <true|false|null>,
-    "notaryStampPresent": <true|false|null>,
-    "notaryDate": "<YYYY-MM-DD or null>",
-    "certificationDate": "<YYYY-MM-DD or null>",
-    "commissionExpires": "<YYYY-MM-DD or null>",
-    "valid": <true|false|null>,
-    "detail": "<what you actually saw on the signature page. If you could not see it, say so — never infer that a block is blank.>"
-  },
-  "subcontractors": [
-    {
-      "name": "<firm name as printed>",
-      "billedThisPeriod": <number or null>,
-      "matchedSovLines": "<which GC schedule-of-values line(s) this ties to, or null>",
-      "sovAmount": <number or null>,
-      "tiesToSov": <true|false|null>,
-      "retainagePct": <decimal or null>,
-      "retainageExceedsGc": <true|false|null>,
-      "certificationDate": "<YYYY-MM-DD or null>",
-      "periodTo": "<YYYY-MM-DD or null>",
-      "certifiedBeforePeriodEnd": <true if the certification predates the period being certified, which is a defect>,
-      "changeOrderThisPeriod": <number or null>,
-      "changeOrderMappedToContingency": <true|false|null>,
-      "lienWaiverIncluded": <true|false|null>,
-      "issues": ["<each specific problem with this subcontractor's application>"]
-    }
-  ],
-  "taxInvoices": [
-    { "vendor": "<vendor>", "invoiceRef": "<invoice number or description>", "taxAmount": <number>, "exemptionApplied": <true|false>, "detail": "<what the invoice shows>" }
-  ],
-  "taxTotalCharged": <the total tax on invoices where the exemption was NOT applied, or 0>,
-  "taxVerdict": "<plain English. Where the contract makes the owner exempt and puts the burden of claiming it on the contractor, state directly that this amount is not payable and should be deducted before certifying. Only hedge where the contract is genuinely ambiguous. Null if no tax clause applies.>",
-  "untracedBilling": [
-    { "item": "<what was billed>", "amount": <number or null>, "detail": "<why nothing in the backup supports it>" }
-  ],
-  "backupMismatches": [
-    { "item": "<what was billed>", "detail": "<the backup exists but does not tie — say by how much>" }
-  ],
-  "contractFindings": [
-    { "term": "<the contract requirement>", "detail": "<how this application measures against it>", "compliant": <true|false|null> }
-  ],
-  "scopeComparison": ${scopeBlock},
-  "worthNoting": ["<smaller items that are not full findings but should not be lost: rounding, date inconsistencies, unusual-but-not-wrong entries>"],
-  "notCheckable": ["<any check from the standard that could not be performed, and what document would be needed>"],
-  "summary": "<2-3 sentences: what is being requested, whether it is arithmetically sound, and the headline reasons it should not be certified as-is, if any>"
-}
+Record the audit with the record_pay_app_audit tool.
 
 Rules:
 - Ground every finding in something visible in the documents. Cite the figure, the invoice, or
@@ -172,32 +296,26 @@ Rules:
   nonzero tax line into "taxInvoices" FIRST, including recurring vendors and rentals, and only
   then judge them. "taxTotalCharged" must reconcile with the entries you listed.
 - Never state that a signature or notary block is absent unless you have looked at the page and
-  it genuinely is. If the page was not legible, set the field to null and say so.
+  it genuinely is. If the page was not legible, omit the field and say so in "detail".
 - Write every "detail" in plain English for a reader who is not a construction accountant.`;
 }
 
-async function callClaude(content, maxTokens = 12000) {
-  const send = () => client.messages.create({
-    model: 'claude-sonnet-4-5',
-    max_tokens: maxTokens,
+async function callClaude(content, { scopeBaseline, truncatedMessage, maxTokens = 12000 }) {
+  const { data } = await askForJson({
+    content,
+    tool: auditTool(!!scopeBaseline),
     // The standard is identical on every review, so it is cached rather than re-billed and
     // re-counted against the per-minute allowance each time.
-    system: [{ type: 'text', text: 'You are a construction pay application auditor.', cache_control: { type: 'ephemeral' } }],
-    messages: [{ role: 'user', content }],
+    system: [{
+      type: 'text',
+      text: 'You are a construction pay application auditor.',
+      cache_control: { type: 'ephemeral' },
+    }],
+    maxTokens,
+    label: 'pay app audit',
+    truncatedMessage,
   });
-
-  let response;
-  try {
-    response = await send();
-  } catch (err) {
-    if (err.status !== 429 && err.status !== 529 && err.status !== 503) throw err;
-    await new Promise(resolve => setTimeout(resolve, 20000));
-    response = await send();
-  }
-  if (response.usage) {
-    console.log(`[pay app audit] in=${response.usage.input_tokens} out=${response.usage.output_tokens} cached=${response.usage.cache_read_input_tokens ?? 0}`);
-  }
-  return response;
+  return data;
 }
 
 const normalizeVerdicts = raw => Object.fromEntries(VERDICT_QUESTIONS.map(q => {
@@ -288,8 +406,9 @@ async function auditPayApp({
         }),
       });
       try {
-        const response = await callClaude(content);
-        if (response.stop_reason !== 'max_tokens') results.push(normalize(safeJsonFromText(response.content[0].text)));
+        // A pass that runs out of room is skipped rather than sinking the packet — the other
+        // passes still carry findings, which is the same tolerance the review already had.
+        results.push(normalize(await callClaude(content, { scopeBaseline })));
       } catch (err) {
         console.error(`[pay app audit] pass ${index + 1}/${passes.length} failed:`, err.message);
       }
@@ -306,11 +425,10 @@ async function auditPayApp({
     { type: 'text', text: prompt },
   ];
 
-  const response = await callClaude(content);
-  if (response.stop_reason === 'max_tokens') {
-    throw new Error('The audit was cut off — there was more documentation than could be read in one pass.');
-  }
-  const audit = normalize(safeJsonFromText(response.content[0].text));
+  const audit = normalize(await callClaude(content, {
+    scopeBaseline,
+    truncatedMessage: 'The audit was cut off — there was more documentation than could be read in one pass.',
+  }));
   audit.hasContract = !!contractTerms;
   audit.coverage = { passes: 1, read: 1 };
   return audit;

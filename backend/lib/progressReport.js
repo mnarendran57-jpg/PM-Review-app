@@ -1,19 +1,21 @@
-const Anthropic = require('@anthropic-ai/sdk');
+const { askForJson } = require('./aiJson');
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-function safeJsonFromText(text) {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('No JSON found in AI response');
-  try {
-    return JSON.parse(match[0]);
-  } catch (err) {
-    throw new Error(
-      'The progress report could not be read back as valid data — try generating it again. ' +
-      `(${err.message})`
-    );
-  }
-}
+const REPORT_TOOL = {
+  name: 'record_progress_observations',
+  description: 'Record the Progress section of a site progress report.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'The report title, e.g. "<project name> Progress Report".' },
+      progress: {
+        type: 'array',
+        description: 'The observations, one concise sentence each. Aim for 3-7.',
+        items: { type: 'string' },
+      },
+    },
+    required: ['progress'],
+  },
+};
 
 // Builds the instruction text. Output is deliberately short: the report template is a
 // header block, a bulleted "Progress" list, and a captioned photo grid — so the model's
@@ -42,19 +44,7 @@ per-photo log, no recommendations section — just the observations. Example of 
   "Irrigation work has begun, along with associated plumbing works."
   "Several grates have not been covered, which could cause dirt to enter the storm sewers."
 
-Return ONLY valid JSON in this exact shape:
-{
-  "title": "<project name> Progress Report",
-  "progress": [ "<one observation sentence>", "..." ]
-}`;
-}
-
-async function callClaude(content) {
-  return client.messages.create({
-    model: 'claude-sonnet-4-5',
-    max_tokens: 4000,
-    messages: [{ role: 'user', content }],
-  });
+Record the observations with the record_progress_observations tool.`;
 }
 
 // Single Claude vision call: all site photos (interleaved with a label so the model knows
@@ -71,26 +61,13 @@ async function analyzeProgress({ images, projectName, contractor, periodLabel, v
   });
   content.push({ type: 'text', text: buildPrompt({ projectName, contractor, periodLabel, visitDate, notes, images }) });
 
-  let response;
-  try {
-    response = await callClaude(content);
-  } catch (err) {
-    if (err.status === 429) {
-      await new Promise(resolve => setTimeout(resolve, 20000));
-      response = await callClaude(content);
-    } else {
-      throw err;
-    }
-  }
-
-  if (response.stop_reason === 'max_tokens') {
-    throw new Error('The report ran long and was cut off — try again with fewer photos or shorter captions.');
-  }
-
-  const parsed = safeJsonFromText(response.content[0].text);
-  if (response.usage) {
-    console.log(`[progress report] images=${images.length} in=${response.usage.input_tokens} out=${response.usage.output_tokens} tokens`);
-  }
+  const { data: parsed } = await askForJson({
+    content,
+    tool: REPORT_TOOL,
+    maxTokens: 4000,
+    label: `progress report (${images.length} photos)`,
+    truncatedMessage: 'The report ran long and was cut off — try again with fewer photos or shorter captions.',
+  });
   return normalizeReport(parsed, projectName);
 }
 

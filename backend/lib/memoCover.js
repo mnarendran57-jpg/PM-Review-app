@@ -1,8 +1,6 @@
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
-const Anthropic = require('@anthropic-ai/sdk');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const { askForJson } = require('./aiJson');
 
 // An organization's own memo cover, in Word, driving the memo Coaster produces.
 //
@@ -87,6 +85,46 @@ function readDocx(buffer) {
   };
 }
 
+// "find" has to come back byte-for-byte or the literal match fails, and a memo's scope line
+// routinely carries an inch mark or a quoted phrase. Asking for this as text-and-parse meant
+// exactly those memos — the ones with a dimension in them — failed to read at all.
+const PLACEHOLDER_TOOL = {
+  name: 'propose_placeholders',
+  description: 'Propose which parts of a memo cover vary from memo to memo.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      replacements: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            find: {
+              type: 'string',
+              description: 'The exact text in the memo that should become variable, copied '
+                + 'character for character.',
+            },
+            field: { type: 'string', enum: [...FIELD_KEYS] },
+            confidence: { type: 'string', enum: ['high', 'low'] },
+            why: {
+              type: 'string',
+              description: 'A short phrase for the person confirming this, e.g. "this looks '
+                + 'like the vendor\'s name".',
+            },
+          },
+          required: ['find', 'field', 'confidence'],
+        },
+      },
+      notes: {
+        type: 'string',
+        description: 'Anything the user should know: a value you could not map, or a field '
+          + 'this memo seems to need that is not in the list.',
+      },
+    },
+    required: ['replacements'],
+  },
+};
+
 function buildPrompt(text) {
   return `You are looking at a construction project manager's memo cover — the letter that
 goes on top of a vendor proposal when it is sent to an owner for approval. This particular
@@ -101,19 +139,7 @@ ${text}
 These are the only values this app can supply. Map onto these and nothing else:
 ${FIELDS.map(f => `  ${f.key} — ${f.label}`).join('\n')}
 
-Return ONLY valid JSON in this exact shape:
-
-{
-  "replacements": [
-    {
-      "find": "<the exact text in the memo above that should become variable, copied character for character>",
-      "field": "<one of the field keys listed above>",
-      "confidence": "<\\"high\\" | \\"low\\">",
-      "why": "<a short phrase for the person confirming this, e.g. \\"this looks like the vendor's name\\">"
-    }
-  ],
-  "notes": "<anything the user should know: a value you could not map, a field this memo seems to need that is not in the list, or null>"
-}
+Report your proposals with the propose_placeholders tool.
 
 Rules:
 - "find" must appear in the memo above EXACTLY as you write it, including capitalisation and
@@ -143,25 +169,12 @@ async function proposePlaceholders(buffer) {
     throw err;
   }
 
-  const send = () => client.messages.create({
-    model: 'claude-sonnet-4-5',
-    max_tokens: 3000,
-    messages: [{ role: 'user', content: [{ type: 'text', text: buildPrompt(text) }] }],
+  const { data: parsed } = await askForJson({
+    content: [{ type: 'text', text: buildPrompt(text) }],
+    tool: PLACEHOLDER_TOOL,
+    maxTokens: 3000,
+    label: 'memo placeholders',
   });
-
-  let response;
-  try {
-    response = await send();
-  } catch (err) {
-    if (err.status !== 429) throw err;
-    await new Promise(r => setTimeout(r, 20000));
-    response = await send();
-  }
-
-  const raw = response.content[0].text;
-  const match = raw.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('The memo could not be read back as valid data.');
-  const parsed = JSON.parse(match[0]);
 
   // Anything that does not literally appear in the document is dropped rather than offered:
   // it could not be applied, so showing it would only invite the user to approve a no-op.

@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const Anthropic = require('@anthropic-ai/sdk');
 const db = require('../database');
+const { askForJson } = require('../lib/aiJson');
 const { renderMemoPdf, mergePdfBuffers } = require('../lib/pdfGen');
 const { applyPlaceholders, fillDocx } = require('../lib/memoCover');
 
@@ -35,13 +35,30 @@ const upload = multer({
   limits: { fileSize: 500 * 1024 * 1024 }
 });
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-function safeJsonFromText(text) {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('No JSON found in AI response');
-  return JSON.parse(match[0]);
-}
+// The fields lifted off a vendor proposal. A scope summary routinely carries a pipe size or a
+// duct dimension written with an inch mark, which is why this is a tool schema rather than
+// JSON asked for in the prompt — see lib/aiJson.js.
+const PROPOSAL_TOOL = {
+  name: 'record_proposal',
+  description: 'Record the key fields from a vendor proposal.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      vendor_name: { type: 'string', description: 'The vendor/company submitting the proposal.' },
+      proposal_date: {
+        type: 'string',
+        description: 'The date on the proposal (proposal date or quote date), formatted MM/DD/YYYY.',
+      },
+      project_name: { type: 'string', description: 'The name or title of the project being quoted.' },
+      scope_of_work: { type: 'string', description: 'A concise 2-4 sentence summary of the work described.' },
+      total_price: {
+        type: 'string',
+        description: 'The final/total dollar amount quoted, formatted like $12,345.00.',
+      },
+    },
+    required: ['vendor_name', 'proposal_date', 'project_name', 'scope_of_work', 'total_price'],
+  },
+};
 
 function parseMoney(str) {
   const n = parseFloat(String(str ?? '').replace(/[^0-9.-]/g, ''));
@@ -62,31 +79,20 @@ router.post('/extract', upload.single('file'), async (req, res) => {
     }
 
     const base64 = file.buffer.toString('base64');
-    const prompt = `You are reviewing a vendor proposal PDF for a construction project at Olivier Inc., an MEP consulting firm. Extract the following fields and respond with ONLY a raw JSON object (no markdown, no commentary):
-
-{
-  "vendor_name": "the vendor/company submitting the proposal",
-  "proposal_date": "the date on the proposal, e.g. proposal date or quote date, formatted as MM/DD/YYYY",
-  "project_name": "the name or title of the project being quoted",
-  "scope_of_work": "a concise 2-4 sentence summary of the work described",
-  "total_price": "the final/total dollar amount quoted, formatted like $12,345.00"
-}
+    const prompt = `You are reviewing a vendor proposal PDF for a construction project at an MEP
+consulting firm. Record the key fields with the record_proposal tool.
 
 If any field cannot be found with confidence, use "Not specified" as its value.`;
 
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 1024,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
-          { type: 'text', text: prompt }
-        ]
-      }]
+    const { data: extracted } = await askForJson({
+      content: [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
+        { type: 'text', text: prompt },
+      ],
+      tool: PROPOSAL_TOOL,
+      maxTokens: 1024,
+      label: 'proposal extract',
     });
-
-    const extracted = safeJsonFromText(response.content[0].text);
     res.json(extracted);
   } catch (err) {
     console.error('Extract error:', err);

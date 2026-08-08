@@ -1,8 +1,6 @@
-const Anthropic = require('@anthropic-ai/sdk');
 const { splitPdf } = require('./pdfChunk');
+const { askForJson } = require('./aiJson');
 const { PRIORITIES } = require('./actionRegister');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // Minutes are short — a Fathom summary is a couple of pages even for a long call — so unlike
 // the drawing sets elsewhere in the app these are read whole. The cap only exists so an
@@ -10,15 +8,73 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MAX_PAGES = 12;
 const MAX_TEXT_CHARS = 60000;
 
-function safeJsonFromText(text) {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('No JSON found in AI response');
-  try {
-    return JSON.parse(match[0]);
-  } catch (err) {
-    throw new Error(`The minutes could not be read back as valid data. (${err.message})`);
-  }
-}
+const MINUTES_TOOL = {
+  name: 'record_minutes',
+  description: 'Record what a project meeting decided and who agreed to do what.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      title: {
+        type: 'string',
+        description: 'A short title for this meeting, e.g. "Weekly OAC Meeting" or '
+          + '"MEP Coordination". Always give one.',
+      },
+      meetingDate: { type: 'string', description: 'The date the meeting took place, YYYY-MM-DD.' },
+      attendees: {
+        type: 'array',
+        description: 'Each person present, as named in the minutes.',
+        items: { type: 'string' },
+      },
+      summary: {
+        type: 'string',
+        description: '3-5 sentences: what this meeting was about and what came out of it, in '
+          + 'plain English for someone who was not there.',
+      },
+      decisions: {
+        type: 'array',
+        description: 'A decision the meeting reached that is NOT a task for anyone — e.g. '
+          + '"Agreed to proceed with the alternate light fixture".',
+        items: { type: 'string' },
+      },
+      actionItems: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            assigneeName: {
+              type: 'string',
+              description: 'The person who has to do it, exactly as the minutes name them. '
+                + 'Omit only if genuinely nobody was named.',
+            },
+            task: {
+              type: 'string',
+              description: 'What they have to do, as a short imperative phrase under about 90 '
+                + 'characters, e.g. "Send the revised duct layout to the architect".',
+            },
+            detail: {
+              type: 'string',
+              description: 'The context a reader needs to act on it: why it came up, what it '
+                + 'depends on. Omit if the task line says everything.',
+            },
+            dueDate: { type: 'string', description: 'YYYY-MM-DD if a deadline was given or implied.' },
+            priority: { type: 'string', enum: PRIORITIES },
+            followUpOfId: {
+              type: 'integer',
+              description: 'The id from the open register above if this is the SAME job being '
+                + 'chased again. Omit otherwise.',
+            },
+            isNowComplete: {
+              type: 'boolean',
+              description: 'True if the minutes say this item has been DONE.',
+            },
+          },
+          required: ['task'],
+        },
+      },
+    },
+    required: ['title', 'actionItems'],
+  },
+};
 
 const trimmed = value => {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -67,32 +123,13 @@ ${register}
 
 ${roster}
 
-Return ONLY valid JSON in this exact shape:
-
-{
-  "title": "<a short title for this meeting, e.g. \\"Weekly OAC Meeting\\" or \\"MEP Coordination\\". Never null.>",
-  "meetingDate": "<the date the meeting took place, YYYY-MM-DD, or null>",
-  "attendees": ["<each person present, as named in the minutes>"],
-  "summary": "<3-5 sentences: what this meeting was about and what came out of it, in plain English for someone who wasn't there>",
-  "decisions": ["<a decision the meeting reached that is NOT a task for anyone — e.g. \\"Agreed to proceed with the alternate light fixture\\">"],
-  "actionItems": [
-    {
-      "assigneeName": "<the person who has to do it, exactly as the minutes name them. Use null only if genuinely nobody was named.>",
-      "task": "<what they have to do, as a short imperative phrase under about 90 characters, e.g. \\"Send the revised duct layout to the architect\\">",
-      "detail": "<the context a reader needs to act on it: why it came up, what it depends on. Or null if the task line says everything.>",
-      "dueDate": "<YYYY-MM-DD if a deadline was given or implied, else null>",
-      "priority": "<${PRIORITIES.join(' | ')}>",
-      "followUpOfId": <the id from the open register above if this is the SAME job being chased again, else null>,
-      "isNowComplete": <true if the minutes say this item has been DONE, else false>
-    }
-  ]
-}
+Record what you find with the record_minutes tool.
 
 Rules:
 - An action item is something a named person must DO. A statement of fact, a decision, or a
   general observation is not an action item — put decisions in "decisions" and leave the rest
   out. A register padded with non-tasks stops being read.
-- Do not invent deadlines. Only set "dueDate" when the minutes give or clearly imply one.
+- Do not invent deadlines. Only give a "dueDate" when the minutes give or clearly imply one.
 - Priority: "High" only when the minutes signal urgency, a blocker, or a hard deadline.
   Most items are "Medium". Do not mark everything high — it makes the register useless.
 - "followUpOfId" is important. If the meeting is chasing something already on the register
@@ -106,23 +143,15 @@ Rules:
 }
 
 async function callClaude(content) {
-  const send = () => client.messages.create({
-    model: 'claude-sonnet-4-5',
-    max_tokens: 4000,
-    messages: [{ role: 'user', content }],
+  const { data } = await askForJson({
+    content,
+    tool: MINUTES_TOOL,
+    maxTokens: 4000,
+    label: 'meeting extract',
+    truncatedMessage: 'These minutes produced more action items than one response can hold. '
+      + 'Try uploading the summary rather than the full transcript.',
   });
-  let response;
-  try {
-    response = await send();
-  } catch (err) {
-    if (err.status !== 429) throw err;
-    await new Promise(resolve => setTimeout(resolve, 20000));
-    response = await send();
-  }
-  if (response.usage) {
-    console.log(`[meeting extract] in=${response.usage.input_tokens} out=${response.usage.output_tokens} tokens`);
-  }
-  return safeJsonFromText(response.content[0].text);
+  return data;
 }
 
 // Reads a set of minutes. Accepts either an uploaded document or text pasted straight out of

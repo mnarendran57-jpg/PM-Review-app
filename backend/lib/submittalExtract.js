@@ -1,8 +1,6 @@
-const Anthropic = require('@anthropic-ai/sdk');
 const { splitPdf, pageCount } = require('./pdfChunk');
+const { askForJson } = require('./aiJson');
 const { REVIEW_ACTIONS } = require('./submittalLog');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // A submittal package is a cover sheet followed by the actual content — often hundreds of
 // pages of shop drawings or a product catalogue. Everything being extracted here (who sent
@@ -17,36 +15,19 @@ async function coverPages(buffer) {
   return { buffer: parts[0].buffer, totalPages: await pageCount(buffer) };
 }
 
-function safeJsonFromText(text) {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('No JSON found in AI response');
-  try {
-    return JSON.parse(match[0]);
-  } catch (err) {
-    throw new Error(`The document could not be read back as valid data. (${err.message})`);
-  }
-}
-
-async function callClaude(pdfBuffer, prompt) {
-  const content = [
-    { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBuffer.toString('base64') } },
-    { type: 'text', text: prompt },
-  ];
-  const send = () => client.messages.create({
-    model: 'claude-sonnet-4-5',
-    max_tokens: 2000,
-    messages: [{ role: 'user', content }],
+// Read back through a tool call rather than by parsing the reply as text — a stamp comment
+// quoting a dimension would otherwise end the JSON string on the inch mark. See lib/aiJson.js.
+async function callClaude(pdfBuffer, prompt, tool, label) {
+  const { data } = await askForJson({
+    content: [
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBuffer.toString('base64') } },
+      { type: 'text', text: prompt },
+    ],
+    tool,
+    maxTokens: 2000,
+    label,
   });
-
-  let response;
-  try {
-    response = await send();
-  } catch (err) {
-    if (err.status !== 429) throw err;
-    await new Promise(resolve => setTimeout(resolve, 20000));
-    response = await send();
-  }
-  return safeJsonFromText(response.content[0].text);
+  return data;
 }
 
 const trimmed = value => {
@@ -58,27 +39,66 @@ const trimmed = value => {
 // else would be written straight into a date column and quietly corrupt the log's arithmetic.
 const isoDate = value => (/^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value) : null);
 
+const SUBMITTAL_TYPES = [
+  'Product Data', 'Shop Drawings', 'Samples', 'Test Reports', 'Certificates',
+  'O&M Manuals', 'Closeout', 'Other',
+];
+
+const SUBMITTAL_TOOL = {
+  name: 'record_submittal',
+  description: 'Record a submittal cover sheet for the project\'s submittal log.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      submittalNumber: {
+        type: 'string',
+        description: 'The submittal or transmittal number exactly as printed, e.g. S-001 or 23 05 00-001.',
+      },
+      revisionNumber: {
+        type: 'integer',
+        description: 'The revision number if this is a resubmittal (Rev 1, Rev 2…), 0 for a '
+          + 'first submission. Omit if not stated.',
+      },
+      specSection: {
+        type: 'string',
+        description: 'The CSI spec section, number and title if both are shown, e.g. '
+          + '"23 05 00 — Common Work Results for HVAC".',
+      },
+      description: {
+        type: 'string',
+        description: 'What the submittal is FOR, in a short phrase a PM would recognise, e.g. '
+          + '"VAV boxes — product data". Always give one: if nothing else is available, '
+          + 'describe what the document visibly contains.',
+      },
+      vendor: {
+        type: 'string',
+        description: 'The subcontractor, supplier or manufacturer who prepared or sent it.',
+      },
+      submittalType: { type: 'string', enum: SUBMITTAL_TYPES },
+      dateSubmitted: {
+        type: 'string',
+        description: 'The date the contractor dated or transmitted it, YYYY-MM-DD.',
+      },
+      notes: {
+        type: 'string',
+        description: 'Anything on the cover the PM should know: a stated deadline, a '
+          + 'substitution request, a partial submission.',
+      },
+    },
+    required: ['description'],
+  },
+};
+
 const SUBMITTAL_PROMPT = `You are reading the cover sheet of a construction submittal that a
 contractor has sent to the owner's project manager, so it can be entered into the project's
 submittal log.
 
-Return ONLY valid JSON in this exact shape:
-
-{
-  "submittalNumber": "<the submittal or transmittal number exactly as printed, e.g. \\"S-001\\", \\"23 05 00-001\\", or null>",
-  "revisionNumber": <the revision number if this is a resubmittal (Rev 1, Rev 2...), 0 for a first submission, or null if not stated>,
-  "specSection": "<the CSI spec section, number and title if both are shown, e.g. \\"23 05 00 — Common Work Results for HVAC\\", or null>",
-  "description": "<what the submittal is FOR, in a short phrase a PM would recognise, e.g. \\"VAV boxes — product data\\" or \\"Ductwork shop drawings\\". Never null: if nothing else is available, describe what the document visibly contains.>",
-  "vendor": "<the subcontractor, supplier or manufacturer who prepared or sent it, or null>",
-  "submittalType": "<one of: Product Data, Shop Drawings, Samples, Test Reports, Certificates, O&M Manuals, Closeout, Other — or null if it cannot be told>",
-  "dateSubmitted": "<the date the contractor dated or transmitted it, YYYY-MM-DD, or null>",
-  "notes": "<anything on the cover the PM should know: a stated deadline, a substitution request, a partial submission — or null>"
-}
+Record what you find with the record_submittal tool.
 
 Rules:
-- Read only what is printed. If a field is not shown, use null — never guess a submittal
+- Read only what is printed. If a field is not shown, omit it — never guess a submittal
   number or a spec section, because a wrong one files it against the wrong work.
-- Dates must be YYYY-MM-DD. If a date is shown without a year, return null.
+- Dates must be YYYY-MM-DD. If a date is shown without a year, omit it.
 - "description" is what appears in the log, so keep it under about 80 characters and make it
   read as a title, not a sentence.`;
 
@@ -87,7 +107,7 @@ Rules:
 // draft of the record, not the record.
 async function extractSubmittal(pdfBuffer) {
   const { buffer, totalPages } = await coverPages(pdfBuffer);
-  const parsed = await callClaude(buffer, SUBMITTAL_PROMPT);
+  const parsed = await callClaude(buffer, SUBMITTAL_PROMPT, SUBMITTAL_TOOL, 'submittal read');
 
   const revision = Number(parsed.revisionNumber);
   return {
@@ -103,21 +123,37 @@ async function extractSubmittal(pdfBuffer) {
   };
 }
 
+const RESPONSE_TOOL = {
+  name: 'record_review_stamp',
+  description: 'Record the A/E\'s review decision from a returned submittal.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      reviewAction: {
+        type: 'string',
+        enum: REVIEW_ACTIONS,
+        description: 'The decision. Omit if no stamp or decision is visible.',
+      },
+      stampText: { type: 'string', description: 'The wording actually printed on the stamp, verbatim.' },
+      reviewedBy: { type: 'string', description: 'The reviewing firm or the individual who signed it.' },
+      dateReturned: { type: 'string', description: 'The date on the stamp or signature, YYYY-MM-DD.' },
+      comments: {
+        type: 'string',
+        description: 'The A/E\'s review comments in plain English. Summarise if long, but keep '
+          + 'every instruction the contractor must act on.',
+      },
+    },
+    required: [],
+  },
+};
+
 const RESPONSE_PROMPT = `You are reading a submittal that the architect/engineer (A/E) has
 reviewed and returned to the owner's project manager. It is normally the contractor's own
 document with a review stamp applied, plus any written comments.
 
 Your job is to read the A/E's decision off the stamp so it can be recorded in the submittal log.
 
-Return ONLY valid JSON in this exact shape:
-
-{
-  "reviewAction": "<exactly one of: ${REVIEW_ACTIONS.join(' | ')} — or null if no stamp or decision is visible>",
-  "stampText": "<the wording actually printed on the stamp, verbatim, or null>",
-  "reviewedBy": "<the reviewing firm or the individual who signed it, or null>",
-  "dateReturned": "<the date on the stamp or signature, YYYY-MM-DD, or null>",
-  "comments": "<the A/E's review comments in plain English. Summarise if long, but keep every instruction the contractor must act on. Null if there are none.>"
-}
+Record it with the record_review_stamp tool.
 
 Rules:
 - Map the stamp's own wording onto the closest allowed "reviewAction". Common equivalents:
@@ -127,7 +163,7 @@ Rules:
   "Rejected" / "Not Approved" -> Rejected.
   "For Information Only" / "Received for Record" -> For Record Only.
 - Put the literal stamp wording in "stampText" regardless, so the PM can check the mapping.
-- If more than one box is marked, or the stamp is illegible, return null for "reviewAction"
+- If more than one box is marked, or the stamp is illegible, omit "reviewAction"
   and say so in "comments". A wrong action here silently closes a submittal that is still
   open, so say nothing rather than guess.
 - Dates must be YYYY-MM-DD.`;
@@ -137,7 +173,7 @@ Rules:
 // would either close a live submittal or hold a finished one open.
 async function extractResponse(pdfBuffer) {
   const { buffer } = await coverPages(pdfBuffer);
-  const parsed = await callClaude(buffer, RESPONSE_PROMPT);
+  const parsed = await callClaude(buffer, RESPONSE_PROMPT, RESPONSE_TOOL, 'submittal stamp read');
 
   const action = trimmed(parsed.reviewAction);
   return {

@@ -1,84 +1,149 @@
-const Anthropic = require('@anthropic-ai/sdk');
 const { splitPdf, analyzeInPasses, partNotice } = require('./pdfChunk');
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-function safeJsonFromText(text) {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('No JSON found in AI response');
-  try {
-    return JSON.parse(match[0]);
-  } catch (err) {
-    throw new Error(
-      'The AI response could not be parsed as JSON — this usually means the pay application has ' +
-      'so many line items that the extraction was cut off. Try again, or split the continuation sheet ' +
-      `into a smaller PDF. (${err.message})`
-    );
-  }
-}
+const { askForJson } = require('./aiJson');
 
 // One pay-application's worth of fields (used for both "current" and "previous" below).
 // NOTE: summary fields are nested under "summary" — payAppChecks.js, payAppReport.js, and
 // the frontend all read e.g. current.summary.line8, so this nesting must stay in sync with them.
-const PAY_APP_SHAPE = `{
-    "summary": {
-      "applicationNumber": <integer>,
-      "periodTo": "<date the application period ends, ISO format YYYY-MM-DD if possible, else as printed>",
-      "projectName": "<project name>",
-      "contractDate": "<contract date if shown, else null>",
-      "line1": <Original Contract Sum, number>,
-      "line2": <Net change by Change Orders, number, can be negative>,
-      "line3": <Contract Sum to Date, number>,
-      "line4": <Total Completed & Stored to Date, number>,
-      "line5aRate": <retainage rate on completed work as a decimal e.g. 0.10 for 10%, or null>,
-      "line5aAmount": <Line 5a dollar amount, or null>,
-      "line5bRate": <retainage rate on stored materials as a decimal, or null>,
-      "line5bAmount": <Line 5b dollar amount, or null>,
-      "line5": <Total Retainage, number>,
-      "line6": <Total Earned Less Retainage, number>,
-      "line7": <Less Previous Certificates for Payment, number>,
-      "line8": <Current Payment Due, number>,
-      "line9": <Balance to Finish Including Retainage, number>,
-      "changeOrderSummary": { "additions": <number|null>, "deductions": <number|null>, "net": <number|null> } or null if not present
-    },
-    "lineItems": [
-      {
-        "itemNo": "<item number as printed, string>",
-        "description": "<description>",
-        "c": <Scheduled Value>,
-        "d": <Work Completed From Previous Application>,
-        "e": <Work Completed This Period>,
-        "f": <Materials Presently Stored>,
-        "g": <Total Completed and Stored to Date>,
-        "pctComplete": <the %(G/C) column as printed, a number like 65 for 65%, or null>,
-        "h": <Balance to Finish>,
-        "retainage": <the per-line retainage column I amount if a variable rate is used, else null>
-      }
-    ],
-    "grandTotalRow": { "c": <number>, "d": <number>, "e": <number>, "f": <number>, "g": <number>, "h": <number> } or null if no explicit grand-total row exists separate from the line items,
-    "pageSubtotals": [ { "page": <number>, "c": <number>, "d": <number>, "e": <number>, "f": <number>, "g": <number>, "h": <number> } ] or null if the document is a single page or subtotals per page are not printed,
-    "coBreakdown": [ { "coNumber": "<CO number>", "amount": <number> } ] or null if there is no itemized change-order breakdown section
-  }`;
-
-// Subcontractor cost-breakdown sections appear after the continuation sheet in many pay
-// apps: a per-sub page detailing the amount that appears as a single line on the G703.
-// Only extracted for the CURRENT application — the previous app's breakdowns feed nothing.
-const SUB_BREAKDOWN_SHAPE = `,
-    "subBreakdowns": [
-      {
-        "subName": "<name of the subcontractor or vendor this breakdown belongs to>",
-        "matchesItemNo": "<the continuation-sheet item number this breakdown supports, if stated or inferable, else null>",
-        "matchesDescription": "<the continuation-sheet line description it supports, else null>",
-        "basis": "<\\"this-period\\" if the breakdown covers the amount billed this period, \\"to-date\\" if it covers the total billed to date, or \\"unclear\\">",
-        "statedTotal": <the total printed on the breakdown itself, number or null>,
-        "components": [ { "description": "<string>", "amount": <number> } ]
-      }
-    ] or [] if the document contains no subcontractor cost-breakdown sections`;
+//
+// Declared as a tool schema rather than described in the prompt: a continuation-sheet
+// description like '6" CW piping' would otherwise end the JSON string on the inch mark and
+// lose the whole extraction. See lib/aiJson.js.
+const COLUMN_ROW = extra => ({
+  type: 'object',
+  properties: {
+    ...extra,
+    c: { type: 'number' }, d: { type: 'number' }, e: { type: 'number' },
+    f: { type: 'number' }, g: { type: 'number' }, h: { type: 'number' },
+  },
+});
 
 function payAppShape(withSubBreakdowns) {
-  return withSubBreakdowns
-    ? PAY_APP_SHAPE.replace(/\n  \}$/, `${SUB_BREAKDOWN_SHAPE}\n  }`)
-    : PAY_APP_SHAPE;
+  const shape = {
+    type: 'object',
+    properties: {
+      summary: {
+        type: 'object',
+        properties: {
+          applicationNumber: { type: 'integer' },
+          periodTo: {
+            type: 'string',
+            description: 'The date the application period ends, YYYY-MM-DD if possible, else as printed.',
+          },
+          projectName: { type: 'string' },
+          contractDate: { type: 'string' },
+          line1: { type: 'number', description: 'Original Contract Sum.' },
+          line2: { type: 'number', description: 'Net change by Change Orders. Can be negative.' },
+          line3: { type: 'number', description: 'Contract Sum to Date.' },
+          line4: { type: 'number', description: 'Total Completed & Stored to Date.' },
+          line5aRate: { type: 'number', description: 'Retainage rate on completed work, a decimal — 10% is 0.10.' },
+          line5aAmount: { type: 'number', description: 'Line 5a dollar amount.' },
+          line5bRate: { type: 'number', description: 'Retainage rate on stored materials, a decimal.' },
+          line5bAmount: { type: 'number', description: 'Line 5b dollar amount.' },
+          line5: { type: 'number', description: 'Total Retainage.' },
+          line6: { type: 'number', description: 'Total Earned Less Retainage.' },
+          line7: { type: 'number', description: 'Less Previous Certificates for Payment.' },
+          line8: { type: 'number', description: 'Current Payment Due.' },
+          line9: { type: 'number', description: 'Balance to Finish Including Retainage.' },
+          changeOrderSummary: {
+            type: 'object',
+            description: 'Omit if the form shows no change-order summary block.',
+            properties: {
+              additions: { type: 'number' },
+              deductions: { type: 'number' },
+              net: { type: 'number' },
+            },
+          },
+        },
+      },
+      lineItems: {
+        type: 'array',
+        items: COLUMN_ROW({
+          itemNo: { type: 'string', description: 'Item number as printed.' },
+          description: { type: 'string' },
+          pctComplete: {
+            type: 'number',
+            description: 'The %(G/C) column as printed, a number like 65 for 65%.',
+          },
+          retainage: {
+            type: 'number',
+            description: 'The per-line retainage column I amount, if a variable rate is used.',
+          },
+        }),
+      },
+      grandTotalRow: {
+        ...COLUMN_ROW({}),
+        description: 'Omit if no explicit grand-total row exists separate from the line items.',
+      },
+      pageSubtotals: {
+        type: 'array',
+        description: 'Omit if the document is a single page or per-page subtotals are not printed.',
+        items: COLUMN_ROW({ page: { type: 'number' } }),
+      },
+      coBreakdown: {
+        type: 'array',
+        description: 'Omit if there is no itemized change-order breakdown section.',
+        items: {
+          type: 'object',
+          properties: { coNumber: { type: 'string' }, amount: { type: 'number' } },
+        },
+      },
+    },
+    required: ['summary', 'lineItems'],
+  };
+
+  // Subcontractor cost-breakdown sections appear after the continuation sheet in many pay
+  // apps: a per-sub page detailing the amount that appears as a single line on the G703.
+  // Only extracted for the CURRENT application — the previous app's breakdowns feed nothing.
+  if (withSubBreakdowns) {
+    shape.properties.subBreakdowns = {
+      type: 'array',
+      description: 'Empty if the document contains no subcontractor cost-breakdown sections.',
+      items: {
+        type: 'object',
+        properties: {
+          subName: {
+            type: 'string',
+            description: 'Name of the subcontractor or vendor this breakdown belongs to.',
+          },
+          matchesItemNo: {
+            type: 'string',
+            description: 'The continuation-sheet item number this breakdown supports, if stated '
+              + 'or inferable.',
+          },
+          matchesDescription: {
+            type: 'string',
+            description: 'The continuation-sheet line description it supports.',
+          },
+          basis: {
+            type: 'string',
+            enum: ['this-period', 'to-date', 'unclear'],
+            description: '"this-period" if the breakdown covers the amount billed this period, '
+              + '"to-date" if it covers the total billed to date.',
+          },
+          statedTotal: { type: 'number', description: 'The total printed on the breakdown itself.' },
+          components: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { description: { type: 'string' }, amount: { type: 'number' } },
+            },
+          },
+        },
+        required: ['subName'],
+      },
+    };
+  }
+  return shape;
+}
+
+function payAppTool(hasPrevious) {
+  const properties = { current: payAppShape(true) };
+  if (hasPrevious) properties.previous = payAppShape(false);
+  return {
+    name: 'record_pay_application',
+    description: 'Transcribe a contractor pay application exactly as printed.',
+    input_schema: { type: 'object', properties, required: ['current'] },
+  };
 }
 
 function buildPrompt(hasPrevious) {
@@ -90,17 +155,12 @@ ${hasPrevious
 
 Extract every field exactly as it appears — do not compute, correct, or round anything, just transcribe the numbers. Be thorough: process every page of the continuation sheet and include every line item, even if there are many. Do not summarize, skip, or truncate line items to save space.
 
-Lines 1-9 on the summary/cover sheet are almost always printed explicitly somewhere on the page — look carefully for all of them, even if the exact wording or layout differs slightly from a standard AIA G702 form (for example "Total Earned to Date" or "Total Completed to Date" both mean the same thing as Line 4; "Amount Due This Application" or "Current Payment Due" both mean Line 8; "Balance to Finish" or "Remaining Balance" both mean Line 9). Only use null for a line if it truly does not appear anywhere on the page — do not give up early on these nine fields, they matter more than any other field on the document.
+Lines 1-9 on the summary/cover sheet are almost always printed explicitly somewhere on the page — look carefully for all of them, even if the exact wording or layout differs slightly from a standard AIA G702 form (for example "Total Earned to Date" or "Total Completed to Date" both mean the same thing as Line 4; "Amount Due This Application" or "Current Payment Due" both mean Line 8; "Balance to Finish" or "Remaining Balance" both mean Line 9). Only omit a line if it truly does not appear anywhere on the page — do not give up early on these nine fields, they matter more than any other field on the document.
 
-Respond with ONLY a raw JSON object (no markdown, no commentary) matching this exact shape:
-
-{
-  "current": ${payAppShape(true)},
-  "previous": ${hasPrevious ? payAppShape(false) : 'null'}
-}
+Transcribe it with the record_pay_application tool.
 
 Rules:
-- If a field cannot be found with confidence, use null (not "Not specified" — this data feeds arithmetic checks, so nulls must be real nulls, not strings).
+- If a field cannot be found with confidence, omit it (never write "Not specified" — this data feeds arithmetic checks, so a missing number must be missing, not a string).
 - All dollar amounts are plain numbers (no "$", no commas).
 - Rates are decimals (10% -> 0.10), not the number 10.
 - If a continuation sheet spans multiple pages, include every line item from every page in that application's single "lineItems" array, in order.
@@ -109,36 +169,25 @@ Rules:
 - "subBreakdowns" (current application only): capture EVERY subcontractor or vendor cost-breakdown section that appears after the continuation sheet — these detail the amount shown as a single line on the G703. Read "basis" from the breakdown's own wording (a heading like "this period" or "billed to date"); use "unclear" rather than guessing. Include every component row. If the document has no such sections, use [].`;
 }
 
-async function callClaude(content) {
-  return client.messages.create({
-    model: 'claude-sonnet-4-5',
-    max_tokens: 20000,
-    messages: [{ role: 'user', content }]
-  });
-}
-
-async function callClaudeWithRetry(content) {
-  try {
-    return await callClaude(content);
-  } catch (err) {
-    if (err.status === 429) {
-      // One automatic retry after a short wait — this account's rate limit window is
-      // narrow (requests/min), so a brief pause often clears it without bothering the user.
-      await new Promise(resolve => setTimeout(resolve, 20000));
-      return callClaude(content);
-    }
-    throw err;
-  }
-}
+const TOO_MANY_LINE_ITEMS = 'These pay applications have too many line items to extract in one '
+  + 'pass (the AI response was cut off). Try again, or split the continuation sheet into a '
+  + 'smaller PDF.';
 
 // Extracts the current (and optionally previous) pay application in a SINGLE Claude call —
 // sending both PDFs as separate document blocks in one message uses one API request and one
 // prompt instead of two, which matters a lot given how tight per-minute rate limits can be.
-function tooManyLineItems() {
-  return new Error(
-    'These pay applications have too many line items to extract in one pass (the AI response was cut off). ' +
-    'Try again, or split the continuation sheet into a smaller PDF.'
-  );
+//
+// One automatic retry after a short wait — this account's rate limit window is narrow
+// (requests/min), so a brief pause often clears it without bothering the user.
+async function callClaudeWithRetry(content, hasPrevious) {
+  const { data } = await askForJson({
+    content,
+    tool: payAppTool(hasPrevious),
+    maxTokens: 20000,
+    label: 'pay app extract',
+    truncatedMessage: TOO_MANY_LINE_ITEMS,
+  });
+  return data;
 }
 
 async function analyzePayApps(currentBuffer, previousBuffer) {
@@ -156,9 +205,7 @@ async function analyzePayApps(currentBuffer, previousBuffer) {
     }
     content.push({ type: 'text', text: buildPrompt(!!previousBuffer) });
 
-    const response = await callClaudeWithRetry(content);
-    if (response.stop_reason === 'max_tokens') throw tooManyLineItems();
-    const parsed = safeJsonFromText(response.content[0].text);
+    const parsed = await callClaudeWithRetry(content, !!previousBuffer);
     return { current: parsed.current, previous: parsed.previous || null };
   }
 
@@ -170,9 +217,7 @@ async function analyzePayApps(currentBuffer, previousBuffer) {
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
       { type: 'text', text: buildPrompt(false) + partNotice(context) },
     ];
-    const response = await callClaudeWithRetry(content);
-    if (response.stop_reason === 'max_tokens') throw tooManyLineItems();
-    return safeJsonFromText(response.content[0].text).current;
+    return (await callClaudeWithRetry(content, false)).current;
   };
 
   return {
