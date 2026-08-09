@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   PlusIcon, ArrowDownTrayIcon, TrashIcon, PaperClipIcon, SparklesIcon,
   PaperAirplaneIcon, ArrowUturnLeftIcon, ClockIcon, CheckCircleIcon,
-  ExclamationTriangleIcon, LightBulbIcon, DocumentTextIcon,
+  ExclamationTriangleIcon, LightBulbIcon, DocumentTextIcon, ScaleIcon,
 } from '@heroicons/react/24/outline';
 import { rfisApi, payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -390,14 +390,18 @@ function NewRfiForm({ onSaved, onCancel }) {
           <p className="text-[12px] font-bold text-gray-900">So Coaster can suggest an answer</p>
         </div>
 
-        <Field label="What does this RFI ask about? *">
-          <select className="input" required value={form.discipline} onChange={set('discipline')}>
+        {/* Deliberately not a required field. It is needed to suggest an answer, not to log
+            an RFI, and marking it required made the browser block the whole form — so an RFI
+            the PM only wanted to record could not be saved at all. The suggestion step below
+            asks for it in its own right. */}
+        <Field label="What does this RFI ask about?">
+          <select className="input" value={form.discipline} onChange={set('discipline')}>
             <option value="">— Choose —</option>
             {DISCIPLINES.map(d => <option key={d}>{d}</option>)}
           </select>
           <p className="text-[11px] text-gray-400 mt-1">
             This decides which drawings are read. "Contract" is for commercial or scope questions
-            that no drawing answers.
+            that no drawing answers. Leave it blank to just log the RFI for now.
           </p>
         </Field>
 
@@ -622,6 +626,156 @@ function AnalysisPanel({ rfi, onRan }) {
             </button>
             <button className="btn-secondary text-[12px] py-1"
               onClick={() => rfisApi.downloadAnalysis(rfi.id, `${rfi.rfi_number}_suggested_answer.md`)}>
+              <ArrowDownTrayIcon className="w-3.5 h-3.5" /> Export
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- The A/E's answer against what was predicted --------------------------------------------------
+
+// Coloured by what the PM has to do about it: green needs nothing, amber is a qualification to
+// read, red is work the drawings did not show — which is where the money usually is.
+const VERDICTS = {
+  confirmed: {
+    label: 'Matches the documents',
+    bg: '#f0fdf4', color: '#15803d', border: '#bbf7d0',
+    blurb: 'The A/E answered the way the project documents indicated.',
+  },
+  partly_confirmed: {
+    label: 'Matches, with a qualification',
+    bg: '#fefce8', color: '#a16207', border: '#fde68a',
+    blurb: 'Broadly what the documents showed, but the A/E has added or qualified something.',
+  },
+  contradicted: {
+    label: 'Differs from the documents',
+    bg: '#fef2f2', color: '#b91c1c', border: '#fecaca',
+    blurb: 'The A/E has directed something the contract documents do not show.',
+  },
+  not_comparable: {
+    label: 'Not an answer yet',
+    bg: '#f9fafb', color: '#6b7280', border: '#e5e7eb',
+    blurb: 'The A/E did not answer the question, so there is nothing to compare.',
+  },
+};
+
+function ResponseReviewPanel({ rfi, revision, onRan }) {
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState('');
+  const stored = rfi.responseReview;
+  const review = stored?.review;
+
+  const run = async () => {
+    setRunning(true); setError('');
+    try {
+      onRan(await rfisApi.reviewResponse(rfi.id, revision.id));
+    } catch (err) {
+      setError(errorText(err, 'Could not compare the response with the suggested answer.'));
+    } finally { setRunning(false); }
+  };
+
+  const v = VERDICTS[review?.verdict] || VERDICTS.not_comparable;
+
+  return (
+    <div className="p-4 rounded-xl" style={{ background: '#fff', border: `1px solid ${review ? v.border : '#eef1f4'}` }}>
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <ScaleIcon className="w-4 h-4 flex-shrink-0" style={{ color: '#6366f1' }} />
+        <p className="text-[13px] font-bold text-gray-900">The A/E's answer vs the documents</p>
+        {review && (
+          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold ml-auto flex-shrink-0"
+            style={{ background: v.bg, color: v.color }}>{v.label}</span>
+        )}
+      </div>
+
+      {!review && (
+        <div className="space-y-2">
+          <p className="text-[12px] text-gray-600">
+            {rfi.analysis
+              ? 'Compare what the A/E answered with the reading Coaster made of the drawings before it came back.'
+              : 'No suggested answer was produced for this RFI, so there is nothing to compare the A/E\'s reply against. Run one above first.'}
+          </p>
+          <button className="btn-primary" onClick={run} disabled={running || !rfi.analysis}>
+            <ScaleIcon className="w-4 h-4" />
+            {running ? 'Comparing…' : 'Compare with the suggested answer'}
+          </button>
+        </div>
+      )}
+
+      {error && <p className="text-xs mt-2" style={{ color: '#b91c1c' }}>{error}</p>}
+
+      {review && (
+        <div className="space-y-3">
+          <p className="text-[14px] font-semibold text-gray-900 leading-snug">{review.headline}</p>
+          <p className="text-[11px] text-gray-500">{v.blurb}</p>
+
+          {review.differences?.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                Where it differs
+              </p>
+              {review.differences.map((d, i) => (
+                <div key={i} className="p-2.5 rounded-lg" style={{ background: '#fafbfc', border: '1px solid #eef1f4' }}>
+                  <p className="text-[12px] font-semibold text-gray-800 mb-1.5">{d.point}</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-gray-400">Documents showed</p>
+                      <p className="text-[12px] text-gray-700">{d.predicted}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider" style={{ color: '#b45309' }}>A/E directed</p>
+                      <p className="text-[12px] text-gray-700">{d.actual}</p>
+                    </div>
+                  </div>
+                  {d.whyItMatters && (
+                    <p className="text-[11px] text-gray-600 mt-1.5 pt-1.5" style={{ borderTop: '1px solid #eef1f4' }}>
+                      {d.whyItMatters}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {review.changeOrderRisk && (
+            <div className="p-2.5 rounded-lg" style={{ background: '#fff7ed', border: '1px solid #fed7aa' }}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#c2410c' }}>
+                Change order or delay exposure
+              </p>
+              <p className="text-[12px] text-gray-700">{review.changeOrderRisk}</p>
+            </div>
+          )}
+
+          {review.actionsForPm?.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Do now</p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {review.actionsForPm.map((a, i) => <li key={i} className="text-[12px] text-gray-700">{a}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {review.newInformation && (
+            <p className="text-[12px] text-gray-600">
+              <span className="font-semibold">The A/E knew something the documents didn't carry:</span>{' '}
+              {review.newInformation}
+            </p>
+          )}
+
+          {review.agreements?.length > 0 && (
+            <p className="text-[11px] text-gray-500">
+              Agrees on: {review.agreements.join(' · ')}
+            </p>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <button className="btn-secondary text-[12px] py-1" onClick={run} disabled={running}>
+              {running ? 'Comparing…' : 'Run it again'}
+            </button>
+            <button className="btn-secondary text-[12px] py-1"
+              onClick={() => rfisApi.downloadResponseReview(rfi.id, `${rfi.rfi_number}_response_review.md`)}>
               <ArrowDownTrayIcon className="w-3.5 h-3.5" /> Export
             </button>
           </div>
@@ -904,7 +1058,17 @@ function RfiDetail({ id, onChanged, onDeleted }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
 
-  const applyUpdate = updated => { setRecord(updated); setSub(null); onChanged(); };
+  const applyUpdate = updated => {
+    setRecord(updated);
+    setSub(null);
+    // The comparison runs after the response is saved and is allowed to fail without taking
+    // the response with it. Saying so beats leaving the panel looking as though nothing
+    // happened — the PM can press the button and try again.
+    setError(updated?.reviewError
+      ? `The response was recorded. Comparing it with the suggested answer didn't work: ${updated.reviewError}`
+      : '');
+    onChanged();
+  };
 
   // The sent date is chosen, not assumed to be today: an RFI is often logged the day it
   // arrives and forwarded a day or two later, and the response deadline counts from the day
@@ -998,6 +1162,13 @@ function RfiDetail({ id, onChanged, onDeleted }) {
       </div>
 
       {error && <p className="text-xs" style={{ color: '#b91c1c' }}>{error}</p>}
+
+      {/* Once the A/E has answered, the comparison is the more useful of the two — the
+          prediction has served its purpose, and what matters now is where the answer departs
+          from it. So it sits above. */}
+      {current.response_action && (
+        <ResponseReviewPanel rfi={record} revision={current} onRan={applyUpdate} />
+      )}
 
       <AnalysisPanel rfi={record} onRan={load} />
 

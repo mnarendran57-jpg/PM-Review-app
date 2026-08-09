@@ -34,13 +34,20 @@ const RETRYABLE = new Set([429, 503, 529]);
 //
 // Every property the schema declares is therefore filled in with null when the model leaves it
 // out, which restores exactly the shape the rest of the app was written against.
+// The model occasionally escapes a quote inside a value that the API has already decoded for
+// us, so a duct dimension arrives as 9'-0\" and would render with the backslash showing. Only
+// a backslash directly before a double quote is touched: in construction prose that is always
+// the artifact and never intended.
+const unescapeStrayQuotes = text =>
+  (typeof text === 'string' && text.includes('\\"') ? text.replace(/\\+"/g, '"') : text);
+
 function fillDeclaredNulls(value, schema) {
-  if (!schema || typeof schema !== 'object') return value;
+  if (!schema || typeof schema !== 'object') return unescapeStrayQuotes(value);
 
   if (schema.type === 'array') {
     return Array.isArray(value) ? value.map(item => fillDeclaredNulls(item, schema.items)) : value;
   }
-  if (schema.type !== 'object' || !schema.properties) return value;
+  if (schema.type !== 'object' || !schema.properties) return unescapeStrayQuotes(value);
   // An absent object stays absent rather than becoming a hollow shell of nulls: callers
   // distinguish "no notarization block was found" from "one was found and every field is empty".
   if (value == null || typeof value !== 'object' || Array.isArray(value)) return value;

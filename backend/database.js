@@ -955,7 +955,23 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_rfis_project ON rfis(project_id);
   CREATE INDEX IF NOT EXISTS idx_rfi_revisions_rfi ON rfi_revisions(rfi_id);
   CREATE INDEX IF NOT EXISTS idx_rfi_files_rfi ON rfi_files(rfi_id);
+  -- How the A/E's actual answer compared with the one Coaster predicted. Kept separate from
+  -- the prediction rather than folded into it: the prediction is a record of what the
+  -- documents said before the answer came back, and overwriting it with hindsight would
+  -- destroy the only evidence of what the PM was working from at the time.
+  CREATE TABLE IF NOT EXISTS rfi_response_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rfi_id INTEGER NOT NULL REFERENCES rfis(id) ON DELETE CASCADE,
+    revision_id INTEGER REFERENCES rfi_revisions(id) ON DELETE CASCADE,
+    analysis_id INTEGER REFERENCES rfi_analyses(id) ON DELETE SET NULL,
+    review_json TEXT NOT NULL,
+    review_markdown TEXT,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_rfi_analyses_rfi ON rfi_analyses(rfi_id);
+  CREATE INDEX IF NOT EXISTS idx_rfi_response_reviews_rfi ON rfi_response_reviews(rfi_id);
 `);
 
 // --- Meeting action items -----------------------------------------------------------------

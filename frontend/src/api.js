@@ -240,6 +240,15 @@ export const rfisApi = {
     triggerDownload(res.data, fileName || `rfi_${id}_suggested_answer.md`);
   },
 
+  // Compares the A/E's actual answer with the one Coaster predicted. Runs automatically when
+  // the response is recorded; this is for re-running it, or running it after a failure.
+  reviewResponse: (id, revId) =>
+    api.post(`/rfis/${id}/revisions/${revId}/review`, {}, { timeout: AI_TIMEOUT }).then(r => r.data),
+  downloadResponseReview: async (id, fileName) => {
+    const res = await api.get(`/rfis/${id}/response-review.md`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `rfi_${id}_response_review.md`);
+  },
+
   fileUrl: (id, fileId) => `${apiBaseUrl}/rfis/${id}/files/${fileId}`,
   downloadCsv: async projectId => {
     const res = await api.get('/rfis/export.csv', {

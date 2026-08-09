@@ -10,6 +10,7 @@ const { requireFeature } = require('../lib/plans');
 const { friendlyAiError } = require('../lib/aiErrors');
 const { extractRfi, extractRfiResponse } = require('../lib/rfiExtract');
 const { analyzeRfi, renderMarkdown } = require('../lib/rfiAnalysis');
+const { compareToResponse } = require('../lib/rfiComparison');
 const {
   RESPONSE_ACTIONS, DISCIPLINES, isReopening, buildLogRow, summarize, dueDateFor,
   toIsoDay, todayUtc,
@@ -76,6 +77,24 @@ const latestAnalysis = rfiId => {
   };
 };
 
+// How the A/E's answer compared with the prediction, for one round trip. Looked up per
+// revision rather than per RFI: an RFI that went round twice has two answers, and showing the
+// first one's review against the second one's answer would be worse than showing none.
+const reviewForRevision = revisionId => {
+  if (!revisionId) return null;
+  const row = db.prepare(
+    `SELECT * FROM rfi_response_reviews WHERE revision_id=? ORDER BY created_at DESC, id DESC LIMIT 1`
+  ).get(revisionId);
+  if (!row) return null;
+  return {
+    id: row.id,
+    created_at: row.created_at,
+    created_by: row.created_by,
+    review: JSON.parse(row.review_json),
+    markdown: row.review_markdown,
+  };
+};
+
 function detail(row, options) {
   const log = buildLogRow(row, revisionsOf(row.id), options);
   const files = filesOf(row.id);
@@ -84,11 +103,46 @@ function detail(row, options) {
     files,
     documents: documentsOf(row.id),
     analysis: latestAnalysis(row.id),
+    responseReview: reviewForRevision(log.currentRevisionId),
     revisions: log.revisions.map(rev => ({
       ...rev,
       files: files.filter(f => f.revision_id === rev.id),
+      responseReview: reviewForRevision(rev.id),
     })),
   };
+}
+
+// Runs the prediction-versus-answer comparison for one revision and stores it. Returns null
+// when there is nothing to compare — no prediction was ever run, or the revision has no
+// answer yet — which is a normal state rather than an error.
+async function runResponseReview(req, rfi, revision) {
+  const stored = latestAnalysis(rfi.id);
+  if (!stored || !revision?.response_action) return null;
+
+  const { review, markdown } = await compareToResponse({
+    rfi,
+    discipline: stored.discipline || rfi.discipline,
+    analysis: stored.analysis,
+    sources: stored.sources,
+    response: {
+      action: revision.response_action,
+      notes: revision.response_notes,
+      respondedBy: revision.responded_by,
+      dateReturned: revision.date_returned,
+    },
+  });
+
+  // One review per revision: a re-run replaces the previous one rather than stacking, so the
+  // detail view cannot show two contradictory comparisons of the same answer.
+  db.prepare(`DELETE FROM rfi_response_reviews WHERE revision_id=?`).run(revision.id);
+  db.prepare(`
+    INSERT INTO rfi_response_reviews (rfi_id, revision_id, analysis_id, review_json,
+      review_markdown, created_by)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(rfi.id, revision.id, stored.id, JSON.stringify(review), markdown,
+    req.user.name || req.user.email);
+
+  return review;
 }
 
 const nullable = value => {
@@ -559,9 +613,23 @@ router.post('/:id/revisions/:revId/response', upload.single('file'), async (req,
     }
     touch(rfi.id);
 
+    // The answer is now safely on the record, so the comparison against Coaster's prediction
+    // runs afterwards and on a best-effort basis. It is worth having, but it is an AI call on
+    // a rate-limited account, and losing the A/E's response because a comparison failed would
+    // be a bad trade. If it does not run, the detail view offers a button to run it.
+    let reviewError = null;
+    try {
+      const updated = db.prepare(`SELECT * FROM rfi_revisions WHERE id=?`).get(revision.id);
+      await runResponseReview(req, rfi, updated);
+    } catch (err) {
+      console.error('RFI response review error:', err);
+      reviewError = friendlyAiError(err);
+    }
+
     const record = detail(rfi, { reviewDays: reviewDays(), today: todayUtc() });
     res.json({
       ...record,
+      reviewError,
       nextStep: isReopening(action)
         ? 'The A/E needs more information. Waiting on the contractor to come back — add that as a new revision when it arrives.'
         : 'This RFI is closed. No further action is needed.',
@@ -645,6 +713,43 @@ router.post('/:id/analysis', upload.array('files', 4), async (req, res) => {
     console.error('RFI analysis error:', err);
     res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });
   }
+});
+
+// Runs the comparison on demand — after a failure when the response was recorded, or to redo
+// it once the prediction has been re-run against a better set of documents.
+router.post('/:id/revisions/:revId/review', async (req, res) => {
+  try {
+    const { rfi, revision } = visibleRevision(req);
+    if (!rfi || !revision) return res.status(404).json({ error: 'Not found' });
+
+    if (!revision.response_action) {
+      return res.status(400).json({
+        error: 'There is nothing to compare yet — record the A/E\'s response on this revision first.',
+      });
+    }
+    if (!latestAnalysis(rfi.id)) {
+      return res.status(400).json({
+        error: 'There is no suggested answer to compare against. Run one from this RFI first, and it will be read against the A/E\'s reply.',
+      });
+    }
+
+    await runResponseReview(req, rfi, revision);
+    res.json(detail(rfi, { reviewDays: reviewDays(), today: todayUtc() }));
+  } catch (err) {
+    console.error('RFI response review error:', err);
+    res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });
+  }
+});
+
+router.get('/:id/response-review.md', (req, res) => {
+  const rfi = visibleRfi(req);
+  if (!rfi) return res.status(404).json({ error: 'Not found' });
+  const revisions = revisionsOf(rfi.id);
+  const found = reviewForRevision(revisions[revisions.length - 1]?.id);
+  if (!found) return res.status(404).json({ error: 'No response review has been produced for this RFI yet.' });
+  res.setHeader('Content-Type', 'text/markdown');
+  res.setHeader('Content-Disposition', `attachment; filename="${String(rfi.rfi_number).replace(/[^a-z0-9-]+/gi, '_')}_response_review.md"`);
+  res.send(found.markdown || '');
 });
 
 router.get('/:id/analysis.md', (req, res) => {
