@@ -20,6 +20,7 @@ const { runInvariants, groupFindings, SEVERITY } = require('./payAppInvariants')
 const { runSubcontractChecks, chainTable } = require('./payAppSubcontracts');
 const { runBackupChecks } = require('./payAppBackup');
 const { runCoverageChecks, coverageTable } = require('./payAppCoverage');
+const { runWaiverChecks, waiverTable } = require('./payAppWaivers');
 
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 const num = v => (isNum(v) ? v : 0);
@@ -138,6 +139,22 @@ function subcontractInput(data, contractTerms) {
   };
 }
 
+// Waivers are the one family that runs on absence as much as on presence: a package with no
+// waivers at all is a finding, not a reason to stand down. So this input is built whenever there
+// is anything that could carry a lien, and the engine reports what is missing.
+function waiverInput(data) {
+  const { current } = data;
+  const s = current.summary || {};
+  if (!s.contractor && !(current.subApplications || []).length) return null;
+  return {
+    kind: 'waivers',
+    meta: { applicationNumber: s.applicationNumber, periodTo: s.periodTo, contractor: s.contractor },
+    summary: s,
+    subApplications: current.subApplications || [],
+    waivers: current.waivers || [],
+  };
+}
+
 function backupInput(data, contractTerms) {
   const { current } = data;
   if (!(current.transactions || []).length) return null;
@@ -184,6 +201,9 @@ const ENGINES = [
   { key: 'subcontracts', label: "the contractor's cost breakdown and subcontractor applications",
     build: subcontractInput, run: runSubcontractChecks,
     absent: "No contractor cost breakdown was submitted, so nothing was traced from a schedule line down to a subcontractor's own application." },
+  { key: 'waivers', label: 'lien waivers from everyone who could file one',
+    build: waiverInput, run: runWaiverChecks,
+    absent: 'Neither a contractor nor any subcontractor was identified, so no lien waiver was looked for.' },
   { key: 'backup', label: 'the cost report and its receipts', build: backupInput, run: runBackupChecks,
     absent: 'No job-cost transaction report was submitted, so no charge was matched to a receipt.' },
   { key: 'coverage', label: 'documents attached to each billed line', build: coverageInput, run: runCoverageChecks,
@@ -243,6 +263,7 @@ function runEngines(data, contractTerms = null) {
     // Tables the report draws. Absent when the engine that produces them did not run.
     chain: subs ? chainTable(subs.input, subs.codes) : null,
     subMatch: subs ? subcontractorMatch(subs.input) : null,
+    waivers: byEngine('waivers') ? waiverTable(byEngine('waivers').input) : null,
     coverage: byEngine('coverage') ? coverageTable(byEngine('coverage').lines) : null,
     stats: {
       checksRun,
@@ -255,6 +276,7 @@ function runEngines(data, contractTerms = null) {
       codesTied: subs ? subs.summary.codesTied : null,
       codesTotal: subs ? subs.summary.codesTotal : null,
       enginesRun: engines.map(e => e.key),
+      enginesTotal: ENGINES.length,
     },
     verdict: findings.some(f => f.severity === SEVERITY.CRITICAL) ? 'do-not-certify'
       : findings.length ? 'certify-with-corrections' : 'no-issues-found',

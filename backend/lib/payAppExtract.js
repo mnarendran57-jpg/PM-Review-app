@@ -195,6 +195,60 @@ function payAppShape(withSubBreakdowns) {
       },
     };
 
+    // Lien waivers. What the owner is buying with the payment is the release of a lien, so which
+    // parties released, for how much, and through what date is checked as closely as the money.
+    shape.properties.waivers = {
+      type: 'array',
+      description: 'Empty if the package encloses no lien waivers or releases.',
+      items: {
+        type: 'object',
+        properties: {
+          party: { type: 'string', description: 'The company releasing its liens.' },
+          role: { type: 'string', enum: ['contractor', 'subcontractor', 'supplier'] },
+          type: {
+            type: 'string',
+            description: 'What the document actually does, from its own wording. "conditional-*" '
+              + 'releases the lien only WHEN payment is received; "unconditional-*" states payment '
+              + 'HAS been received; "affidavit-of-bills-paid" swears everyone downstream is paid. '
+              + 'One document often does two of these at once — a Texas contractor\'s release '
+              + 'commonly swears bills are paid AND releases conditionally on the new payment — so '
+              + 'join both with "+", e.g. "conditional-progress+affidavit-of-bills-paid".',
+          },
+          through: {
+            type: 'string',
+            description: 'The through/payment date — liens are released only for work before it. '
+              + 'YYYY-MM-DD if possible.',
+          },
+          amount: { type: 'number', description: 'The amount the release covers.' },
+          schedule: {
+            type: 'object',
+            description: 'Omit unless the release prints its own schedule for payment.',
+            properties: {
+              contractAmount: { type: 'number' },
+              completedToDate: { type: 'number' },
+              retainage: { type: 'number' },
+              earnedLessRetainage: { type: 'number' },
+              previousPayments: { type: 'number' },
+              amountNowPayable: { type: 'number' },
+            },
+          },
+          signedBy: { type: 'string', description: 'Name on the signature line. Omit if unsigned.' },
+          signedTitle: { type: 'string' },
+          signedOn: { type: 'string' },
+          notarised: { type: 'boolean', description: 'True only if a notary actually acknowledged it.' },
+          notaryDate: { type: 'string' },
+          onRecordOnly: {
+            type: 'boolean',
+            description: 'True when the package only PROVES a waiver exists — an audit trail '
+              + 'listing it as uploaded — without reproducing the document. Say so rather than '
+              + 'inventing its figures: a waiver that cannot be read is not a waiver that passed.',
+          },
+          page: { type: 'number' },
+        },
+        required: ['party'],
+      },
+    };
+
     // Sales tax on backup invoices, which matters when the owner is a public body.
     shape.properties.taxes = {
       type: 'array',
@@ -246,7 +300,8 @@ Rules:
 - On every component row, copy the invoice or draw reference EXACTLY as printed — "225020-003-2", "64328", "AR847666". The format of that reference is itself checked (a commitment draw looks different from a vendor invoice number), so a cleaned-up or reformatted reference is worse than no reference at all. Record the heading each row sits under as "category".
 - "subApplications": if the package encloses subcontractors' OWN applications for payment — their G702/G703 addressed to the contractor rather than to the owner — record each one. These are usually behind the contractor's invoice. Take "thisPeriod" from their THIS PERIOD column only, never their total to date.
 - "contractorInvoice": if the contractor encloses its own invoice with a summary block stating a cost base, a fee and its rate, a total and retainage, record those figures.
-- "taxes": if any backup invoice shows a separate sales tax line, record the tax amount only — not the invoice total.`;
+- "taxes": if any backup invoice shows a separate sales tax line, record the tax amount only — not the invoice total.
+- "waivers": record every lien waiver, release or affidavit of bills paid in the package. Read "type" from what the document DOES, not its title — a page headed "Release of Liens" that swears all bills are paid AND releases on disbursement is both, so name both. If the package contains only an audit trail or transmittal showing a waiver was submitted, record it with onRecordOnly true and no amount; do not invent figures for a document you cannot see.`;
 }
 
 const TOO_MANY_LINE_ITEMS = 'These pay applications have too many line items to extract in one '

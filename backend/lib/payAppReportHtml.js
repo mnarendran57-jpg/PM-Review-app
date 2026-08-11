@@ -146,6 +146,45 @@ function subMatchSection(match) {
     </section>`;
 }
 
+// Who could put a lien on this job, what they are owed, and what is on file for them. Findings
+// name what is wrong; this is how a reader satisfies themselves that nobody is missing — the one
+// question about waivers that a list of findings genuinely cannot answer.
+function waiverSection(rows) {
+  if (!rows || !rows.length) return '';
+  const CLS = {
+    'none on file': 'no', 'conditional only': 'flag',
+    'on record, not enclosed': '', complete: 'yes', 'unconditional only': 'yes',
+  };
+  // A release that does two jobs is recorded as one type joined with "+". Set on one line it is
+  // wide enough to push the status column off the table, and status is the column a reader is
+  // actually scanning — so each job gets its own line.
+  const kinds = r => (r.waivers.length
+    ? r.waivers.flatMap(w => String(w).split('+')).map(w => esc(w.trim())).join('<br>')
+    : '—');
+  const body = rows.map(r => `
+          <tr>
+            <td><span class="who">${esc(r.party)}</span><span class="meta">${esc(r.role)}</span></td>
+            <td>${money(r.amount)}</td>
+            <td class="wrap">${kinds(r)}</td>
+            <td>${esc(r.through || '—')}</td>
+            <td class="${CLS[r.status] ?? ''}">${esc(r.status)}</td>
+          </tr>`).join('');
+  return `
+    <section class="sec">
+      <h2>Lien waivers — is it safe to pay?</h2>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Party</th><th>Being paid</th><th>Release on file</th><th>Through</th><th>Status</th></tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+      <p class="quiet">A release from the contractor binds the contractor only. A subcontractor's
+        lien rights are their own and survive the owner paying up the chain, so every party billing
+        this period needs its own. <b>Conditional</b> releases the lien when payment arrives;
+        <b>unconditional</b> confirms it already did.</p>
+    </section>`;
+}
+
 function buildReportHtml({ result, summary, projectName, contractor }) {
   const s = summary || {};
   const st = result.stats;
@@ -230,6 +269,7 @@ function buildReportHtml({ result, summary, projectName, contractor }) {
   th:first-child,td:first-child{text-align:left;padding-left:2px}
   td{padding:11px 10px;text-align:right;border-bottom:1px solid var(--rule);font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
   td:first-child{font-family:var(--sans);white-space:normal}
+  td.wrap{white-space:normal;text-align:left;line-height:1.45}
   td .who{font-weight:600}
   td .meta{display:block;font-size:11.5px;color:var(--ink-3);font-family:var(--mono)}
   tr.total td{border-bottom:none;border-top:2px solid var(--rule-strong);font-weight:600;padding-top:12px}
@@ -269,13 +309,15 @@ function buildReportHtml({ result, summary, projectName, contractor }) {
 
   ${subMatchSection(result.subMatch)}
 
+  ${waiverSection(result.waivers)}
+
   <section class="sec">
     <h2>Checked and clean</h2>
     <div class="clean">
       <div><span class="n">${st.passed}</span><span class="l">of ${st.checksRun} checks passed</span></div>
       ${st.codesTotal ? `<div><span class="n">${st.codesTied}/${st.codesTotal}</span><span class="l">cost codes tie to the schedule of values</span></div>` : ''}
       <div><span class="n">${st.lineItems}</span><span class="l">schedule lines read and recalculated</span></div>
-      <div><span class="n">${st.enginesRun.length}</span><span class="l">of 4 review passes had documents to work with</span></div>
+      <div><span class="n">${st.enginesRun.length}</span><span class="l">of ${st.enginesTotal} review passes had documents to work with</span></div>
     </div>
     ${result.notChecked.length ? `<p class="quiet"><b>Not checked.</b> ${result.notChecked.map(esc).join(' ')}</p>` : ''}
   </section>

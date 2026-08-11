@@ -1,0 +1,145 @@
+{
+ "kind": "waivers",
+ "name": "Tellepsen App 04 \u2014 the lien release, and the two that were never enclosed",
+ "meta": {
+  "applicationNumber": "4",
+  "periodTo": "2026-04-30",
+  "projectName": "Aldine ISD - Middle School and Lane School Rebuild (225020)",
+  "contractor": "Tellepsen Builders, L.P."
+ },
+ "summary": {
+  "line1": 1575204.0,
+  "line2": 2776245.0,
+  "line3": 4351449.0,
+  "line4": 737171.91,
+  "line5aRate": 0.05,
+  "line5aAmount": 36858.58,
+  "line5bRate": 0.05,
+  "line5bAmount": 0,
+  "line5Total": 36858.58,
+  "line6": 700313.33,
+  "line7": 389580.96,
+  "line8": 310732.37,
+  "line9": 3651135.67,
+  "amountCertified": 310732.37,
+  "changeOrderSummary": {
+   "additions": 2776245.0,
+   "deductions": 0.0,
+   "net": 2776245.0
+  }
+ },
+ "subApplications": [
+  {
+   "vendor": "Grant Mackay Company, Inc.",
+   "applicationNumber": "2",
+   "commitment": "225020-003",
+   "contractFor": "Demolition/Asbestos Abatement",
+   "contractSum": 453550.0,
+   "previous": 146650.0,
+   "thisPeriod": 198440.0,
+   "totalToDate": 345090.0,
+   "retainage": 17254.5,
+   "retainageRate": 0.05,
+   "currentDue": 188518.0,
+   "lines": [
+    {
+     "description": "Demolition",
+     "scheduledValue": 355000.0,
+     "previous": 88750.0,
+     "thisPeriod": 177500.0,
+     "retainage": 13312.5
+    },
+    {
+     "description": "Asbestos",
+     "scheduledValue": 98550.0,
+     "previous": 57900.0,
+     "thisPeriod": 20940.0,
+     "retainage": 3942.0
+    }
+   ]
+  },
+  {
+   "vendor": "Afton Incorporated",
+   "applicationNumber": "1",
+   "commitment": "225020-004",
+   "contractFor": "Plumbing",
+   "contractSum": 20500.0,
+   "previous": 0.0,
+   "thisPeriod": 20500.0,
+   "totalToDate": 20500.0,
+   "retainage": 1025.0,
+   "retainageRate": 0.05,
+   "currentDue": 19475.0
+  }
+ ],
+ "waivers": [
+  {
+   "party": "Tellepsen Builders, L.P.",
+   "role": "contractor",
+   "page": 6,
+   "type": "conditional-progress+affidavit-of-bills-paid",
+   "through": "2026-04-30",
+   "amount": 310732.37,
+   "schedule": {
+    "contractAmount": 4351449.0,
+    "completedToDate": 737171.91,
+    "retainage": 36858.58,
+    "earnedLessRetainage": 700313.33,
+    "previousPayments": 389580.96,
+    "amountNowPayable": 310732.37
+   },
+   "signedBy": "Lindsey Hews",
+   "signedTitle": "Project Manager",
+   "signedOn": "2026-05-05",
+   "notarised": true,
+   "notaryDate": "2026-05-05",
+   "onRecordOnly": false
+  },
+  {
+   "party": "Grant Mackay Company, Inc.",
+   "role": "subcontractor",
+   "page": 14,
+   "type": "conditional-progress",
+   "onRecordOnly": true,
+   "amount": null,
+   "through": null,
+   "evidence": "audit trail: Conditional Releases.pdf uploaded 04/20/26 19:57 GMT"
+  },
+  {
+   "party": "Grant Mackay Company, Inc.",
+   "role": "subcontractor",
+   "page": 14,
+   "type": "affidavit-of-bills-paid",
+   "onRecordOnly": true,
+   "amount": null,
+   "through": null,
+   "evidence": "audit trail: Affidavit of Bills Paid.pdf uploaded 04/20/26 19:57 GMT"
+  },
+  {
+   "party": "Afton Incorporated",
+   "role": "subcontractor",
+   "page": 18,
+   "type": "conditional-progress",
+   "onRecordOnly": true,
+   "amount": null,
+   "through": null,
+   "evidence": "audit trail: Conditional Releases.pdf uploaded 04/20/26 17:03 GMT"
+  },
+  {
+   "party": "Afton Incorporated",
+   "role": "subcontractor",
+   "page": 18,
+   "type": "affidavit-of-bills-paid",
+   "onRecordOnly": true,
+   "amount": null,
+   "through": null,
+   "evidence": "audit trail: Affidavit of Bills Paid.pdf uploaded 04/20/26 16:18 GMT"
+  }
+ ],
+ "expected": {
+  "verdict": "no-issues-found",
+  "findings": []
+ },
+ "$source": "Contractor's Release of Liens read in full from page 6 of \"225020 - Pay App 4-R2 - MWA Certified.pdf\"; its schedule for payment carries all six figures. Subcontractor waivers taken from the audit trails on pages 14 and 18, which record them as submitted and approved but do not reproduce them.",
+ "$note": "The release restates the application under oath \u2014 contract amount, completed to date, retainage, earned less retainage, previous payments and amount now payable \u2014 and all six agree to the cent, so W2 passes six times rather than once. The interesting behaviour is W5. Two subcontractors are billing, both have waivers recorded in the audit trail, and neither document was enclosed. That is neither a pass nor a failure: the engine reports it as unchecked and says exactly what it knows, which is that the waivers exist and nothing about them could be verified. Reporting them as missing would be a false alarm about paperwork that demonstrably exists; reporting them as satisfied would claim a check that never happened."
+}

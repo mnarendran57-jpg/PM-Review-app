@@ -23,11 +23,13 @@ const { runInvariants, groupFindings, money } = require('../lib/payAppInvariants
 const { runBackupChecks } = require('../lib/payAppBackup');
 const { runCoverageChecks, coverageTable } = require('../lib/payAppCoverage');
 const { runSubcontractChecks, chainTable } = require('../lib/payAppSubcontracts');
+const { runWaiverChecks, waiverTable } = require('../lib/payAppWaivers');
 
 const ENGINES = {
   backup: runBackupChecks,
   coverage: runCoverageChecks,
   subcontracts: runSubcontractChecks,
+  waivers: runWaiverChecks,
 };
 
 const DIR = path.join(__dirname, 'fixtures', 'payapp');
@@ -162,6 +164,17 @@ function runFixture(file) {
           + (row.subcontractors.length ? paint('dim', `  <- ${row.subcontractors.join('; ')}`) : ''));
       }
     }
+    // Who could file a lien, what they are owed, and what is on file for them. A reader has to be
+    // able to satisfy themselves that nobody is missing by reading a column.
+    if (fixture.kind === 'waivers') {
+      console.log(paint('blue', '\n  who could file a lien this period:'));
+      for (const row of waiverTable(fixture)) {
+        const mark = { 'none on file': 'red', 'conditional only': 'yellow',
+          'on record, not enclosed': 'dim' }[row.status] || 'green';
+        console.log(`    ${paint(mark, row.status.padEnd(24))} ${row.party.slice(0, 32).padEnd(34)}`
+          + `${money(row.amount ?? 0).padStart(13)}  ${row.waivers.join(', ') || '—'}`);
+      }
+    }
     const groups = groupFindings(findings);
     if (groups.length) {
       console.log(paint('blue', `\n  as the report would group them — ${groups.length} issue(s) from ${findings.length} finding(s):`));
@@ -245,6 +258,45 @@ const BACKUP_MUTATIONS = [
   ['a transaction goes unread, breaking the printed total', 'R1',
     a => { a.transactions = (a.transactions || []).slice(0, -1); }],
 ];
+
+// The waiver fixture is expected to be SILENT — the release is correct and the subcontractor
+// waivers are honestly unverifiable — so every check in the family is proved by mutation instead.
+const WAIVER_MUTATIONS = [
+  ['the release is missing entirely', 'W1',
+    a => { a.waivers = a.waivers.filter(w => w.role !== 'contractor'); }],
+  ['the release swears to a different amount payable', 'W2',
+    a => { a.waivers.find(w => w.schedule).schedule.amountNowPayable = 320000; }],
+  ['the release swears to a different retainage', 'W2',
+    a => { a.waivers.find(w => w.schedule).schedule.retainage = 30000; }],
+  ['the release is carried over from last month', 'W3',
+    a => { a.waivers.find(w => w.schedule).through = '2026-03-31'; }],
+  ['the release was never signed', 'W4',
+    a => { const w = a.waivers.find(x => x.schedule); w.signedBy = null; w.notarised = false; }],
+  ['a subcontractor has no waiver at all', 'W5',
+    a => { a.waivers = a.waivers.filter(w => !/Afton/.test(w.party)); }],
+  ['only conditional waivers, nothing proving the last payment landed', 'W6',
+    a => { a.waivers.forEach(w => { w.type = 'conditional-progress'; }); }],
+  ['a subcontractor waiver covers less than they are being paid', 'W7',
+    a => {
+      a.waivers.push({ party: 'Afton Incorporated', role: 'subcontractor',
+        type: 'conditional-progress', amount: 5000, through: '2026-04-30',
+        signedBy: 'L Haughton', signedOn: '2026-04-20', onRecordOnly: false });
+    }],
+];
+
+function runWaiverMutations(base) {
+  const undetected = [];
+  for (const [label, expectId, mutate] of WAIVER_MUTATIONS) {
+    const copy = JSON.parse(JSON.stringify(base));
+    try { mutate(copy); } catch { continue; }
+    const { findings } = runWaiverChecks(copy);
+    if (!findings.some(f => f.id === expectId)) undetected.push(`${label} (expected ${expectId})`);
+  }
+  const detected = WAIVER_MUTATIONS.length - undetected.length;
+  console.log(`  sensitivity: ${detected}/${WAIVER_MUTATIONS.length} single changes noticed`
+    + (undetected.length ? paint('red', ` — MISSED: ${undetected.join('; ')}`) : paint('green', ' ✓')));
+  return undetected.length === 0;
+}
 
 function runBackupMutations(base) {
   const undetected = [];
@@ -335,6 +387,7 @@ function runMutations(file) {
   const base = JSON.parse(fs.readFileSync(path.join(DIR, file), 'utf8'));
   if (base.kind === 'coverage') return runCoverageMutations(base);
   if (base.kind === 'subcontracts') return runSubMutations(base);
+  if (base.kind === 'waivers') return runWaiverMutations(base);
   if (base.kind === 'backup') return runBackupMutations(base);
   if ((base.expected?.findings || []).length) return null;   // only meaningful on a clean one
 
