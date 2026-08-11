@@ -214,16 +214,11 @@ function ContractPanel({ projectId, contract, onChange }) {
 // application movement underneath.
 function BudgetSummary({ budget }) {
   const s = budget.summary;
-  if (!s) {
-    return (
-      <div className="card p-5">
-        <h2 className="text-sm font-semibold text-gray-900">{budget.project.project_name}</h2>
-        <p className="text-xs text-gray-400 mt-1">
-          No pay applications reviewed on this project yet. Upload one and the budget history will build from there.
-        </p>
-      </div>
-    );
-  }
+  // A project with no reviews on file has no billing history to show. Nothing is rendered at
+  // all rather than an empty shell — a panel headed with the project name reads as a dashboard
+  // whether or not it has figures in it, and a job that has just been cleared down should look
+  // cleared down.
+  if (!s) return null;
 
   const pct = Math.max(0, Math.min(100, s.pctComplete ?? 0));
   const stat = (label, value, sub) => (
@@ -396,6 +391,16 @@ export default function PayAppReview() {
     return payAppReviewApi.getContract(projectId).then(setContract).catch(() => setContract(null));
   };
 
+  // The budget panel is derived entirely from the reviews on file, so anything that adds or
+  // removes one has to refetch it. Leaving it to the project-change effect alone meant deleting
+  // every review still left its figures on screen until the page was reloaded.
+  const refreshBudget = () => {
+    if (!projectId) { setBudget(null); return Promise.resolve(); }
+    return payAppReviewApi.projectHistory(projectId)
+      .then(setBudget)
+      .catch(() => setBudget(null));
+  };
+
   // Pull the selected project's billing history and executed contract so the PM sees
   // where the job stands, and what the contract allows, before uploading anything.
   useEffect(() => {
@@ -430,7 +435,7 @@ export default function PayAppReview() {
     // A review may have created a project (or added to one), so refresh both the
     // dropdown and the budget panel rather than leaving stale numbers on screen.
     if (data.projectId && !projectId) setProjectId(String(data.projectId));
-    else if (projectId) payAppReviewApi.projectHistory(projectId).then(setBudget).catch(() => {});
+    else refreshBudget();
     loadHistory();
     loadProjects();
   };
@@ -499,6 +504,7 @@ export default function PayAppReview() {
     await payAppReviewApi.delete(id);
     if (viewing?.id === id) setViewing(null);
     loadHistory();
+    refreshBudget();
   };
 
   const reset = () => {
