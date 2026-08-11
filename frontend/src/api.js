@@ -436,6 +436,9 @@ function triggerDownload(blob, fileName) {
 export const payAppReviewApi = {
   list: params => api.get('/pay-app-review', { params }).then(r => r.data),
   get: id => api.get(`/pay-app-review/${id}`).then(r => r.data),
+  // The findings report, rendered server-side so the page, the PDF and the printed copy are
+  // the same document rather than three renderings that can drift apart.
+  reportHtml: id => api.get(`/pay-app-review/${id}/report.html`, { responseType: 'text' }).then(r => r.data),
   extract: formData => api.post('/pay-app-review/extract', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),

@@ -455,6 +455,13 @@ if (!db.prepare(`PRAGMA table_info(pay_app_reviews)`).all().map(c => c.name).inc
   db.exec(`ALTER TABLE pay_app_reviews ADD COLUMN compliance_findings TEXT`);
 }
 
+// Output of the deterministic review engines, stored so a review reopens exactly as produced.
+// Reviews created before the engines existed simply have null here and fall back to the older
+// markdown report — nothing is rewritten, and no earlier review loses its findings.
+if (!db.prepare(`PRAGMA table_info(pay_app_reviews)`).all().map(c => c.name).includes('engine_result')) {
+  db.exec(`ALTER TABLE pay_app_reviews ADD COLUMN engine_result TEXT`);
+}
+
 // Default settings
 const existing = db.prepare(`SELECT key FROM settings WHERE key IN ('rfi_response_days','submittal_review_days')`).all();
 const existingKeys = new Set(existing.map(r => r.key));

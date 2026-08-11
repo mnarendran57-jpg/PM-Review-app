@@ -1,0 +1,76 @@
+{
+  "$source": "HCC Spring Branch HVAC - Dec2025 Pay App RET Rev1-notarized.pdf — G702 p1, G703 p2 (both carry a text layer)",
+  "$note": "A correct retainage release, and the most important fixture in the set: a check that only ever fires is worthless. Retainage is 0.0% and $0.00, the continuation sheet's retainage column is zero, balance to finish is zero, and the payment is last month's held retainage plus the change order completed this period.",
+  "$priorCaveat": "The prior application was not supplied. Its figures below are RECONSTRUCTED from this form — Line 7 (415,150.00) is by definition the prior Line 6, and at the contracted 5% that implies a prior Line 4 of 437,000.00 holding 21,850.00. Sound arithmetic, but not read from a document, so I11 and I15 are being tested against a derivation rather than against evidence.",
+  "name": "Spring Branch HVAC — retainage release (correct)",
+
+  "meta": {
+    "applicationNumber": "RETAINAGE",
+    "periodTo": "2025-12-31",
+    "projectName": "Spring Branch AHU Replacement & Controls",
+    "contractNumber": "PO 139444",
+    "isRetainageRelease": true
+  },
+  "contract": { "retainageRate": 0.05 },
+
+  "summary": {
+    "line1": 437000.00,
+    "line2": 3085.00,
+    "line3": 440085.00,
+    "line4": 440085.00,
+    "line5aRate": 0,
+    "line5aAmount": 0,
+    "line5bRate": null,
+    "line5bAmount": 0,
+    "line5Total": 0,
+    "line6": 440085.00,
+    "line7": 415150.00,
+    "line8": 24935.00,
+    "line9": 0.00,
+    "amountCertified": 24935.00
+  },
+
+  "lineItems": [
+    { "itemNo": "1",  "description": "Project Management",                      "page": 2, "c": 56000.00,  "d": 56000.00,  "e": 0, "f": 0, "g": 56000.00,  "pct": 1.0 },
+    { "itemNo": "2",  "description": "Procurement & Submittals",                "page": 2, "c": 8000.00,   "d": 8000.00,   "e": 0, "f": 0, "g": 8000.00,   "pct": 1.0 },
+    { "itemNo": "3",  "description": "Insurances & Bonds",                      "page": 2, "c": 12000.00,  "d": 12000.00,  "e": 0, "f": 0, "g": 12000.00,  "pct": 1.0 },
+    { "itemNo": "4",  "description": "Safety",                                  "page": 2, "c": 4000.00,   "d": 4000.00,   "e": 0, "f": 0, "g": 4000.00,   "pct": 1.0 },
+    { "itemNo": "5",  "description": "Field Truck",                             "page": 2, "c": 6000.00,   "d": 6000.00,   "e": 0, "f": 0, "g": 6000.00,   "pct": 1.0 },
+    { "itemNo": "6",  "description": "Fuel, Oil and Maintenance",               "page": 2, "c": 6000.00,   "d": 6000.00,   "e": 0, "f": 0, "g": 6000.00,   "pct": 1.0 },
+    { "itemNo": "7",  "description": "Equipment Rental",                        "page": 2, "c": 6000.00,   "d": 6000.00,   "e": 0, "f": 0, "g": 6000.00,   "pct": 1.0 },
+    { "itemNo": "8",  "description": "Consumables & Tools",                     "page": 2, "c": 6000.00,   "d": 6000.00,   "e": 0, "f": 0, "g": 6000.00,   "pct": 1.0 },
+    { "itemNo": "9",  "description": "Demolition",                              "page": 2, "c": 12600.00,  "d": 12600.00,  "e": 0, "f": 0, "g": 12600.00,  "pct": 1.0 },
+    { "itemNo": "10", "description": "Miscellaneous Structural - Material",     "page": 2, "c": 4000.00,   "d": 4000.00,   "e": 0, "f": 0, "g": 4000.00,   "pct": 1.0 },
+    { "itemNo": "11", "description": "Miscellaneous Structural - Labor",        "page": 2, "c": 3000.00,   "d": 3000.00,   "e": 0, "f": 0, "g": 3000.00,   "pct": 1.0 },
+    { "itemNo": "12", "description": "Plumbing Scope - Material",               "page": 2, "c": 12000.00,  "d": 12000.00,  "e": 0, "f": 0, "g": 12000.00,  "pct": 1.0 },
+    { "itemNo": "13", "description": "Plumbing Scope - Labor",                  "page": 2, "c": 9000.00,   "d": 9000.00,   "e": 0, "f": 0, "g": 9000.00,   "pct": 1.0 },
+    { "itemNo": "14", "description": "Mechanical ID",                           "page": 2, "c": 1000.00,   "d": 1000.00,   "e": 0, "f": 0, "g": 1000.00,   "pct": 1.0 },
+    { "itemNo": "15", "description": "Ductwork & Piping - Material",            "page": 2, "c": 32000.00,  "d": 32000.00,  "e": 0, "f": 0, "g": 32000.00,  "pct": 1.0 },
+    { "itemNo": "16", "description": "Ductwork & Piping - Labor",               "page": 2, "c": 24000.00,  "d": 24000.00,  "e": 0, "f": 0, "g": 24000.00,  "pct": 1.0 },
+    { "itemNo": "17", "description": "HVAC Controls",                           "page": 2, "c": 85000.00,  "d": 85000.00,  "e": 0, "f": 0, "g": 85000.00,  "pct": 1.0 },
+    { "itemNo": "18", "description": "Air Handling Units - Material",           "page": 2, "c": 104000.00, "d": 104000.00, "e": 0, "f": 0, "g": 104000.00, "pct": 1.0 },
+    { "itemNo": "19", "description": "Air Handling Units - Labor",              "page": 2, "c": 8000.00,   "d": 8000.00,   "e": 0, "f": 0, "g": 8000.00,   "pct": 1.0 },
+    { "itemNo": "20", "description": "Air Distribution Equipment - Material",   "page": 2, "c": 11800.00,  "d": 11800.00,  "e": 0, "f": 0, "g": 11800.00,  "pct": 1.0 },
+    { "itemNo": "21", "description": "Air Distribution Equipment - Labor",      "page": 2, "c": 1600.00,   "d": 1600.00,   "e": 0, "f": 0, "g": 1600.00,   "pct": 1.0 },
+    { "itemNo": "22", "description": "Electrical Scope - Material",             "page": 2, "c": 14000.00,  "d": 14000.00,  "e": 0, "f": 0, "g": 14000.00,  "pct": 1.0 },
+    { "itemNo": "23", "description": "Electrical Scope - Labor",                "page": 2, "c": 11000.00,  "d": 11000.00,  "e": 0, "f": 0, "g": 11000.00,  "pct": 1.0 },
+    { "itemNo": "24", "description": "CO #02 - Additional Excavation",          "page": 2, "c": 3085.00,   "d": 0,         "e": 3085.00, "f": 0, "g": 3085.00, "pct": 1.0 }
+  ],
+
+  "grandTotals": {
+    "c": 440085.00, "d": 437000.00, "e": 3085.00, "f": 0, "g": 440085.00,
+    "h": 0, "i": 0
+  },
+
+  "prior": {
+    "applicationNumber": "previous (reconstructed)",
+    "line4": 437000.00,
+    "line6": 415150.00,
+    "line5Total": 21850.00
+  },
+
+  "expected": {
+    "verdict": "no-issues-found",
+    "findings": []
+  }
+}

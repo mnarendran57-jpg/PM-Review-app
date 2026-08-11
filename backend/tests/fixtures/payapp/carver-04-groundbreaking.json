@@ -1,0 +1,460 @@
+{
+ "kind": "coverage",
+ "name": "Carver HS App 04 \u2014 a line billed for twice its documentation",
+ "meta": {
+  "applicationNumber": "4",
+  "periodTo": "2026-04-30",
+  "projectName": "Aldine ISD - Carver High School Rebuild - GMP 01 Demo and Abatement",
+  "contractor": "Bartlett Cocke General Contractors, LLC"
+ },
+ "printedTotals": {
+  "thisPeriod": 464236.84
+ },
+ "subcontractors": [
+  "IDR",
+  "Greenrise",
+  "GreenScape",
+  "Watson Signs & Monuments"
+ ],
+ "documentationScope": [
+  "Ground Breaking"
+ ],
+ "lineItems": [
+  {
+   "description": "General Conditions",
+   "division": "DIVISION 1 - General Conditions",
+   "page": 2,
+   "originalValue": 484339.0,
+   "changeInValue": 0.0,
+   "scheduledValue": 484339.0,
+   "previous": 205486.12,
+   "thisPeriod": 77541.71,
+   "totalToDate": 283027.83,
+   "retainage": 14151.39,
+   "evidence": "ledger",
+   "$why": "Evidenced by the job-cost transaction report and its invoice packet, which the backup engine reconciles line by line."
+  },
+  {
+   "description": "General Liability / Umbrella",
+   "division": "DIVISION 1 - General Conditions",
+   "page": 2,
+   "originalValue": 9917.0,
+   "changeInValue": 0.0,
+   "scheduledValue": 9917.0,
+   "previous": 9917.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 9917.0,
+   "retainage": 495.85
+  },
+  {
+   "description": "Payment & Performance Bond",
+   "division": "DIVISION 1 - General Conditions",
+   "page": 2,
+   "originalValue": 13478.0,
+   "changeInValue": 10796.0,
+   "scheduledValue": 24274.0,
+   "previous": 24274.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 24274.0,
+   "retainage": 1213.7
+  },
+  {
+   "description": "Subcontractor Default Insurance",
+   "division": "DIVISION 1 - General Conditions",
+   "page": 2,
+   "originalValue": 20586.0,
+   "changeInValue": 0.0,
+   "scheduledValue": 20586.0,
+   "previous": 10066.71,
+   "thisPeriod": 0.0,
+   "totalToDate": 10066.71,
+   "retainage": 503.34
+  },
+  {
+   "description": "Building Permit",
+   "division": "DIVISION 1 - General Conditions",
+   "page": 2,
+   "originalValue": 4048.0,
+   "changeInValue": 0.0,
+   "scheduledValue": 4048.0,
+   "previous": 645.85,
+   "thisPeriod": 177.24,
+   "totalToDate": 823.09,
+   "retainage": 41.15
+  },
+  {
+   "description": "Plan Checking Fee",
+   "division": "DIVISION 1 - General Conditions",
+   "page": 2,
+   "originalValue": 1075.0,
+   "changeInValue": 0.0,
+   "scheduledValue": 1075.0,
+   "previous": 0.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 0.0,
+   "retainage": 0.0
+  },
+  {
+   "description": "Ground Breaking",
+   "division": "DIVISION 1 - General Conditions",
+   "page": 2,
+   "originalValue": null,
+   "changeInValue": 12573.27,
+   "scheduledValue": 12573.27,
+   "previous": 0.0,
+   "thisPeriod": 12573.27,
+   "totalToDate": 12573.27,
+   "retainage": 628.66
+  },
+  {
+   "description": "Demolition - IDR",
+   "division": "DIVISION 2 - Existing Conditions",
+   "page": 2,
+   "originalValue": 749270.0,
+   "changeInValue": -132890.0,
+   "scheduledValue": 616380.0,
+   "previous": 144966.0,
+   "thisPeriod": 257114.0,
+   "totalToDate": 402080.0,
+   "retainage": 20104.0
+  },
+  {
+   "description": "Relocate Statue - Watson Signs & Monuments",
+   "division": "DIVISION 2 - Existing Conditions",
+   "page": 2,
+   "originalValue": null,
+   "changeInValue": 5095.0,
+   "scheduledValue": 5095.0,
+   "previous": 5095.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 5095.0,
+   "retainage": 254.75
+  },
+  {
+   "description": "Survey Existing Piers - IDR",
+   "division": "DIVISION 2 - Existing Conditions",
+   "page": 2,
+   "originalValue": null,
+   "changeInValue": 6050.0,
+   "scheduledValue": 6050.0,
+   "previous": 0.0,
+   "thisPeriod": 1512.5,
+   "totalToDate": 1512.5,
+   "retainage": 75.63
+  },
+  {
+   "description": "Abatement - IDR",
+   "division": "DIVISION 2 - Existing Conditions",
+   "page": 2,
+   "originalValue": 101200.0,
+   "changeInValue": -11650.0,
+   "scheduledValue": 89550.0,
+   "previous": 74832.0,
+   "thisPeriod": 14718.0,
+   "totalToDate": 89550.0,
+   "retainage": 4477.5
+  },
+  {
+   "description": "Temporary Power Permit Fee",
+   "division": "DIVISION 2 - Existing Conditions",
+   "page": 2,
+   "originalValue": 0.0,
+   "changeInValue": 8896.33,
+   "scheduledValue": 8896.33,
+   "previous": 8869.0,
+   "thisPeriod": 27.33,
+   "totalToDate": 8896.33,
+   "retainage": 444.82
+  },
+  {
+   "description": "BC-31.92 Roadway Mud & Dust Control - BCGC Self-Perform",
+   "division": "DIVISION 31 - Site Work",
+   "page": 2,
+   "originalValue": 69128.0,
+   "changeInValue": 0.0,
+   "scheduledValue": 69128.0,
+   "previous": 17282.0,
+   "thisPeriod": 17282.0,
+   "totalToDate": 34564.0,
+   "retainage": 1728.2
+  },
+  {
+   "description": "Erosion Controls - Greenrise",
+   "division": "DIVISION 31 - Site Work",
+   "page": 2,
+   "originalValue": 15807.0,
+   "changeInValue": -1686.0,
+   "scheduledValue": 14121.0,
+   "previous": 5430.0,
+   "thisPeriod": 400.0,
+   "totalToDate": 5830.0,
+   "retainage": 291.5
+  },
+  {
+   "description": "BC-31.91 Weekly SWPPP Maintenenance - BCGC Self-Perform",
+   "division": "DIVISION 31 - Site Work",
+   "page": 2,
+   "originalValue": 24521.0,
+   "changeInValue": 0.0,
+   "scheduledValue": 24521.0,
+   "previous": 7356.3,
+   "thisPeriod": 7356.3,
+   "totalToDate": 14712.6,
+   "retainage": 735.63
+  },
+  {
+   "description": "Tree Protection - GreenScape",
+   "division": "DIVISION 32 - Exterior Improvements",
+   "page": 2,
+   "originalValue": 89052.0,
+   "changeInValue": 21328.0,
+   "scheduledValue": 110380.0,
+   "previous": 94380.0,
+   "thisPeriod": 3200.0,
+   "totalToDate": 97580.0,
+   "retainage": 4879.0
+  },
+  {
+   "description": "Watering, Protection Maintenance, Tree Foliage - BC-32.91 BCGC Self-Perform",
+   "division": "DIVISION 32 - Exterior Improvements",
+   "page": 2,
+   "originalValue": 47825.0,
+   "changeInValue": 0.0,
+   "scheduledValue": 47825.0,
+   "previous": 9565.0,
+   "thisPeriod": 11956.25,
+   "totalToDate": 21521.25,
+   "retainage": 1076.06
+  },
+  {
+   "description": "CM Construction Contingency",
+   "division": "Contingencies / Allowances",
+   "page": 2,
+   "originalValue": 36730.0,
+   "changeInValue": -2323.0,
+   "scheduledValue": 34407.0,
+   "previous": 0.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 0.0,
+   "retainage": 0.0
+  },
+  {
+   "description": "AEA 01 CPR 001 - Camera Existing Storm Lines",
+   "division": "Contingencies / Allowances",
+   "page": 2,
+   "originalValue": null,
+   "changeInValue": 2323.0,
+   "scheduledValue": 2323.0,
+   "previous": 2323.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 2323.0,
+   "retainage": 116.15
+  },
+  {
+   "description": "Allowance #1 - Assistance with Removal of Loose Furniture",
+   "division": "Contingencies / Allowances",
+   "page": 2,
+   "originalValue": 20000.0,
+   "changeInValue": 0.0,
+   "scheduledValue": 20000.0,
+   "previous": 0.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 0.0,
+   "retainage": 0.0
+  },
+  {
+   "description": "CPR No. description",
+   "division": "Contingencies / Allowances",
+   "page": 2,
+   "originalValue": null,
+   "changeInValue": 0.0,
+   "scheduledValue": 0.0,
+   "previous": 0.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 0.0,
+   "retainage": 0.0
+  },
+  {
+   "description": "Allowance #2 - Unknown Deep Foundation Removal",
+   "division": "Contingencies / Allowances",
+   "page": 2,
+   "originalValue": 400000.0,
+   "changeInValue": 0.0,
+   "scheduledValue": 400000.0,
+   "previous": 0.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 0.0,
+   "retainage": 0.0
+  },
+  {
+   "description": "CPR No. description",
+   "division": "Contingencies / Allowances",
+   "page": 2,
+   "originalValue": null,
+   "changeInValue": 0.0,
+   "scheduledValue": 0.0,
+   "previous": 0.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 0.0,
+   "retainage": 0.0
+  },
+  {
+   "description": "Allowance #3 - Unforeseen Asbestos",
+   "division": "Contingencies / Allowances",
+   "page": 2,
+   "originalValue": 50000.0,
+   "changeInValue": -44744.0,
+   "scheduledValue": 5256.0,
+   "previous": 0.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 0.0,
+   "retainage": 0.0
+  },
+  {
+   "description": "AEA 04 CPR 005 - Unforeseen Asbestos Abatement - Windows",
+   "division": "Contingencies / Allowances",
+   "page": 2,
+   "originalValue": null,
+   "changeInValue": 10582.0,
+   "scheduledValue": 10582.0,
+   "previous": 10582.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 10582.0,
+   "retainage": 529.1
+  },
+  {
+   "description": "CPR 006 - Unforeseen Asbestos - Vapor Barrier AEA 05 Under Gym Slab",
+   "division": "Contingencies / Allowances",
+   "page": 2,
+   "originalValue": null,
+   "changeInValue": 34162.0,
+   "scheduledValue": 34162.0,
+   "previous": 0.0,
+   "thisPeriod": 34162.0,
+   "totalToDate": 34162.0,
+   "retainage": 1708.1
+  },
+  {
+   "description": "Allowance #4 - Tree Trimming / Arborist",
+   "division": "Contingencies / Allowances",
+   "page": 2,
+   "originalValue": 40000.0,
+   "changeInValue": -27335.0,
+   "scheduledValue": 12665.0,
+   "previous": 0.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 0.0,
+   "retainage": 0.0
+  },
+  {
+   "description": "AEA 02 CPR 002 - Tree Trimming & Arborist Inspections",
+   "division": "Contingencies / Allowances",
+   "page": 3,
+   "originalValue": null,
+   "changeInValue": 27335.0,
+   "scheduledValue": 27335.0,
+   "previous": 0.0,
+   "thisPeriod": 18928.58,
+   "totalToDate": 18928.58,
+   "retainage": 946.43
+  },
+  {
+   "description": "Allowance #5 - Site Security (Cameras)",
+   "division": "Contingencies / Allowances",
+   "page": 3,
+   "originalValue": 48000.0,
+   "changeInValue": -15991.0,
+   "scheduledValue": 32009.0,
+   "previous": 0.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 0.0,
+   "retainage": 0.0
+  },
+  {
+   "description": "AEA 03 CPR 003 - Site Surveillance Cameras",
+   "division": "Contingencies / Allowances",
+   "page": 3,
+   "originalValue": null,
+   "changeInValue": 15991.0,
+   "scheduledValue": 15991.0,
+   "previous": 7466.24,
+   "thisPeriod": 0.0,
+   "totalToDate": 7466.24,
+   "retainage": 373.31
+  },
+  {
+   "description": "Work Remaining to be Procured",
+   "division": "Work Remaining to be Procured",
+   "page": 3,
+   "originalValue": null,
+   "changeInValue": 62907.67,
+   "scheduledValue": 62907.67,
+   "previous": 0.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 0.0,
+   "retainage": 0.0
+  },
+  {
+   "description": "Buyout Contingency",
+   "division": "Buyout Contingency",
+   "page": 3,
+   "originalValue": null,
+   "changeInValue": 18579.73,
+   "scheduledValue": 18579.73,
+   "previous": 0.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 0.0,
+   "retainage": 0.0
+  },
+  {
+   "description": "CM Fee",
+   "division": "Approved Change Orders to Contract",
+   "page": 3,
+   "originalValue": 35126.0,
+   "changeInValue": 0.0,
+   "scheduledValue": 35126.0,
+   "previous": 9995.36,
+   "thisPeriod": 7287.66,
+   "totalToDate": 17283.02,
+   "retainage": 864.15,
+   "isFormula": true
+  },
+  {
+   "description": "Change Order Totals",
+   "division": "Approved Change Orders to Contract",
+   "page": 3,
+   "originalValue": null,
+   "changeInValue": 0.0,
+   "scheduledValue": 0.0,
+   "previous": 0.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 0.0,
+   "retainage": 0.0
+  }
+ ],
+ "documentation": [
+  {
+   "line": "Ground Breaking",
+   "kind": "invoice",
+   "vendor": "The Tent Co.",
+   "ref": "231162902",
+   "date": "2026-03-09",
+   "amount": 6902.02,
+   "fees": 224.52,
+   "description": "Tent, tables and staging for the groundbreaking ceremony, Mar 6-10 2026",
+   "note": "Event organised through K Strategies. Charged $6,473.54 on Mar 4 and $653.00 on Mar 10 to a Mastercard ending 4561; the invoice shows a zero balance."
+  }
+ ],
+ "expected": {
+  "verdict": "do-not-certify",
+  "findings": [
+   {
+    "id": "C2",
+    "field": "Ground Breaking",
+    "why": "$12,573.27 billed against $6,902.02 of invoice"
+   }
+  ]
+ },
+ "$source": "Schedule of values parsed from \"253016 - Pay Application 04 - April 2026-signed.pdf\" pages 2-3; all eight columns tie to the printed JOB TOTAL row exactly. Documentation read from \"Carver HS - App 04 Tent Invoice.pdf\".",
+ "$note": "Ground Breaking is invisible to both other engines. The arithmetic is flawless \u2014 the row adds up, the column totals tie, retainage is exactly 5% of the line \u2014 and the cost is absent from the transaction report, so the backup engine has nothing to reconcile. The only way to see it is to compare what a line bills against the documents attached to that line. Every tell of a pass-through cost is present at once: no original scheduled value, funded by a $12,573.27 reallocation out of contingency (the change column across the whole schedule nets to zero), nothing to nothing-to-100% in a single application, and an odd-cent amount that can only be a total of actual costs."
+}

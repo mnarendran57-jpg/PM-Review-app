@@ -10,7 +10,8 @@ const { brandingFor } = require('../lib/orgBranding');
 const { annotatePayAppPdf } = require('../lib/payAppAnnotate');
 const { extractContractTerms } = require('../lib/contractExtract');
 const { proposePlaceholders, applyPlaceholders, readDocx } = require('../lib/memoCover');
-const { auditPayApp } = require('../lib/payAppAudit');
+const { runEngines } = require('../lib/payAppEngines');
+const { buildReportHtml } = require('../lib/payAppReportHtml');
 const { buildSubReconciliation, runMissedItemChecks } = require('../lib/payAppReconcile');
 const { buildSiteVerificationChecklist } = require('../lib/payAppChecklist');
 const { backfillPayApp } = require('../lib/payAppNormalize');
@@ -564,65 +565,58 @@ router.post('/', upload.fields([
       }
     }
 
-    // The audit half, conducted against backend/standards/cmar-pay-app-audit.md. It carries
-    // the checks the arithmetic cannot make — notarisation, subcontractor certification dates,
-    // retainage against the GC's own rate, change orders landing in contingency, lien waivers,
-    // and the tax sweep — and recomputes the G702 lines itself so a disagreement with the
-    // figures computed here becomes a visible finding rather than two silent versions.
+    // The deterministic engines: I1-I24 on the G702 and continuation sheet, S1-S9 down the
+    // contractor's breakdown into each subcontractor's own application, R1-R12 across a cost
+    // report and its receipts, C1-C7 on the documents attached to each billed line.
     //
-    // Never allowed to sink the review: the deterministic checks above have already run and
-    // are what the report's figures come from.
-    let audit = null;
+    // These replaced a model-conducted audit that used to run here. The engines only compare
+    // figures that have already been read, every rule is measured against real applications in
+    // backend/tests/fixtures/payapp, and each engine states out loud when it had no documents to
+    // work with — so a quiet report can never mean an unexamined one.
+    //
+    // Never allowed to sink the review: the checks above have already run and are what the
+    // stored figures come from.
+    let engineResult = null;
     try {
-      audit = await auditPayApp({
-        payAppBuffer: currentFile.buffer,
-        backupBuffers: backupFiles.map(f => f.buffer),
-        contractTerms,
-        scopeBaseline,
-        priorApplication,
-        retainageRate: retainagePolicy?.rate ?? null,
-        codeFigures: {
-          line3_contractSumToDate: current.summary.line3 ?? null,
-          line4_totalCompletedAndStored: current.summary.line4 ?? null,
-          line5_retainage: current.summary.line5 ?? null,
-          line6_totalEarnedLessRetainage: current.summary.line6 ?? null,
-          line7_lessPreviousCertificates: current.summary.line7 ?? null,
-          line8_currentPaymentDue: current.summary.line8 ?? null,
-          line9_balanceToFinish: current.summary.line9 ?? null,
-        },
-      });
+      engineResult = runEngines(
+        { current, previous, contract, retainagePolicy, priorApplication }, contractTerms);
     } catch (err) {
-      console.error('Pay app audit failed (review continues):', err.message);
-      audit = {
-        unavailable: true,
-        notes: `The contract audit could not be completed (${friendlyAiError(err)}). The arithmetic checks are unaffected.`,
-      };
+      console.error('Pay app engines failed (review continues):', err.message);
     }
 
-    // Kept on the same field the report and the stored reviews already read, so existing
-    // records and the new ones render through one path.
-    const compliance = audit && !audit.unavailable ? {
-      audit,
-      scopeComparison: audit.scopeComparison,
+    // The old compliance shape is still written so stored reviews and the markdown report keep
+    // rendering through one path. Its contents now come from the engines rather than a model.
+    const engineTax = (engineResult?.findings || []).filter(f => f.id === 'S7');
+    const compliance = engineResult ? {
+      audit: null,
+      scopeComparison: null,
       scopeSource: scopeBaseline?.source ?? null,
-      taxFindings: (audit.taxInvoices || []).filter(t => !t.exemptionApplied).map(t => ({
-        where: [t.vendor, t.invoiceRef].filter(Boolean).join(' — '),
-        description: t.vendor || t.invoiceRef,
-        amount: t.taxAmount,
-        detail: t.detail,
+      taxFindings: engineTax.map(f => ({
+        where: [f.where?.vendor, f.where?.ref].filter(Boolean).join(' — '),
+        description: f.where?.vendor || f.where?.ref,
+        amount: f.actual,
+        detail: f.detail,
       })),
       unallowableFindings: [],
-      backupCoverage: audit.untracedBilling?.length
-        ? `${audit.untracedBilling.length} billed item(s) have no traceable backup.`
-        : null,
-      notes: audit.notCheckable?.length ? audit.notCheckable.join(' ') : null,
+      backupCoverage: engineResult.notChecked.length ? engineResult.notChecked.join(' ') : null,
+      notes: null,
       incomplete: false,
-    } : { audit, scopeComparison: null, scopeSource: null, taxFindings: [], unallowableFindings: [], backupCoverage: null, notes: audit?.notes || null, incomplete: true };
+    } : {
+      audit: null, scopeComparison: null, scopeSource: null, taxFindings: [],
+      unallowableFindings: [], backupCoverage: null,
+      notes: 'The review engines could not be run on this application.', incomplete: true,
+    };
 
     const report = buildReport({ data, results, compliance, contractTerms, subReconciliation: subRecon.rows });
 
-    const criticalCount = results.filter(r => r.critical && r.status === 'FAIL').length;
-    const failCount = results.filter(r => r.status === 'FAIL').length;
+    // The engines are the authority on what is wrong with an application, so the counts the
+    // history list sorts and colours by come from them when they ran.
+    const criticalCount = engineResult
+      ? engineResult.stats.critical
+      : results.filter(r => r.critical && r.status === 'FAIL').length;
+    const failCount = engineResult
+      ? engineResult.stats.failed
+      : results.filter(r => r.status === 'FAIL').length;
 
     const currentKey = (await storage.storeFile('pay-app', currentFile.buffer, currentFile.mimetype, currentFile.originalname)).key;
 
@@ -633,8 +627,8 @@ router.post('/', upload.fields([
         extracted_data, checks_result, report_markdown,
         current_file_name, current_file, current_file_key, previous_review_id,
         contract_sum, co_log, critical_count, fail_count, created_by, project_id,
-        compliance_findings
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        compliance_findings, engine_result
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.orgId,
       current.summary.projectName || null,
@@ -654,10 +648,11 @@ router.post('/', upload.fields([
       criticalCount, failCount,
       req.body.created_by || null,
       projectId,
-      compliance ? JSON.stringify(compliance) : null
+      compliance ? JSON.stringify(compliance) : null,
+      engineResult ? JSON.stringify(engineResult) : null
     );
 
-    res.json({ id: insertResult.lastInsertRowid, projectId, report, results });
+    res.json({ id: insertResult.lastInsertRowid, projectId, report, results, engineResult });
   } catch (err) {
     console.error('Pay app review error:', err);
     res.status(500).json({ error: err.message });
@@ -700,8 +695,33 @@ router.get('/:id', (req, res) => {
     checklist: report.checklist,
     co_log: row.co_log ? JSON.parse(row.co_log) : null,
     compliance_findings: compliance,
+    engine_result: row.engine_result ? JSON.parse(row.engine_result) : null,
     report,
   });
+});
+
+// The review as the PM reads it. Rendered from the stored engine output rather than re-run, so
+// reopening a review shows exactly what it showed the day it was produced. Reviews created
+// before the engines existed have nothing stored and are told so plainly rather than being
+// silently re-scored against rules that did not exist at the time.
+router.get('/:id/report.html', (req, res) => {
+  const row = visibleReview(req);
+  if (!row) return res.status(404).send('Not found');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  if (!row.engine_result) {
+    return res.send('<!doctype html><meta charset="utf-8"><body style="font:15px/1.5 system-ui;'
+      + 'color:#535b67;padding:32px;max-width:44em">This review was produced before the current '
+      + 'review engines were in place, so there is no findings report to render. The original '
+      + 'report is still available as Markdown and PDF. Re-running the application will produce '
+      + 'the full report.</body>');
+  }
+  const data = JSON.parse(row.extracted_data);
+  res.send(buildReportHtml({
+    result: JSON.parse(row.engine_result),
+    summary: data.current?.summary || {},
+    projectName: row.project_name,
+    contractor: data.current?.summary?.contractor || null,
+  }));
 });
 
 router.get('/:id/report.md', (req, res) => {

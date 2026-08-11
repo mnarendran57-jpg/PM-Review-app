@@ -1,0 +1,73 @@
+{
+  "$source": "Pay App #3 Retaiange.pdf — G702 p1, G703 p2, waiver p3",
+  "$note": "A retainage release. The contractor left the held retainage in Line 5 instead of zeroing it, then wrote the payment they wanted into Lines 8 and 9 rather than the ones the form produces. The amount requested — $16,204.36 — is in fact correct: it is exactly what application 2 held. So the money is right and the form is wrong, which is why the verdict must be do-not-certify rather than an accusation of overbilling.",
+  "name": "Horizon #3 — 504 Main Sewer (retainage release, form self-contradictory)",
+
+  "meta": {
+    "applicationNumber": "3",
+    "periodTo": "2025-11-30",
+    "projectName": "504 Main 12\" Sewer Repair",
+    "contractNumber": "0000142217",
+    "isRetainageRelease": true
+  },
+  "contract": { "retainageRate": 0.05 },
+
+  "summary": {
+    "line1": 252957.20,
+    "line2": 71130.00,
+    "line3": 324087.20,
+    "line4": 324087.20,
+    "line5aRate": 0,
+    "line5aAmount": 16204.36,
+    "line5bRate": 0,
+    "line5bAmount": 0,
+    "line5Total": 16204.36,
+    "line6": 307882.84,
+    "line7": 307882.84,
+    "line8": 16204.36,
+    "line9": 0.00,
+    "amountCertified": 16204.36
+  },
+
+  "lineItems": [
+    { "itemNo": "1", "description": "Demo and Reinstall ceiling grid, protect floor", "page": 2,
+      "c": 33007.00, "d": 33007.00, "e": 0, "f": 0, "g": 33007.00, "pct": 1.0, "h": 0, "i": 1650.35 },
+    { "itemNo": "2", "description": "Material and Labor to Replace 10\" and 12\" Pipe", "page": 2,
+      "c": 219950.20, "d": 219957.20, "e": 0, "f": 0, "g": 219950.20, "pct": 1.0, "h": null, "i": 10997.51 },
+    { "itemNo": "3", "description": "12\" Main Repair CO#1", "page": 2,
+      "c": 71130.00, "d": 71130.00, "e": 0, "f": 0, "g": 71130.00, "pct": 1.0, "h": null, "i": 3556.50 }
+  ],
+
+  "grandTotals": {
+    "c": 324087.20, "d": 324094.20, "e": 0, "f": 0, "g": 324087.20,
+    "h": 0, "i": 16204.36, "retainageHeaderRate": 0
+  },
+
+  "waiver": { "amount": 16204.36, "payer": "MD Anderson", "signerName": "Brian Donaho" },
+
+  "prior": {
+    "applicationNumber": "2",
+    "line4": 324087.20,
+    "line6": 307882.84,
+    "line5Total": 16204.36,
+    "lineItems": [
+      { "itemNo": "1", "g": 33007.00 },
+      { "itemNo": "2", "g": 219950.20 },
+      { "itemNo": "3", "g": 71130.00 }
+    ]
+  },
+
+  "expected": {
+    "verdict": "do-not-certify",
+    "findings": [
+      { "id": "I1",  "itemNo": "2", "why": "$7.00 — column G reads 219,950.20 while D+E+F is 219,957.20" },
+      { "id": "I3",  "itemNo": "2", "why": "from-previous 219,957.20 against 219,950.20 completed on app 2" },
+      { "id": "I9",  "why": "Line 8 asks 16,204.36 but Line 6 less Line 7 is 0.00" },
+      { "id": "I10", "why": "Line 9 reads 0.00 but Line 3 less Line 6 is 16,204.36" },
+      { "id": "I12", "why": "0% stated against $16,204.36 entered, on a release where it must be zero" },
+      { "id": "I14", "field": "line5", "why": "a release must hold no retainage" },
+      { "id": "I14", "field": "retainageColumn", "why": "the continuation sheet still shows 16,204.36 held" },
+      { "id": "I17", "itemNo": "2", "field": "d", "why": "from-previous exceeds the scheduled value by $7.00" }
+    ]
+  }
+}

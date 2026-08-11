@@ -125,11 +125,87 @@ function payAppShape(withSubBreakdowns) {
             type: 'array',
             items: {
               type: 'object',
-              properties: { description: { type: 'string' }, amount: { type: 'number' } },
+              properties: {
+                description: { type: 'string' },
+                amount: { type: 'number' },
+                vendor: {
+                  type: 'string',
+                  description: 'The vendor or subcontractor named on this row, if one is named.',
+                },
+                ref: {
+                  type: 'string',
+                  description: 'The invoice or draw number printed on the row, exactly as shown — '
+                    + '"225020-003-2", "64328", "AR847666". Copy it character for character; the '
+                    + 'FORMAT of this reference is itself checked, so a tidied-up version is worse '
+                    + 'than none.',
+                },
+                category: {
+                  type: 'string',
+                  description: 'The heading this row sits under on the breakdown — SUBCONTRACTS, '
+                    + 'LABOR, MATERIAL PURCHASES, EQUIPMENT, OTHER. Copy the heading as printed.',
+                },
+                date: { type: 'string', description: 'Row date, YYYY-MM-DD if possible.' },
+              },
             },
           },
         },
         required: ['subName'],
+      },
+    };
+
+    // The contractor's own invoice summary — the block that states the cost base, the fee and its
+    // rate, the total and the retainage. Every figure on it is recomputed, so it is worth having.
+    shape.properties.contractorInvoice = {
+      type: 'object',
+      description: 'Omit unless the contractor encloses its own invoice with a summary block.',
+      properties: {
+        feeBase: { type: 'number', description: 'The cost figure the fee is calculated on.' },
+        feeRate: { type: 'number', description: 'Fee rate as a decimal — 1.90% is 0.019.' },
+        fee: { type: 'number' },
+        invoiceTotal: { type: 'number' },
+        retainage: { type: 'number' },
+        currentDue: { type: 'number' },
+      },
+    };
+
+    // Subcontractor applications enclosed in the package. These are what let a schedule line be
+    // traced to the company that actually did the work.
+    shape.properties.subApplications = {
+      type: 'array',
+      description: "Empty if the package encloses no subcontractor applications of their own.",
+      items: {
+        type: 'object',
+        properties: {
+          vendor: { type: 'string' },
+          applicationNumber: { type: 'string' },
+          commitment: {
+            type: 'string',
+            description: 'The commitment or subcontract number, e.g. "225020-003". Exactly as printed.',
+          },
+          contractFor: { type: 'string', description: 'The scope named on their application.' },
+          contractSum: { type: 'number', description: 'Their contract sum to date, including changes.' },
+          previous: { type: 'number', description: 'Their line 7 / from-previous-applications figure.' },
+          thisPeriod: { type: 'number', description: 'What they billed for THIS period only.' },
+          totalToDate: { type: 'number' },
+          retainage: { type: 'number', description: 'Total retainage withheld from them to date.' },
+          retainageRate: { type: 'number', description: 'As a decimal.' },
+          currentDue: { type: 'number' },
+        },
+        required: ['vendor'],
+      },
+    };
+
+    // Sales tax on backup invoices, which matters when the owner is a public body.
+    shape.properties.taxes = {
+      type: 'array',
+      description: 'Empty if no backup invoice shows a separate sales tax line.',
+      items: {
+        type: 'object',
+        properties: {
+          vendor: { type: 'string' },
+          ref: { type: 'string', description: 'Invoice number.' },
+          amount: { type: 'number', description: 'The tax amount only, not the invoice total.' },
+        },
       },
     };
   }
@@ -166,7 +242,11 @@ Rules:
 - If a continuation sheet spans multiple pages, include every line item from every page in that application's single "lineItems" array, in order.
 - Do not skip any line item, including subtotal-only rows unless they are clearly a page subtotal (put those in pageSubtotals, not lineItems) or the final grand total (put that in grandTotalRow, not lineItems).
 - Never merge or average line items to shorten the response — every row on the continuation sheet must appear.
-- "subBreakdowns" (current application only): capture EVERY subcontractor or vendor cost-breakdown section that appears after the continuation sheet — these detail the amount shown as a single line on the G703. Read "basis" from the breakdown's own wording (a heading like "this period" or "billed to date"); use "unclear" rather than guessing. Include every component row. If the document has no such sections, use [].`;
+- "subBreakdowns" (current application only): capture EVERY subcontractor or vendor cost-breakdown section that appears after the continuation sheet — these detail the amount shown as a single line on the G703. Read "basis" from the breakdown's own wording (a heading like "this period" or "billed to date"); use "unclear" rather than guessing. Include every component row. If the document has no such sections, use [].
+- On every component row, copy the invoice or draw reference EXACTLY as printed — "225020-003-2", "64328", "AR847666". The format of that reference is itself checked (a commitment draw looks different from a vendor invoice number), so a cleaned-up or reformatted reference is worse than no reference at all. Record the heading each row sits under as "category".
+- "subApplications": if the package encloses subcontractors' OWN applications for payment — their G702/G703 addressed to the contractor rather than to the owner — record each one. These are usually behind the contractor's invoice. Take "thisPeriod" from their THIS PERIOD column only, never their total to date.
+- "contractorInvoice": if the contractor encloses its own invoice with a summary block stating a cost base, a fee and its rate, a total and retainage, record those figures.
+- "taxes": if any backup invoice shows a separate sales tax line, record the tax amount only — not the invoice total.`;
 }
 
 const TOO_MANY_LINE_ITEMS = 'These pay applications have too many line items to extract in one '
