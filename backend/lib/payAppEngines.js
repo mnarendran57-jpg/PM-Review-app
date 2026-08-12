@@ -7,7 +7,7 @@
 // about, and a check that can be proved against a fixture is worth more than one that sounds
 // confident. Everything in backend/tests/fixtures/payapp measures exactly this code.
 //
-// Seven engines, and each says out loud when it has nothing to work with rather than passing
+// Eight engines, and each says out loud when it has nothing to work with rather than passing
 // silently. A pay application submitted with no cost report gets no reconciliation findings —
 // and the report must say that, or "no issues found" becomes a lie of omission.
 //
@@ -18,6 +18,7 @@
 //   payAppWaivers        W1-W8    is it safe to pay — who has released, and for how much
 //   payAppVendorRollup   V1-V4    one subcontractor against EVERY line billing their scope
 //   payAppTax            T1-T8    who owes the tax, under this contract's own words
+//   payAppContracts      K1-K6    each party's billing against the contract signed with THEM
 //
 // The last one is the only engine that reads across lines. Everything else compares a row to
 // something; it compares a subcontract to a set of rows, which is the only way to see scope that
@@ -30,6 +31,7 @@ const { runCoverageChecks, coverageTable } = require('./payAppCoverage');
 const { runWaiverChecks, waiverTable } = require('./payAppWaivers');
 const { runVendorRollupChecks, vendorRollupTable } = require('./payAppVendorRollup');
 const { runTaxChecks, taxTable } = require('./payAppTax');
+const { runContractChecks, contractTable, CSR } = require('./payAppContracts');
 
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 const num = v => (isNum(v) ? v : 0);
@@ -334,6 +336,41 @@ function taxInput(data, contractTerms) {
   };
 }
 
+// Every contract on file, each checked against the party it was signed with.
+//
+// Unlike every other adapter this one takes the CONTRACTS as its subject rather than the
+// application: the question is not "is the package complete" but "does what each party billed
+// match what each party agreed". It runs whenever a delivery method was recorded even with no
+// contract at all, because "no contract is on file" is itself the finding a reviewer needs.
+function contractInput(data, contractTerms, options = {}) {
+  const { current } = data;
+  const s = current.summary || {};
+  const contracts = options.contracts || [];
+  if (!contracts.length && !options.deliveryMethod) return null;
+
+  // Which schedule lines belong to which subcontractor, borrowed from the rollup so the
+  // unallowable-cost check looks only at the lines a party is actually billing. Absent the rollup
+  // it is empty, and K5 simply checks fewer things rather than checking the wrong ones.
+  const rollup = (options.engines || []).find(e => e.key === 'vendorRollup');
+  const linesByVendor = {};
+  for (const r of rollup?.rolls || []) {
+    if (r.outcome === 'reconciled' || r.outcome === 'differs') linesByVendor[r.vendor.vendor] = r.lines;
+  }
+
+  return {
+    kind: 'contracts',
+    meta: { applicationNumber: s.applicationNumber, periodTo: s.periodTo, contractor: s.contractor },
+    deliveryMethod: options.deliveryMethod || null,
+    summary: s,
+    lineItems: (current.lineItems || []).map(li => ({
+      itemNo: li.itemNo, description: li.description, thisPeriod: li.e, totalToDate: li.g,
+    })),
+    subApplications: current.subApplications || [],
+    linesByVendor,
+    contracts,
+  };
+}
+
 // Why a pass stood down, in words that are true of THIS package.
 //
 // The old sentences said "no backup was submitted" whenever these engines had no input, and a
@@ -393,9 +430,33 @@ const ENGINES = [
     build: taxInput, run: runTaxChecks,
     absent: 'No separate tax line appears on any backup document read from this package, so no '
       + 'tax was reviewed. Tax buried inside a lump-sum invoice line cannot be seen.' },
+  // Last deliberately: it reads the vendor rollup's output to know which lines each subcontractor
+  // is billing, so it has to run after it.
+  { key: 'contracts', label: "each party's billing against the contract signed with them",
+    build: contractInput, run: runContractChecks,
+    absent: 'No contract is on file for this project and no delivery method was recorded, so '
+      + 'nothing on this application was checked against an agreement.' },
 ];
 
-function runEngines(data, contractTerms = null) {
+// `options` carries what the REVIEW knows rather than what the application says: which contracts
+// are on file for the project, and whether this was submitted as a CSR or CMAR package. Both come
+// from the upload form and the project's document shelf, and neither can be read off the PDF.
+// On a CSR job the contractor bills the owner directly and there are no subcontractor
+// applications to enclose. The generic sentences say a document is missing, which on that package
+// is simply false — and a report that lists three things as unsubmitted when none of them was ever
+// going to exist teaches its reader to skip the section where the real omission would appear.
+const SUBCONTRACT_PASSES = new Set(['subcontracts', 'vendorRollup']);
+
+function absentFor(engine, current, options) {
+  if (options.deliveryMethod === CSR && SUBCONTRACT_PASSES.has(engine.key)) {
+    return 'This was reviewed as a CSR application, where the contractor bills the owner directly. '
+      + `Nothing was looked for under ${engine.label} — that absence is how the job is procured `
+      + 'rather than a gap in the package.';
+  }
+  return typeof engine.absent === 'function' ? engine.absent(current) : engine.absent;
+}
+
+function runEngines(data, contractTerms = null, options = {}) {
   const engines = [];
   const findings = [];
   const notChecked = [];
@@ -405,14 +466,13 @@ function runEngines(data, contractTerms = null) {
   for (const engine of ENGINES) {
     let input = null;
     try {
-      input = engine.build(data, contractTerms);
+      input = engine.build(data, contractTerms, { ...options, engines });
     } catch (err) {
       notChecked.push(`${engine.label} — could not be prepared (${err.message}).`);
       continue;
     }
     if (!input) {
-      notChecked.push(typeof engine.absent === 'function'
-        ? engine.absent(data.current || {}) : engine.absent);
+      notChecked.push(absentFor(engine, data.current || {}, options));
       continue;
     }
     let out;
@@ -453,6 +513,8 @@ function runEngines(data, contractTerms = null) {
     coverage: byEngine('coverage') ? coverageTable(byEngine('coverage').lines) : null,
     vendorRollup: byEngine('vendorRollup') ? vendorRollupTable(byEngine('vendorRollup').rolls) : null,
     tax: byEngine('tax') ? taxTable(byEngine('tax').taxes) : null,
+    contracts: byEngine('contracts') ? contractTable(byEngine('contracts').rows) : null,
+    deliveryMethod: options.deliveryMethod || null,
     // The one figure from the tax pass that lands on a payment certificate rather than in a
     // paragraph. Null when the pass did not run, so the report can tell "nothing to deduct" apart
     // from "not checked".
@@ -598,5 +660,5 @@ function attachReadCheck(result, readCheck) {
 
 module.exports = {
   runEngines, attachReadCheck, arithmeticInput, subcontractInput, backupInput, coverageInput,
-  vendorRollupInput, taxInput,
+  vendorRollupInput, taxInput, contractInput,
 };

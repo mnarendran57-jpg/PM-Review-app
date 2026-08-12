@@ -1,0 +1,46 @@
+{
+ "kind": "contracts",
+ "name": "CSR \u2014 one contractor, one contract, no subcontractor paperwork to be missing",
+ "$source": "The shape of a CSR application: the general contractor bills the owner directly and a release of lien is the backup. The point of the fixture is what is NOT reported \u2014 no subcontract is asked after, because on this delivery method there are none.",
+ "deliveryMethod": "CSR",
+ "meta": {
+  "applicationNumber": "20",
+  "periodTo": "2026-05-31",
+  "contractor": "Horizon Group"
+ },
+ "summary": {
+  "line1": 1200000.0,
+  "line2": 45000.0,
+  "line3": 1245000.0,
+  "line4": 880000.0,
+  "line5": 88000.0
+ },
+ "lineItems": [
+  {
+   "itemNo": "1",
+   "description": "Mechanical rough-in",
+   "thisPeriod": 40000.0,
+   "totalToDate": 880000.0
+  }
+ ],
+ "subApplications": [],
+ "linesByVendor": {},
+ "contracts": [
+  {
+   "id": 1,
+   "fileName": "horizon-agreement.pdf",
+   "party": "Horizon Group",
+   "partyRole": "prime",
+   "partyScope": "Mechanical",
+   "isPrimary": true,
+   "terms": {
+    "originalContractSum": 1200000.0,
+    "retainageRate": 0.1
+   }
+  }
+ ],
+ "expected": {
+  "verdict": "no-issues-found",
+  "findings": []
+ }
+}

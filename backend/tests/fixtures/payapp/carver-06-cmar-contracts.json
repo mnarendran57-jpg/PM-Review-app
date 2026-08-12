@@ -1,0 +1,134 @@
+{
+ "kind": "contracts",
+ "name": "Carver HS application 6 \u2014 CMAR, each party against their own contract",
+ "$source": "The same package as carver-06-real-rollup.json. Contract values and retainage rates are the ones printed on each subcontractor's own G702 (pages 7, 11 and 13), which is what a subcontract would state. Greenrise is retained at 5% and IDR at 0.75% on the same job \u2014 measuring either against the contractor's rate is the error this engine exists to stop.",
+ "deliveryMethod": "CMAR",
+ "meta": {
+  "applicationNumber": "6",
+  "periodTo": "2026-06-30",
+  "contractor": "Bartlett Cocke General Contractors, LLC"
+ },
+ "summary": {
+  "line1": 2260102.0,
+  "line2": 0.0,
+  "line3": 2260102.0,
+  "line4": 1544715.79,
+  "line5": 77235.79
+ },
+ "lineItems": [
+  {
+   "itemNo": null,
+   "description": "Demolition - IDR",
+   "thisPeriod": 37000.0,
+   "totalToDate": 616380.0
+  },
+  {
+   "itemNo": null,
+   "description": "Erosion Controls - Greenrise",
+   "thisPeriod": 400.0,
+   "totalToDate": 6630.0
+  },
+  {
+   "itemNo": null,
+   "description": "Tree Protection - GreenScape",
+   "thisPeriod": 3200.0,
+   "totalToDate": 103980.0
+  }
+ ],
+ "subApplications": [
+  {
+   "vendor": "Integrated Demolition and Remediation Inc.",
+   "commitment": "253016-004",
+   "contractSum": 768561.0,
+   "previous": 720534.5,
+   "thisPeriod": 48026.5,
+   "totalToDate": 768561.0,
+   "retainage": 5776.88
+  },
+  {
+   "vendor": "GREENRISE TECHNOLOGIES LLC FKA CONSTRUCTION ECO SERVICES II LLC",
+   "commitment": "253016-002",
+   "contractSum": 14121.0,
+   "previous": 6230.0,
+   "thisPeriod": 400.0,
+   "totalToDate": 6630.0,
+   "retainage": 331.5
+  },
+  {
+   "vendor": "Greenscape Associates",
+   "commitment": "253016-003",
+   "contractSum": 137715.0,
+   "previous": 121109.58,
+   "thisPeriod": 4601.1,
+   "totalToDate": 125710.68,
+   "retainage": 6285.53
+  }
+ ],
+ "linesByVendor": {},
+ "contracts": [
+  {
+   "id": 1,
+   "fileName": "AISD-BCGC-GMP01.pdf",
+   "party": "Bartlett Cocke General Contractors, LLC",
+   "partyRole": "prime",
+   "partyScope": "GMP 01 Demo and Abatement",
+   "isPrimary": true,
+   "terms": {
+    "originalContractSum": 2260102.0,
+    "retainageRate": 0.05,
+    "taxExempt": true
+   }
+  },
+  {
+   "id": 2,
+   "fileName": "253016-004-IDR.pdf",
+   "party": "Integrated Demolition and Remediation Inc.",
+   "partyRole": "subcontractor",
+   "partyScope": "Demolition and abatement",
+   "commitment": "253016-004",
+   "terms": {
+    "originalContractSum": 705930.0,
+    "retainageRate": 0.0075
+   }
+  },
+  {
+   "id": 3,
+   "fileName": "253016-002-Greenrise.pdf",
+   "party": "Greenrise Technologies LLC",
+   "partyRole": "subcontractor",
+   "partyScope": "SWPPP",
+   "commitment": "253016-002",
+   "terms": {
+    "originalContractSum": 14121.0,
+    "retainageRate": 0.05
+   }
+  },
+  {
+   "id": 4,
+   "fileName": "253016-003-Greenscape.pdf",
+   "party": "Greenscape Associates",
+   "partyRole": "subcontractor",
+   "partyScope": "Tree protection",
+   "commitment": "253016-003",
+   "terms": {
+    "originalContractSum": 110380.0,
+    "retainageRate": 0.05
+   }
+  }
+ ],
+ "expected": {
+  "verdict": "no-issues-found",
+  "findings": [
+   {
+    "id": "K2",
+    "vendor": "Integrated Demolition and Remediation Inc.",
+    "why": "$62,631 of change orders relied on that are not on the contract held \u2014 a question about paperwork, not an overbill"
+   },
+   {
+    "id": "K2",
+    "vendor": "Greenscape Associates",
+    "why": "$27,335 of change orders relied on that are not on the contract held"
+   }
+  ]
+ }
+}

@@ -10,6 +10,33 @@ const CONTRACT_TOOL = {
   input_schema: {
     type: 'object',
     properties: {
+      // WHO the agreement is with, which is what lets a package governed by several contracts be
+      // checked against the right one. A CMAR job runs on the owner-contractor agreement plus a
+      // subcontract behind each subcontractor billing through it, and measuring a subcontractor's
+      // retainage against the contractor's rate is how a correct application gets reported.
+      party: {
+        type: 'string',
+        description: 'The company being engaged under this contract — the contractor, '
+          + 'subcontractor or supplier performing the work. NOT the owner and NOT the '
+          + 'architect. Exactly as the signature block spells it.',
+      },
+      partyRole: {
+        type: 'string',
+        enum: ['prime', 'subcontractor', 'supplier'],
+        description: '"prime" when the owner is a party to this agreement — the '
+          + 'owner-contractor or owner-construction-manager agreement. "subcontractor" when it is '
+          + 'between the contractor and someone below them. Omit if you cannot tell.',
+      },
+      partyScope: {
+        type: 'string',
+        description: 'The scope this contract covers, short — "Demolition and abatement", '
+          + '"Tree protection". Taken from the contract, not inferred.',
+      },
+      commitment: {
+        type: 'string',
+        description: 'The subcontract, commitment or purchase-order number, exactly as printed '
+          + '(e.g. "253016-004"). This is the surest way to tie a contract to a billing.',
+      },
       taxExempt: { type: 'boolean', description: 'Omit if the contract is silent.' },
       taxExemptBasis: { type: 'string', description: 'Short quote or clause reference showing why.' },
       // Tax is the one term where a single boolean is not enough to review anything. The same
@@ -108,6 +135,12 @@ against this contract.
 Record the terms with the record_contract_terms tool.
 
 Rules:
+- "party" is the company being ENGAGED — the one performing work and being paid. On an
+  owner-contractor agreement that is the contractor; on a subcontract it is the subcontractor. It
+  is never the owner and never the architect. A project may have several contracts on file and
+  each pay application is checked against the one signed with the party doing the billing, so
+  naming the wrong party sends a subcontractor's figures to be measured against somebody else's
+  agreement. If the signature blocks do not make it plain, omit it.
 - "taxExempt" is true ONLY if the contract states the owner is a tax-exempt entity or that
   the work is exempt from sales/use tax. Many public entities (school districts, cities,
   universities) are exempt. If the contract is silent, omit it — do NOT guess.
@@ -189,6 +222,10 @@ async function extractContractTerms(contractBuffer) {
   const parsed = await analyzeInPasses(contractBuffer, (buffer, context) =>
     readOnePass(buffer, context, usages));
   return {
+    party: parsed.party || null,
+    partyRole: ['prime', 'subcontractor', 'supplier'].includes(parsed.partyRole) ? parsed.partyRole : null,
+    partyScope: parsed.partyScope || null,
+    commitment: parsed.commitment || null,
     taxExempt: typeof parsed.taxExempt === 'boolean' ? parsed.taxExempt : null,
     taxExemptBasis: parsed.taxExemptBasis || null,
     // A category is kept only if it carries the contract's own wording. The review quotes that

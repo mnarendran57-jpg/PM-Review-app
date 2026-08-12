@@ -135,6 +135,8 @@ function buildReportDoc({ result, data, projectName, contractor }) {
     subMatch: result?.subMatch || null,
     vendorRollup: result?.vendorRollup || null,
     tax: result?.tax || null,
+    contracts: result?.contracts || null,
+    deliveryMethod: result?.deliveryMethod || null,
     // A single figure, and the only one in this document that is an instruction rather than an
     // observation: what to take off the cheque because the contract says the contractor owes it.
     taxToDeduct: result?.taxToDeduct ?? null,
@@ -161,7 +163,8 @@ function renderMarkdown(doc) {
   push(`# Pay Application Review`, '');
   push(`**${h.projectName}**  `);
   push([h.contractor, h.applicationNumber != null ? `Application ${h.applicationNumber}` : null,
-    h.periodTo ? `Period to ${h.periodTo}` : null].filter(Boolean).join(' · '), '');
+    h.periodTo ? `Period to ${h.periodTo}` : null,
+    doc.deliveryMethod ? `${doc.deliveryMethod} delivery` : null].filter(Boolean).join(' · '), '');
 
   push(`| | |`, `|---|---|`);
   push(`| Applied for | ${money(h.appliedFor)} |`);
@@ -226,6 +229,21 @@ function renderMarkdown(doc) {
     if (isNum(doc.taxToDeduct) && doc.taxToDeduct > 0) {
       push('', `**${money(doc.taxToDeduct)} of the tax billed is the contractor's own cost under `
         + 'this contract and should come off this payment.**');
+    }
+    push('');
+  }
+
+  // Which agreement each party was measured against. The claim worth printing is not that a
+  // contract exists but that the right one was applied to the right biller.
+  if (doc.contracts?.length) {
+    push('## Contracts checked against', '');
+    push('| Party | Scope | Value | Retainage | Matched to |');
+    push('|---|---|---|---|---|');
+    for (const c of doc.contracts) {
+      push(`| ${c.party}${c.commitment ? ` · ${c.commitment}` : ''} | ${c.scope || '—'} `
+        + `| ${c.value == null ? '—' : money(c.value)} `
+        + `| ${c.retainageRate == null ? '—' : `${(c.retainageRate * 100).toFixed(2)}%`} `
+        + `| ${c.matchedTo || '—'} *(${c.matchedHow})* |`);
     }
     push('');
   }

@@ -209,6 +209,25 @@ async function renderPayAppReportPdf({ report, companyName }) {
     }
   }
 
+  // ---- contracts checked against -----------------------------------------------------------------
+  if (report.contracts?.length) {
+    rule();
+    text('Contracts checked against', { bold: true, size: 11, gapAfter: 6 });
+    table(
+      [{ label: 'Party', width: 0.28 }, { label: 'Scope', width: 0.24 },
+        { label: 'Value', width: 0.16, align: 'right' },
+        { label: 'Retainage', width: 0.12, align: 'right' },
+        { label: 'Matched to', width: 0.20 }],
+      report.contracts.map(c => [
+        c.party,
+        c.scope || '—',
+        c.value == null ? '—' : money(c.value),
+        c.retainageRate == null ? '—' : `${(c.retainageRate * 100).toFixed(2)}%`,
+        c.matchedTo || 'not matched',
+      ]),
+    );
+  }
+
   // ---- lien waivers ---------------------------------------------------------------------------------
   if (report.waivers?.length) {
     rule();

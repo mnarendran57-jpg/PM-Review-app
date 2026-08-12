@@ -26,6 +26,7 @@ const { runSubcontractChecks, chainTable } = require('../lib/payAppSubcontracts'
 const { runWaiverChecks, waiverTable } = require('../lib/payAppWaivers');
 const { runVendorRollupChecks } = require('../lib/payAppVendorRollup');
 const { runTaxChecks, taxTable } = require('../lib/payAppTax');
+const { runContractChecks, contractTable } = require('../lib/payAppContracts');
 
 const ENGINES = {
   backup: runBackupChecks,
@@ -34,6 +35,7 @@ const ENGINES = {
   waivers: runWaiverChecks,
   vendorRollup: runVendorRollupChecks,
   tax: runTaxChecks,
+  contracts: runContractChecks,
 };
 
 const DIR = path.join(__dirname, 'fixtures', 'payapp');
@@ -200,6 +202,15 @@ function runFixture(file) {
           + `${row.code} ${row.description.slice(0, 30).padEnd(30)} `
           + `${money(row.billedToOwner ?? 0).padStart(13)}  ${row.costEntries} entr${row.costEntries === 1 ? 'y' : 'ies'}`
           + (row.subcontractors.length ? paint('dim', `  <- ${row.subcontractors.join('; ')}`) : ''));
+      }
+    }
+    // Which agreement each party was measured against. The claim worth checking by eye is the
+    // last column: a subcontractor matched to their OWN contract, and by what.
+    if (fixture.kind === 'contracts') {
+      console.log(paint('blue', '\n  which contract was applied to whom:'));
+      for (const row of contractTable(runContractChecks(fixture).rows)) {
+        console.log(`    ${paint(row.matchedTo ? 'green' : 'red', (row.matchedTo || 'unmatched').slice(0, 34).padEnd(36))}`
+          + `${String(row.party).slice(0, 30).padEnd(32)}${paint('dim', row.matchedHow)}`);
       }
     }
     // Who owes each tax charge and why. For a tax fixture this table IS the review — the findings
@@ -547,6 +558,75 @@ const TAX_MUTATIONS = [
     }],
 ];
 
+// The contracts engine is proved by breaking the AGREEMENT rather than the application, which is
+// the whole point of it: the figures stay correct and only what was signed changes. Each mutation
+// names the check that must notice, because several of these rules watch the same party.
+const subApp = (a, part) => {
+  const s = (a.subApplications || []).find(x => x.vendor.toLowerCase().includes(part));
+  if (!s) throw new Error('not in this fixture');
+  return s;
+};
+const contractFor = (a, part) => {
+  const c = (a.contracts || []).find(x => (x.party || '').toLowerCase().includes(part));
+  if (!c) throw new Error('not in this fixture');
+  return c;
+};
+
+const CONTRACT_MUTATIONS = [
+  // A subcontractor billing through the application with nothing on file saying what they agreed
+  // to. On CMAR that is a hole; the CSR fixture proves the same absence is silent there.
+  // contractFor() first, so this THROWS rather than silently doing nothing on a fixture with no
+  // GreenScape contract to remove. A mutation that quietly changes nothing and then reports the
+  // engine blind is worse than no mutation: it fails the run for the wrong reason.
+  ['a subcontractor bills with no subcontract on file', 'K1',
+    (a) => {
+      contractFor(a, 'greenscape');
+      a.contracts = a.contracts.filter(c => !/greenscape/i.test(c.party || ''));
+    }],
+  ['a contract names a party nobody on this application is', 'K1',
+    (a) => {
+      const c = contractFor(a, 'greenscape');
+      c.party = 'Someone Else Entirely';
+      delete c.commitment;
+    }],
+  ['a party bills against LESS than their contract, with no credit documented', 'K2',
+    (a) => {
+      const c = contractFor(a, 'greenrise');
+      c.terms.originalContractSum = 20000;
+    }],
+  ['a subcontractor is retained at a rate their contract does not set', 'K3',
+    a => { contractFor(a, 'integrated').terms.retainageRate = 0.05; }],
+  ['a party has billed past the contract signed with them', 'K4',
+    a => { subApp(a, 'greenscape').contractSum = 100000; }],
+  ['a cost the relevant contract forbids is billed', 'K5',
+    (a) => {
+      contractFor(a, 'integrated').terms.unallowableItems = [
+        { item: 'Demolition', basis: 'Demolition is excluded from this subcontract' },
+      ];
+      a.linesByVendor = {
+        'Integrated Demolition and Remediation Inc.': [
+          { itemNo: null, description: 'Demolition - IDR', thisPeriod: 37000 },
+        ],
+      };
+    }],
+];
+
+function runContractMutations(base) {
+  const undetected = [];
+  let applicable = 0;
+  for (const [label, expectId, mutate] of CONTRACT_MUTATIONS) {
+    const copy = JSON.parse(JSON.stringify(base));
+    try { mutate(copy); } catch { continue; }
+    applicable++;
+    const { findings } = runContractChecks(copy);
+    if (!findings.some(f => f.id === expectId)) undetected.push(`${label} (expected ${expectId})`);
+  }
+  if (!applicable) return null;
+  console.log(`  sensitivity: ${applicable - undetected.length}/${applicable} single changes noticed`
+    + (undetected.length ? paint('red', ` — MISSED: ${undetected.join('; ')}`) : paint('green', ' \u2713')));
+  return undetected.length === 0;
+}
+
 function runTaxMutations(base) {
   const undetected = [];
   let applicable = 0;
@@ -591,6 +671,7 @@ function runMutations(file) {
   if (base.kind === 'backup') return runBackupMutations(base);
   if (base.kind === 'vendorRollup') return runRollupMutations(base);
   if (base.kind === 'tax') return runTaxMutations(base);
+  if (base.kind === 'contracts') return runContractMutations(base);
   if ((base.expected?.findings || []).length) return null;   // only meaningful on a clean one
 
   const undetected = [];

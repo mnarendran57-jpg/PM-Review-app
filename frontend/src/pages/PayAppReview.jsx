@@ -84,6 +84,156 @@ function HistoryItem({ item, onView, onDelete }) {
   );
 }
 
+// How the job was procured, asked on every upload.
+//
+// It is the first question because it changes what a complete package looks like. A CSR
+// application is the general contractor billing the owner directly, with a release of lien behind
+// it; a CMAR application carries every subcontractor's own application and a subcontract behind
+// each of them. Told nothing, the review treats the first as an incomplete version of the second
+// and reports paperwork missing that was never going to exist.
+//
+// It defaults to whatever this project was last reviewed as, so the usual case is no clicks — but
+// the answer is recorded against THIS application, never inherited silently.
+function DeliveryMethodPicker({ value, onChange, defaultedFrom }) {
+  const option = (key, title, blurb) => {
+    const on = value === key;
+    return (
+      <button
+        key={key}
+        type="button"
+        onClick={() => onChange(key)}
+        className="flex-1 text-left rounded-xl px-3 py-2 transition"
+        style={{
+          border: on ? '1.5px solid #0f172a' : '1px solid #e2e8f0',
+          background: on ? '#f8fafc' : '#fff',
+        }}
+      >
+        <span className="block text-xs font-semibold text-gray-900">{title}</span>
+        <span className="block text-[11px] text-gray-500 mt-0.5 leading-snug">{blurb}</span>
+      </button>
+    );
+  };
+  return (
+    <div>
+      <label className="label">How is this job delivered? *</label>
+      <div className="flex gap-2">
+        {option('CSR', 'CSR', 'Contractor bills directly. Lien release as backup.')}
+        {option('CMAR', 'CMAR', 'Subcontractor applications, and a subcontract behind each.')}
+      </div>
+      <p className="text-[11px] text-gray-400 mt-1">
+        {value === 'CSR'
+          ? 'No subcontractor applications will be looked for, so none will be reported missing.'
+          : value === 'CMAR'
+            ? 'Every subcontractor billing through the contractor is expected to have a contract on file.'
+            : 'This decides whether missing subcontractor paperwork is an omission or just how the job is procured.'}
+        {defaultedFrom && value === defaultedFrom ? ' Carried over from the last application on this project.' : ''}
+      </p>
+    </div>
+  );
+}
+
+// Every contract on file for the project, each shown with the party it was signed with.
+//
+// On a CMAR job the package is governed by several agreements and they do not share terms — a
+// demolition sub retained at 10% and a tree sub at 5% are both correct. The review measures each
+// party's billing against their own contract, and the party name is what makes that possible, so
+// it is editable here: the model reads it off a signature block that also names the owner and
+// often a surety, and getting it wrong sends a subcontractor's figures to the wrong agreement.
+function ExtraContractsPanel({ projectId, onChange }) {
+  const [docs, setDocs] = useState([]);
+  const [file, setFile] = useState(null);
+  const [party, setParty] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
+
+  const load = () => {
+    if (!projectId) { setDocs([]); return; }
+    payAppReviewApi.listDocuments(projectId)
+      .then(all => setDocs(all.filter(d => d.doc_type === 'contract')))
+      .catch(() => setDocs([]));
+  };
+  useEffect(load, [projectId]);
+
+  if (!projectId) return null;
+
+  const add = async () => {
+    if (!file) return;
+    setBusy(true); setError('');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('doc_type', 'contract');
+      if (party.trim()) fd.append('party', party.trim());
+      fd.append('party_role', 'subcontractor');
+      await payAppReviewApi.addDocument(projectId, fd);
+      setFile(null); setParty('');
+      load(); onChange?.();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not read this contract.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setPartyOn = async (doc, nextParty) => {
+    await payAppReviewApi.patchDocument(projectId, doc.id, {
+      party: nextParty, party_role: doc.party_role || 'subcontractor',
+    });
+    load(); onChange?.();
+  };
+
+  return (
+    <div className="rounded-xl p-3 space-y-2" style={{ background: '#fafbfc', border: '1px solid #f1f5f9' }}>
+      <button type="button" className="flex items-center justify-between w-full" onClick={() => setOpen(o => !o)}>
+        <span className="text-xs font-semibold text-gray-900">
+          Contracts on file{docs.length ? ` — ${docs.length}` : ''}
+        </span>
+        <span className="text-[11px] text-gray-400">{open ? 'Hide' : 'Manage'}</span>
+      </button>
+
+      {open && (
+        <>
+          {docs.length > 0 && (
+            <div className="space-y-1.5">
+              {docs.map(d => (
+                <div key={d.id} className="flex items-center gap-2">
+                  <input
+                    className="input text-xs flex-1"
+                    defaultValue={d.party || ''}
+                    placeholder="Which company is this contract with?"
+                    onBlur={e => { if (e.target.value !== (d.party || '')) setPartyOn(d, e.target.value); }}
+                  />
+                  <span className="text-[10px] text-gray-400 truncate" style={{ maxWidth: 120 }}>{d.file_name}</span>
+                </div>
+              ))}
+              <p className="text-[11px] text-gray-400">
+                The company name ties a contract to the party billing under it. A contract with no
+                party named is not applied to anybody.
+              </p>
+            </div>
+          )}
+          <FileDrop file={file} onChange={setFile} label="Add another contract (PDF)" />
+          {file && (
+            <>
+              <input
+                className="input text-xs"
+                value={party}
+                onChange={e => setParty(e.target.value)}
+                placeholder="Company this contract is with (read from the contract if left blank)"
+              />
+              <button type="button" className="btn-secondary w-full justify-center py-1.5 text-xs" onClick={add} disabled={busy}>
+                {busy ? 'Reading contract…' : 'Read contract terms'}
+              </button>
+            </>
+          )}
+          {error && <p className="text-[11px]" style={{ color: '#b91c1c' }}>{error}</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
 // The executed contract, uploaded once per project. Its terms drive the contract-compliance
 // checks on every later pay app, so they are shown plainly and left editable — the model is
 // reading a legal document and can be wrong, and a bad term would otherwise mis-flag every
@@ -362,6 +512,7 @@ export default function PayAppReview() {
   };
 
   const [contract, setContract] = useState(null);
+  const [deliveryMethod, setDeliveryMethod] = useState('');
 
   const loadContract = () => {
     if (!projectId) { setContract(null); return Promise.resolve(); }
@@ -384,7 +535,13 @@ export default function PayAppReview() {
     if (!projectId) { setBudget(null); setContract(null); return; }
     let cancelled = false;
     payAppReviewApi.projectHistory(projectId)
-      .then(d => { if (!cancelled) setBudget(d); })
+      .then((d) => {
+        if (cancelled) return;
+        setBudget(d);
+        // Defaulting, not inheriting: the answer is still recorded against this application, and
+        // the picker says it came from last month so it can be corrected on sight.
+        if (d?.lastDeliveryMethod) setDeliveryMethod(d.lastDeliveryMethod);
+      })
       .catch(() => { if (!cancelled) setBudget(null); });
     payAppReviewApi.getContract(projectId)
       .then(d => { if (!cancelled) setContract(d); })
@@ -400,6 +557,7 @@ export default function PayAppReview() {
     if (previous) fd.append('previous', JSON.stringify(previous));
     if (previousReviewId) fd.append('previous_review_id', previousReviewId);
     if (projectId) fd.append('project_id', projectId);
+    if (deliveryMethod) fd.append('delivery_method', deliveryMethod);
     if (contractSum) fd.append('original_contract_sum', contractSum);
     if (coLogCsv) fd.append('co_log_csv', coLogCsv);
     if (retainageRate) {
@@ -575,7 +733,17 @@ export default function PayAppReview() {
             </div>
             )}
 
+            <DeliveryMethodPicker
+              value={deliveryMethod}
+              onChange={setDeliveryMethod}
+              defaultedFrom={budget?.lastDeliveryMethod}
+            />
+
             <ContractPanel projectId={projectId} contract={contract} onChange={loadContract} />
+
+            {deliveryMethod === 'CMAR' && (
+              <ExtraContractsPanel projectId={projectId} onChange={loadContract} />
+            )}
 
             <FileDrop file={currentFile} onChange={setCurrentFile} label="Current Pay Application (PDF) *" />
             <FileDrop file={previousFile} onChange={setPreviousFile} label="Previous Pay Application (PDF)" />

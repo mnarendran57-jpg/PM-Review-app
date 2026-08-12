@@ -462,6 +462,34 @@ if (!db.prepare(`PRAGMA table_info(pay_app_reviews)`).all().map(c => c.name).inc
   db.exec(`ALTER TABLE pay_app_reviews ADD COLUMN engine_result TEXT`);
 }
 
+// How the job was procured, recorded on each pay application review.
+//
+// It changes what a complete package looks like, which is the difference between a review that
+// reports a real omission and one that nags. A CMAR application carries every subcontractor's own
+// application behind the contractor's; a CSR application is the contractor billing directly, with
+// a release of lien behind it and no subcontractor paperwork to be missing. Told nothing, the
+// review treats the second as an incomplete version of the first.
+//
+// Recorded per REVIEW rather than per project, at the user's request: nothing about one month's
+// package is then assumed from an earlier one. The upload form defaults to whatever the last
+// review on that project said, so the common case is still one click.
+if (!db.prepare(`PRAGMA table_info(pay_app_reviews)`).all().map(c => c.name).includes('delivery_method')) {
+  db.exec(`ALTER TABLE pay_app_reviews ADD COLUMN delivery_method TEXT`);
+}
+
+// Who a stored contract is WITH.
+//
+// Contracts were stored one-per-project because only the prime agreement was ever read. On a CMAR
+// job the package is governed by several: the owner-contractor agreement and a subcontract behind
+// each subcontractor billing through it. Every contract on file is now checked, and each against
+// the party it was signed with — so a subcontractor's retainage is measured against their own
+// subcontract rather than against the contractor's.
+{
+  const cols = db.prepare(`PRAGMA table_info(project_contracts)`).all().map(c => c.name);
+  if (!cols.includes('party')) db.exec(`ALTER TABLE project_contracts ADD COLUMN party TEXT`);
+  if (!cols.includes('party_role')) db.exec(`ALTER TABLE project_contracts ADD COLUMN party_role TEXT`);
+}
+
 // Default settings
 const existing = db.prepare(`SELECT key FROM settings WHERE key IN ('rfi_response_days','submittal_review_days')`).all();
 const existingKeys = new Set(existing.map(r => r.key));

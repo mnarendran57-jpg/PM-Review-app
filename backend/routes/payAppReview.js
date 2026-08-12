@@ -116,11 +116,16 @@ router.get('/project/:id/history', (req, res) => {
 
   const rows = db.prepare(`
     SELECT id, application_number, period_to, contract_sum_to_date, total_completed_to_date,
-           current_payment_due, balance_to_finish, critical_count, fail_count, created_at
+           current_payment_due, balance_to_finish, critical_count, fail_count, created_at,
+           delivery_method
     FROM pay_app_reviews
     WHERE project_id = ?
     ORDER BY application_number ASC, created_at ASC
   `).all(req.params.id);
+
+  // What this project was last reviewed as, so the upload form can default rather than ask cold.
+  // The answer is still recorded per application: defaulting is a convenience, not an assumption.
+  const lastMethod = [...rows].reverse().find(r => r.delivery_method)?.delivery_method || null;
 
   let prevCompleted = 0;
   const applications = rows.map(r => {
@@ -135,6 +140,7 @@ router.get('/project/:id/history', (req, res) => {
   res.json({
     project,
     applications,
+    lastDeliveryMethod: lastMethod,
     summary: latest ? {
       applicationsReviewed: applications.length,
       latestApplicationNumber: latest.application_number,
@@ -179,7 +185,8 @@ function listDocuments(projectId) {
   // `terms` travels with the list so a memo cover can show whether its placeholder mapping has
   // been confirmed without a second request per row.
   return db.prepare(`
-    SELECT id, project_id, file_name, label, doc_type, is_primary, terms, terms_edited, created_at, updated_at
+    SELECT id, project_id, file_name, label, doc_type, is_primary, terms, terms_edited,
+           party, party_role, created_at, updated_at
     FROM project_contracts WHERE project_id = ?
     ORDER BY (doc_type = 'contract') DESC, is_primary DESC, doc_type ASC, created_at ASC
   `).all(projectId);
@@ -244,19 +251,29 @@ async function addDocument(req, res) {
     const isPrimary = docType === 'contract' && !hasPrimary ? 1 : 0;
 
     const key = (await storage.storeFile('contract', file.buffer, file.mimetype, file.originalname)).key;
+    // Who the contract is with, in its own column rather than only inside `terms`. The review
+    // matches each party's billing to their own agreement, so this is the field that decides
+    // whether a subcontractor is measured against their subcontract or against nothing — and the
+    // one a PM is most likely to want to correct by hand. What the form says beats what the model
+    // read; a person naming the party is better evidence than a signature block.
+    const party = (req.body.party || '').trim() || storedTerms.party || null;
+    const partyRole = ['prime', 'subcontractor', 'supplier'].includes(req.body.party_role)
+      ? req.body.party_role : (storedTerms.partyRole || null);
+
     const result = db.prepare(`
       INSERT INTO project_contracts
-        (project_id, file_name, label, doc_type, is_primary, file_blob, file_key, terms, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (project_id, file_name, label, doc_type, is_primary, file_blob, file_key, terms,
+         created_by, party, party_role)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.params.id, file.originalname, label, docType, isPrimary,
       key ? Buffer.alloc(0) : file.buffer, key, JSON.stringify(storedTerms),
-      req.body.created_by || null,
+      req.body.created_by || null, party, partyRole,
     );
 
     res.json({
       id: result.lastInsertRowid, file_name: file.originalname,
-      label, doc_type: docType, is_primary: isPrimary, terms: storedTerms,
+      label, doc_type: docType, is_primary: isPrimary, terms: storedTerms, party, party_role: partyRole,
     });
   } catch (err) {
     console.error('Shared document error:', err);
@@ -285,6 +302,15 @@ router.patch('/project/:id/documents/:docId', (req, res) => {
   if (req.body.label !== undefined) {
     db.prepare(`UPDATE project_contracts SET label=?, updated_at=datetime('now') WHERE id=?`)
       .run(docLabel(req.body.label, row.file_name), row.id);
+  }
+  // Who the contract is with. The single most consequential field on the row — it decides whose
+  // billing gets measured against these terms — and the one the model is most likely to get wrong,
+  // because a signature block names the owner, the contractor and often a surety on the same page.
+  if (req.body.party !== undefined || req.body.party_role !== undefined) {
+    const role = ['prime', 'subcontractor', 'supplier'].includes(req.body.party_role)
+      ? req.body.party_role : null;
+    db.prepare(`UPDATE project_contracts SET party=?, party_role=?, updated_at=datetime('now') WHERE id=?`)
+      .run((req.body.party || '').trim() || null, role, row.id);
   }
   if (req.body.terms) {
     // The extraction is a model reading a legal document — it can be wrong. Let the PM
@@ -490,13 +516,43 @@ router.post('/', upload.fields([
     // contract-level figures the reviewer would otherwise re-type every period, and for
     // the tax / unallowable-item rules. Anything typed on the form still wins — the PM
     // overriding a term is a deliberate act.
+    // Every contract on file, not just one. A CMAR package is governed by the owner-contractor
+    // agreement AND a subcontract behind each subcontractor billing through it, and those carry
+    // different retainage rates and different exclusions. The contracts engine matches each to the
+    // party billing under it; the PRIMARY one still supplies the project-level defaults below,
+    // because tax status and the owner's contract sum are properties of the head agreement.
     let contractTerms = null;
+    let contracts = [];
     if (projectId) {
-      const contractRow = db.prepare(`
-        SELECT terms FROM project_contracts WHERE project_id = ? ORDER BY created_at DESC LIMIT 1
-      `).get(projectId);
-      if (contractRow) contractTerms = JSON.parse(contractRow.terms);
+      contracts = db.prepare(`
+        SELECT id, file_name, label, terms, is_primary, party, party_role FROM project_contracts
+        WHERE project_id = ? AND doc_type = 'contract'
+        ORDER BY is_primary DESC, created_at ASC
+      `).all(projectId).map((row) => {
+        const terms = JSON.parse(row.terms || '{}');
+        return {
+          id: row.id,
+          fileName: row.file_name,
+          label: row.label,
+          isPrimary: !!row.is_primary,
+          // The party may have been corrected by hand on the document row, which outranks
+          // whatever the model read off the signature block.
+          party: row.party || terms.party || null,
+          partyRole: row.party_role || terms.partyRole || null,
+          partyScope: terms.partyScope || null,
+          commitment: terms.commitment || null,
+          terms,
+        };
+      });
+      const primary = contracts.find(c => c.isPrimary) || contracts[0];
+      if (primary) contractTerms = primary.terms;
     }
+
+    // How the job was procured. Asked on every upload, defaulting on the form to whatever the
+    // last review of this project said, so nothing about this month's package is inferred from
+    // an earlier one.
+    const deliveryMethod = ['CSR', 'CMAR'].includes((req.body.delivery_method || '').toUpperCase())
+      ? req.body.delivery_method.toUpperCase() : null;
     if (contractTerms) {
       if (originalContractSum == null && contractTerms.originalContractSum != null) {
         originalContractSum = contractTerms.originalContractSum;
@@ -584,7 +640,8 @@ router.post('/', upload.fields([
     let engineResult = null;
     try {
       engineResult = runEngines(
-        { current, previous, contract, retainagePolicy, priorApplication }, contractTerms);
+        { current, previous, contract, retainagePolicy, priorApplication }, contractTerms,
+        { deliveryMethod, contracts });
       attachReadCheck(engineResult, readCheck);
     } catch (err) {
       console.error('Pay app engines failed (review continues):', err.message);
@@ -630,8 +687,8 @@ router.post('/', upload.fields([
         extracted_data, checks_result, report_markdown,
         current_file_name, current_file, current_file_key, previous_review_id,
         contract_sum, co_log, critical_count, fail_count, created_by, project_id,
-        compliance_findings, engine_result
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        compliance_findings, engine_result, delivery_method
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.orgId,
       current.summary.projectName || null,
@@ -652,7 +709,8 @@ router.post('/', upload.fields([
       req.body.created_by || null,
       projectId,
       compliance ? JSON.stringify(compliance) : null,
-      engineResult ? JSON.stringify(engineResult) : null
+      engineResult ? JSON.stringify(engineResult) : null,
+      deliveryMethod
     );
 
     res.json({ id: insertResult.lastInsertRowid, projectId, report, engineResult });

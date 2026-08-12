@@ -179,6 +179,47 @@ function taxSection(rows, deduct) {
     </section>`;
 }
 
+// Which agreement each party was measured against.
+//
+// The point of the table is the last column. A subcontractor's retainage checked against the
+// CONTRACTOR's rate is a confident finding about nothing, so a reader has to be able to see that
+// each party was measured against their own agreement, and by what — a commitment number is
+// certainty, a name match is a judgement they may want to overrule.
+function contractsSection(rows, method) {
+  if (!rows || !rows.length) return '';
+  const body = rows.map(r => `
+          <tr>
+            <td><span class="who">${esc(r.party)}</span>${r.commitment ? `<span class="meta">${esc(r.commitment)}</span>` : ''}</td>
+            <td>${esc(r.scope || '—')}${r.role ? `<span class="meta">${esc(r.role)}</span>` : ''}</td>
+            <td>${r.value == null ? '—' : money(r.value)}</td>
+            <td>${r.retainageRate == null ? '—' : pct(r.retainageRate)}</td>
+            <td class="${r.matchedTo ? 'yes' : 'no'}">${r.matchedTo ? esc(r.matchedTo) : 'not matched'}
+              <span class="meta">${esc(r.matchedHow)}</span></td>
+          </tr>`).join('');
+
+  return `
+    <section class="sec">
+      <h2>Contracts checked against</h2>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>Party</th><th>Scope</th><th>Value</th><th>Retainage</th><th>Matched to</th></tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+      <p class="quiet">${method === 'CSR'
+    ? `Reviewed as a CSR application: the contractor bills the owner directly, so no subcontractor
+       applications were expected and none were looked for.`
+    : method === 'CMAR'
+      ? `Reviewed as a CMAR application: every subcontractor billing through the contractor is
+         expected to have their own contract on file, and each is measured against theirs rather
+         than against the contractor's terms.`
+      : `Each party's billing is measured against the contract signed with that party. A contract
+         that could not be tied to anyone billing here was not applied to anybody.`}</p>
+    </section>`;
+}
+
 // Who could put a lien on this job, what they are owed, and what is on file for them. Findings
 // name what is wrong; this is how a reader satisfies themselves that nobody is missing — the one
 // question about waivers that a list of findings genuinely cannot answer.
@@ -333,6 +374,7 @@ function buildReportHtml({ report }) {
   ${subMatchSection(doc.subMatch)}
   ${vendorRollupSection(doc.vendorRollup)}
   ${taxSection(doc.tax, doc.taxToDeduct)}
+  ${contractsSection(doc.contracts, doc.deliveryMethod)}
 
   ${waiverSection(doc.waivers)}
 
