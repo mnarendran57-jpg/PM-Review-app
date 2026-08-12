@@ -1,0 +1,142 @@
+{
+ "kind": "vendorRollup",
+ "name": "GreenScape \u2014 the second line does not carry their name",
+ "$source": "The same application with the allowance line described by what it buys rather than by who performs it, which is how most of them read. The set can only be completed by finding the one line that is exactly the remainder in every column.",
+ "meta": {
+  "applicationNumber": "4",
+  "periodTo": "2026-05-31",
+  "projectName": "Carver High School Replacement",
+  "contractor": "BCGC"
+ },
+ "sovLines": [
+  {
+   "itemNo": "BC-31.10",
+   "description": "Site Demolition - Cherry Demolition",
+   "scheduledValue": 284500.0,
+   "previous": 284500.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 284500.0,
+   "balance": 0.0,
+   "retainage": 14225.0
+  },
+  {
+   "itemNo": "BC-03.30",
+   "description": "Cast-In-Place Concrete - Capform",
+   "scheduledValue": 1962400.0,
+   "previous": 1104300.0,
+   "thisPeriod": 137715.0,
+   "totalToDate": 1242015.0,
+   "balance": 720385.0,
+   "retainage": 62100.75
+  },
+  {
+   "itemNo": null,
+   "description": "Tree Protection - GreenScape",
+   "scheduledValue": 110380.0,
+   "previous": 100780.0,
+   "thisPeriod": 3200.0,
+   "totalToDate": 103980.0,
+   "balance": 6400.0,
+   "retainage": 5199.0
+  },
+  {
+   "itemNo": "BC-32.91",
+   "description": "Watering, Protection Maintenance, Tree Foliage - BCGC Self-Perform",
+   "scheduledValue": 47825.0,
+   "previous": 38260.0,
+   "thisPeriod": 9565.0,
+   "totalToDate": 47825.0,
+   "balance": 0.0,
+   "retainage": 2391.25
+  },
+  {
+   "itemNo": null,
+   "description": "Allowance #4 - Tree Trimming / Arborist",
+   "scheduledValue": 12665.0,
+   "previous": 0.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 0.0,
+   "balance": 12665.0,
+   "retainage": 0.0
+  },
+  {
+   "itemNo": "AEA 02",
+   "description": "CPR 002 - Tree Trimming & Arborist Inspections",
+   "scheduledValue": 27335.0,
+   "previous": 20329.58,
+   "thisPeriod": 1401.1,
+   "totalToDate": 21730.68,
+   "balance": 5604.32,
+   "retainage": 1086.53
+  }
+ ],
+ "vendors": [
+  {
+   "vendor": "GreenScape",
+   "applicationNumber": "4",
+   "commitment": "253016-2000",
+   "contractFor": "Tree protection, watering and arborist inspections",
+   "scheduledValue": 137715.0,
+   "previous": 121109.58,
+   "thisPeriod": 4601.1,
+   "totalToDate": 125710.68,
+   "balance": 12004.32,
+   "retainage": 6285.53,
+   "groups": [
+    {
+     "code": "000*253016-2000*S*51684419",
+     "description": "Tree protection - base contract",
+     "scheduledValue": 110380.0,
+     "previous": 100780.0,
+     "thisPeriod": 3200.0,
+     "totalToDate": 103980.0,
+     "retainage": 5199.0
+    },
+    {
+     "code": "001*253016-2000*S*51688092",
+     "description": "CPR 002 - Tree trimming & arborist",
+     "scheduledValue": 27335.0,
+     "previous": 20329.58,
+     "thisPeriod": 1401.1,
+     "totalToDate": 21730.68,
+     "retainage": 1086.53
+    }
+   ]
+  },
+  {
+   "vendor": "Cherry Demolition",
+   "applicationNumber": "4",
+   "commitment": "024100-1000",
+   "contractFor": "Site demolition",
+   "scheduledValue": 284500.0,
+   "previous": 284500.0,
+   "thisPeriod": 0.0,
+   "totalToDate": 284500.0,
+   "balance": 0.0,
+   "retainage": 14225.0
+  }
+ ],
+ "expected": {
+  "verdict": "no-issues-found",
+  "findings": [],
+  "rollup": [
+   {
+    "vendor": "GreenScape",
+    "status": "reconciled",
+    "lines": [
+     "Tree Protection - GreenScape",
+     "CPR 002 - Tree Trimming & Arborist Inspections"
+    ],
+    "why": "the unnamed allowance line is found as the exact remainder"
+   },
+   {
+    "vendor": "Cherry Demolition",
+    "status": "reconciled",
+    "lines": [
+     "Site Demolition - Cherry Demolition"
+    ],
+    "why": "a single-line subcontract still has to tie"
+   }
+  ]
+ }
+}

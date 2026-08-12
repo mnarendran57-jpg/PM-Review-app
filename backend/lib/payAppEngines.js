@@ -7,20 +7,29 @@
 // about, and a check that can be proved against a fixture is worth more than one that sounds
 // confident. Everything in backend/tests/fixtures/payapp measures exactly this code.
 //
-// Four engines, and each says out loud when it has nothing to work with rather than passing
+// Seven engines, and each says out loud when it has nothing to work with rather than passing
 // silently. A pay application submitted with no cost report gets no reconciliation findings —
 // and the report must say that, or "no issues found" becomes a lie of omission.
 //
-//   payAppInvariants     I1-I24   the G702 and continuation sheet on their own
+//   payAppInvariants     I1-I30   the G702 and continuation sheet on their own
 //   payAppSubcontracts   S1-S9    contractor breakdown -> schedule line -> subcontractor's app
 //   payAppBackup         R1-R12   cost report against its receipts, internal allowances
 //   payAppCoverage       C1-C7    a line against the documents attached to it
+//   payAppWaivers        W1-W8    is it safe to pay — who has released, and for how much
+//   payAppVendorRollup   V1-V4    one subcontractor against EVERY line billing their scope
+//   payAppTax            T1-T8    who owes the tax, under this contract's own words
+//
+// The last one is the only engine that reads across lines. Everything else compares a row to
+// something; it compares a subcontract to a set of rows, which is the only way to see scope that
+// has been billed in two places at once.
 
 const { runInvariants, groupFindings, SEVERITY } = require('./payAppInvariants');
 const { runSubcontractChecks, chainTable } = require('./payAppSubcontracts');
 const { runBackupChecks } = require('./payAppBackup');
 const { runCoverageChecks, coverageTable } = require('./payAppCoverage');
 const { runWaiverChecks, waiverTable } = require('./payAppWaivers');
+const { runVendorRollupChecks, vendorRollupTable } = require('./payAppVendorRollup');
+const { runTaxChecks, taxTable } = require('./payAppTax');
 
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 const num = v => (isNum(v) ? v : 0);
@@ -55,8 +64,14 @@ function arithmeticInput(data, contractTerms) {
     // That figure comes from the uploaded previous application when there is one, and otherwise
     // from the project's own stored history, which is just as authoritative and far more often
     // available.
-    previousApplication: previous ? {
+    // The key is `prior` because that is what the invariants read. It was `previousApplication`
+    // here for a while, which meant the two cross-application rules stood down on every real
+    // upload while passing in every fixture — the fixtures set `prior` directly, so the tests
+    // never touched the adapter that was getting it wrong.
+    prior: previous ? {
       applicationNumber: previous.summary?.applicationNumber ?? null,
+      periodTo: previous.summary?.periodTo ?? null,
+      line4: previous.summary?.line4 ?? null,
       line6: previous.summary?.line6 ?? null,
       lineItems: previous.lineItems || [],
     } : (data.priorApplication || null),
@@ -155,15 +170,41 @@ function waiverInput(data) {
   };
 }
 
+// Everything the contractor enclosed to prove a cost, as one list. The extractor records each
+// document once; the two engines that read backup want it in different shapes, so the conversion
+// happens here rather than asking the extractor to say the same thing twice.
+const backupDocs = current => (current.backupDocuments || []).filter(d => isNum(d.amount));
+
 function backupInput(data, contractTerms) {
   const { current } = data;
-  if (!(current.transactions || []).length) return null;
+  const reports = current.costReports || [];
+  // A cost report is what this engine reconciles against. Receipts alone give it nothing to
+  // match them TO, so with no report it stands down — and says so, rather than reporting every
+  // receipt as unexplained.
+  if (!reports.length) return null;
+
+  const transactions = reports.flatMap((r, i) => (r.transactions || []).map((t, j) => ({
+    ...t, id: `${r.name || `report${i + 1}`}-${j}`, report: r.name || `report${i + 1}`,
+  })));
+  if (!transactions.length) return null;
+
+  const reportTotals = {};
+  for (const [i, r] of reports.entries()) {
+    if (isNum(r.printedTotal)) reportTotals[r.name || `report${i + 1}`] = r.printedTotal;
+  }
+
   return {
     kind: 'backup',
     meta: current.summary,
-    reportTotals: current.reportTotals || {},
-    transactions: current.transactions,
-    receipts: current.receipts || [],
+    reportTotals,
+    transactions,
+    receipts: backupDocs(current).map(d => ({
+      id: `doc-p${d.page ?? '?'}-${d.ref || d.vendor || ''}`,
+      vendor: d.vendor, ref: d.ref, date: d.date, amount: d.amount,
+      description: d.description, page: d.page,
+      excludedThisPeriod: d.excludedThisPeriod, excludedAmount: d.excludedAmount,
+      exclusionNote: d.note,
+    })),
     backupScope: current.backupScope,
     billedAgainstDetail: current.billedAgainstDetail || [],
     costRulings: contractTerms?.costRulings || [],
@@ -173,8 +214,23 @@ function backupInput(data, contractTerms) {
 
 function coverageInput(data, contractTerms) {
   const { current } = data;
-  if (!(current.documentation || []).length) return null;
   const s = current.summary || {};
+
+  // This engine asks whether the paper attached to a LINE covers what that line bills, so a
+  // document that does not say which line it belongs to cannot be used. Attributing it by guess
+  // would be worse than leaving it out: it would report a shortfall on the line it was wrongly
+  // attached to and cover a line that has nothing behind it.
+  const lineByCode = new Map((current.lineItems || []).map(li => [String(li.itemNo), li]));
+  const documentation = backupDocs(current).map((d) => {
+    const line = d.supportsItemNo != null ? lineByCode.get(String(d.supportsItemNo)) : null;
+    const lineName = line?.description || d.supportsLine || null;
+    return lineName ? {
+      line: lineName, kind: 'invoice', vendor: d.vendor, ref: d.ref,
+      amount: d.amount, fees: null, page: d.page, note: d.note,
+    } : null;
+  }).filter(Boolean);
+
+  if (!documentation.length) return null;
   return {
     kind: 'coverage',
     meta: s,
@@ -188,9 +244,129 @@ function coverageInput(data, contractTerms) {
       scheduledValue: li.c, previous: li.d, thisPeriod: li.e,
       totalToDate: li.g, retainage: li.retainage ?? li.i ?? null,
     })),
-    documentation: current.documentation,
+    documentation,
     priorFindings: current.priorDocumentationFindings || [],
   };
+}
+
+// The vendor rollup wants the schedule as a whole and each subcontractor's own totals beside it.
+// Unlike every other input, it does NOT need anything to say which line belongs to which vendor —
+// working that out is the engine's whole job — so nothing here is dropped for want of an
+// attribution. What it does need is the vendor's own column totals, which only their application
+// carries.
+function vendorRollupInput(data) {
+  const { current } = data;
+  const s = current.summary || {};
+  const subs = current.subApplications || [];
+  if (!subs.length) return null;
+
+  // A vendor with a this-period figure and nothing else cannot be rolled up: one column agreeing
+  // is a coincidence, and the engine would rather say nothing than say that.
+  const COLS = ['contractSum', 'previous', 'thisPeriod', 'totalToDate', 'retainage'];
+  const vendors = subs
+    .filter(v => v.vendor && COLS.filter(k => isNum(v[k])).length >= 2)
+    .map(v => ({
+      vendor: v.vendor,
+      applicationNumber: v.applicationNumber || null,
+      commitment: v.commitment || null,
+      contractFor: v.contractFor || null,
+      scheduledValue: isNum(v.contractSum) ? v.contractSum : null,
+      previous: isNum(v.previous) ? v.previous : null,
+      thisPeriod: isNum(v.thisPeriod) ? v.thisPeriod : null,
+      totalToDate: isNum(v.totalToDate) ? v.totalToDate : null,
+      balance: isNum(v.balanceToFinish) ? v.balanceToFinish : null,
+      retainage: isNum(v.retainage) ? v.retainage : null,
+      groups: v.groups || [],
+    }));
+  if (!vendors.length) return null;
+
+  // Names a line already carries. The description is where a vendor's name usually appears, but
+  // the contractor's own cost breakdown names them too, and a line whose breakdown section is
+  // headed by the vendor is as good as one that says so in its title.
+  const named = new Map();
+  const add = (key, name) => {
+    if (key == null || !name) return;
+    const k = String(key);
+    if (!named.has(k)) named.set(k, new Set());
+    named.get(k).add(name);
+  };
+  for (const b of current.subBreakdowns || []) {
+    const key = b.matchesItemNo ?? b.matchesDescription;
+    add(key, b.subName);
+    for (const c of b.components || []) add(key, c.vendor);
+  }
+
+  return {
+    kind: 'vendorRollup',
+    meta: { applicationNumber: s.applicationNumber, periodTo: s.periodTo, contractor: s.contractor },
+    sovLines: (current.lineItems || []).map(li => ({
+      itemNo: li.itemNo, description: li.description,
+      scheduledValue: li.c, previous: li.d, thisPeriod: li.e,
+      totalToDate: li.g, balance: li.h, retainage: li.retainage ?? li.i ?? null,
+      vendors: [...(named.get(String(li.itemNo)) || []), ...(named.get(li.description) || [])],
+    })),
+    vendors,
+  };
+}
+
+// Tax is the only engine whose rules come from the CONTRACT rather than from the application, so
+// it is the only one that can be starved by a project with no contract uploaded. It still runs in
+// that case — arithmetic and the owner's exempt status are checkable without one — and says
+// plainly that it had no provisions to measure against.
+function taxInput(data, contractTerms) {
+  const { current } = data;
+  const s = current.summary || {};
+  const taxes = (current.taxes || []).filter(t => isNum(t.amount));
+  if (!taxes.length) return null;
+  return {
+    kind: 'tax',
+    meta: { applicationNumber: s.applicationNumber, periodTo: s.periodTo, contractor: s.contractor },
+    contract: {
+      ownerTaxExempt: contractTerms?.taxExempt ?? false,
+      taxExemptBasis: contractTerms?.taxExemptBasis ?? null,
+      feeRate: contractTerms?.feeRate ?? null,
+    },
+    taxRules: contractTerms?.taxRules || null,
+    // Rulings the PM has already given on this project. A category settled in April must not be
+    // asked about again in May — that is how a report trains its reader to skim.
+    taxRulings: contractTerms?.taxRulings || [],
+    taxes,
+  };
+}
+
+// Why a pass stood down, in words that are true of THIS package.
+//
+// The old sentences said "no backup was submitted" whenever these engines had no input, and a
+// team reviewing a package with fifty pages of invoices bound into it was told their documents
+// were not there. Nothing was submitted, backup was submitted and could not be read, and backup
+// was submitted but says nothing about which line it belongs to are three different situations,
+// and only one of them is the contractor's fault.
+
+function absentBackup(current) {
+  const docs = (current.backupDocuments || []).length;
+  if (!docs) {
+    return (current.backupPageCount || 0) > 0
+      ? `The package carries about ${current.backupPageCount} page(s) of backup, but no invoice or `
+        + 'receipt could be read from them, so nothing was matched. This is a reading failure, not '
+        + 'a missing submission.'
+      : 'No cost report or receipts were enclosed, so no charge was matched to a receipt.';
+  }
+  return `${docs} invoice(s) and receipt(s) were read from the package, but no job-cost or `
+    + 'transaction report was enclosed to match them against, so nothing was reconciled.';
+}
+
+function absentCoverage(current) {
+  const docs = (current.backupDocuments || []).length;
+  if (!docs) {
+    return (current.backupPageCount || 0) > 0
+      ? `About ${current.backupPageCount} page(s) of backup are in the package but none could be `
+        + 'read, so no line was checked for whether its documentation covers what it bills.'
+      : 'No invoices or receipts were enclosed, so no line was checked for whether its '
+        + 'documentation covers what it bills.';
+  }
+  return `${docs} invoice(s) and receipt(s) were read, but none of them states which billed line `
+    + 'it supports, so they could not be checked against any line. Attaching them by guess would '
+    + 'report a shortfall on the wrong line and cover a line that has nothing behind it.';
 }
 
 // ---- running them --------------------------------------------------------------------------------
@@ -205,9 +381,18 @@ const ENGINES = [
     build: waiverInput, run: runWaiverChecks,
     absent: 'Neither a contractor nor any subcontractor was identified, so no lien waiver was looked for.' },
   { key: 'backup', label: 'the cost report and its receipts', build: backupInput, run: runBackupChecks,
-    absent: 'No job-cost transaction report was submitted, so no charge was matched to a receipt.' },
+    absent: absentBackup },
   { key: 'coverage', label: 'documents attached to each billed line', build: coverageInput, run: runCoverageChecks,
-    absent: 'No line-by-line backup was submitted, so no line was checked for whether its documentation covers what it bills.' },
+    absent: absentCoverage },
+  { key: 'vendorRollup', label: "each subcontractor's total against every line billing their scope",
+    build: vendorRollupInput, run: runVendorRollupChecks,
+    absent: "No subcontractor enclosed their own application with column totals, so no subcontract "
+      + 'was checked against the whole set of schedule lines billing its scope. This is the check '
+      + 'that catches a subcontractor whose work is billed in two places at once.' },
+  { key: 'tax', label: "sales tax against the contract's own tax provisions",
+    build: taxInput, run: runTaxChecks,
+    absent: 'No separate tax line appears on any backup document read from this package, so no '
+      + 'tax was reviewed. Tax buried inside a lump-sum invoice line cannot be seen.' },
 ];
 
 function runEngines(data, contractTerms = null) {
@@ -226,7 +411,8 @@ function runEngines(data, contractTerms = null) {
       continue;
     }
     if (!input) {
-      notChecked.push(engine.absent);
+      notChecked.push(typeof engine.absent === 'function'
+        ? engine.absent(data.current || {}) : engine.absent);
       continue;
     }
     let out;
@@ -265,6 +451,12 @@ function runEngines(data, contractTerms = null) {
     subMatch: subs ? subcontractorMatch(subs.input) : null,
     waivers: byEngine('waivers') ? waiverTable(byEngine('waivers').input) : null,
     coverage: byEngine('coverage') ? coverageTable(byEngine('coverage').lines) : null,
+    vendorRollup: byEngine('vendorRollup') ? vendorRollupTable(byEngine('vendorRollup').rolls) : null,
+    tax: byEngine('tax') ? taxTable(byEngine('tax').taxes) : null,
+    // The one figure from the tax pass that lands on a payment certificate rather than in a
+    // paragraph. Null when the pass did not run, so the report can tell "nothing to deduct" apart
+    // from "not checked".
+    taxToDeduct: byEngine('tax') ? byEngine('tax').summary.taxToDeduct : null,
     stats: {
       checksRun,
       passed,
@@ -279,7 +471,11 @@ function runEngines(data, contractTerms = null) {
       enginesTotal: ENGINES.length,
     },
     verdict: findings.some(f => f.severity === SEVERITY.CRITICAL) ? 'do-not-certify'
-      : findings.length ? 'certify-with-corrections' : 'no-issues-found',
+      // Notes do not move the verdict. They print under a heading that says no action is
+      // expected, so letting one downgrade an otherwise clean application would have the
+      // report contradict itself.
+      : findings.some(f => f.severity === SEVERITY.MATERIAL) ? 'certify-with-corrections'
+        : 'no-issues-found',
     amountApplied: arith ? (data.current.summary?.line8 ?? null) : null,
     thisPeriod: data.current.grandTotalRow?.e ?? sum(data.current.lineItems, li => li.e),
   };
@@ -369,4 +565,38 @@ function subcontractorMatch(app) {
   };
 }
 
-module.exports = { runEngines, arithmeticInput, subcontractInput, backupInput, coverageInput };
+// Folds the read-verification into the result, so the report says where its figures came from.
+//
+// These are notes, not errors: nothing here is the contractor's doing. But a report that silently
+// corrected a figure would be hiding the most useful thing it knows, and one that stayed quiet
+// about a line it could not verify would be claiming a confidence it does not have.
+function attachReadCheck(result, readCheck) {
+  if (!result || !readCheck) return result;
+  const notes = (readCheck.findings || []).map(f => ({
+    ...f, status: 'FAIL', severity: SEVERITY.NOTE, title: 'How the figures were read',
+  }));
+  if (notes.length) {
+    result.findings = [...result.findings, ...notes];
+    result.stats.notes += notes.length;
+    result.stats.failed += notes.length;
+  }
+  if (readCheck.note) result.notChecked.push(readCheck.note);
+  else if (readCheck.available) {
+    result.notChecked.push(`${readCheck.confirmed} of ${(result.stats.lineItems || 0)} schedule `
+      + "lines were checked figure by figure against the document's own text layer"
+      + `${readCheck.corrections.length ? `, and ${readCheck.corrections.length} misread `
+        + 'figure(s) were corrected from it' : ''}.`);
+  }
+  result.readCheck = {
+    available: readCheck.available,
+    confirmed: readCheck.confirmed,
+    corrections: readCheck.corrections,
+    unverified: readCheck.unverified.length,
+  };
+  return result;
+}
+
+module.exports = {
+  runEngines, attachReadCheck, arithmeticInput, subcontractInput, backupInput, coverageInput,
+  vendorRollupInput, taxInput,
+};

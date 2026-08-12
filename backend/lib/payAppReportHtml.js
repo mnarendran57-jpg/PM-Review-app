@@ -30,51 +30,10 @@ const TAG = { [SEVERITY.CRITICAL]: ['c', 'Critical'], [SEVERITY.MATERIAL]: ['r',
 // A finding's headline is the first sentence of its detail; the rest is the explanation. The
 // engines already write detail as "claim. reasoning." for exactly this reason, so the split is a
 // property of how they are worded rather than a guess made here.
-const HEADLINE_MAX = 108;
-
-function split(detail) {
-  const text = String(detail || '').trim();
-  let end = text.search(/\.\s+(?=[A-Z$−])/);
-  if (end === -1 || end > 220) end = text.length - 1;
-  let head = text.slice(0, end + 1);
-  let rest = text.slice(end + 1).trim();
-
-  // A first sentence can still run long — the engines explain themselves inside one. When it
-  // does, break at the turn in the sentence rather than at a word count, so the headline stays a
-  // complete thought and the qualification moves down with the rest of the explanation.
-  if (head.length > HEADLINE_MAX) {
-    const turn = [', but ', ' — ', ', and ', ', which ', ', so '].reduce((best, sep) => {
-      const at = head.indexOf(sep);
-      return at > 24 && at < HEADLINE_MAX && (best === -1 || at < best) ? at : best;
-    }, -1);
-    if (turn !== -1) {
-      const carried = head.slice(turn).replace(/^[,\s—]+/, '');
-      head = `${head.slice(0, turn)}.`;
-      rest = `${carried.charAt(0).toUpperCase()}${carried.slice(1)} ${rest}`.trim();
-    }
-  }
-  return { head, rest };
-}
-
-// The caption under the amount says what the amount IS, in two words. The rule's own title is
-// far too long for the slot — "No figure in the schedule of values is negative" set in three
-// lines of uppercase beside a dollar figure is noise dressed as information.
-const caption = f => (isNum(f.difference) ? 'Difference'
-  : isNum(f.expected) && isNum(f.actual) ? 'Billed'
-    : 'Amount');
-
-function place(f) {
-  const w = f.where || {};
-  return [w.itemNo ? `Item ${w.itemNo}` : null, w.description || w.field || null,
-    w.vendor || null, w.ref ? `ref ${w.ref}` : null, w.page ? `p.${w.page}` : null]
-    .filter(Boolean).join(' · ');
-}
 
 function findingRow(f) {
   const [cls, label] = TAG[f.severity] || TAG[SEVERITY.NOTE];
-  const { head, rest } = split(f.detail);
-  const amount = isNum(f.difference) ? f.difference : (isNum(f.actual) ? f.actual : null);
-  const where = place(f);
+  const { head, rest, where } = f;
   return `
       <div class="find">
         <span class="tag ${cls}">${label}</span>
@@ -83,7 +42,7 @@ function findingRow(f) {
           ${rest ? `<p>${esc(rest)}</p>` : ''}
           ${where ? `<span class="where">${esc(where)}</span>` : ''}
         </div>
-        <div class="amt">${amount == null ? '' : `${money(amount)}<small>${caption(f)}</small>`}</div>
+        <div class="amt">${f.showAmount ? `${money(f.amount)}<small>${esc(f.amountLabel)}</small>` : ''}</div>
       </div>`;
 }
 
@@ -146,6 +105,80 @@ function subMatchSection(match) {
     </section>`;
 }
 
+// Which schedule lines carry each subcontractor's scope, and whether those lines add up to what
+// the subcontractor billed. The table above asks whether anything was added on the way through;
+// this asks whether the pieces have been found at all. A subcontract split across a base line and
+// an allowance draw ties only when both are counted, and that is a thing no other section shows.
+function vendorRollupSection(rows) {
+  if (!rows || !rows.length) return '';
+  const body = rows.map(r => `
+          <tr>
+            <td><span class="who">${esc(r.vendor)}</span>${r.note ? `<span class="meta">${esc(r.note)}</span>` : ''}</td>
+            <td>${r.lines.length ? r.lines.map(esc).join('<br>') : '—'}</td>
+            <td>${r.theyBilled == null ? '—' : money(r.theyBilled)}</td>
+            <td>${r.onSchedule == null ? '—' : money(r.onSchedule)}</td>
+            <td class="${r.status === 'ties exactly' ? 'yes' : 'no'}">${
+  r.columnsCompared ? `${r.columnsMatched} of ${r.columnsCompared}<span class="meta">${esc(r.status)}</span>`
+    : esc(r.status)}</td>
+          </tr>`).join('');
+
+  return `
+    <section class="sec">
+      <h2>Subcontractor scope on the schedule</h2>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>Subcontractor</th><th>Lines carrying their scope</th><th>They billed</th>
+                <th>On the schedule</th><th>Columns agreeing</th></tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+      <p class="quiet">Each subcontractor's own totals are added up against every schedule line
+        billing their work — contract sum, previously billed, this period, to date and retainage at
+        once. Columns agreeing on every count means the lines listed are that subcontract and
+        nothing is billed twice or left out. Anything less is named in the findings above.</p>
+    </section>`;
+}
+
+// Sales tax, and who owes each charge under this contract.
+//
+// The category column is the finding, not decoration. The same $412.50 is a proper reimbursable
+// job cost on a rented lift and the contractor's own money on a desk, and a reader who cannot see
+// which one they are looking at has no way to check the answer. Where the category was read from
+// the wording rather than stated by the document, the wording is shown too, so a PM can overrule
+// it in one glance.
+function taxSection(rows, deduct) {
+  if (!rows || !rows.length) return '';
+  const body = rows.map(r => `
+          <tr>
+            <td><span class="who">${esc(r.vendor)}</span>${r.ref ? `<span class="meta">${esc(r.ref)}</span>` : ''}</td>
+            <td>${esc(r.category)}${r.inferred ? `<span class="meta">${esc(r.why)}</span>` : ''}</td>
+            <td>${money(r.amount)}</td>
+            <td class="${r.verdict === 'owner pays' ? 'yes' : 'no'}">${esc(r.verdict)}${
+  r.basis ? `<span class="meta">${esc(r.basis)}</span>` : ''}</td>
+          </tr>`).join('');
+
+  return `
+    <section class="sec">
+      <h2>Sales tax — who owes it</h2>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>Vendor</th><th>What was bought</th><th>Tax</th><th>Under the contract</th></tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+      ${isNum(deduct) && deduct > 0
+    ? `<p class="quiet"><b>${money(deduct)} of the tax billed is the contractor's own cost under
+         this contract and should come off this payment.</b></p>`
+    : `<p class="quiet">Tax on equipment rented for the job is normally a reimbursable cost; tax
+         on things bought and consumed or kept is normally the contractor's. Which applies here
+         comes from this contract's own wording, quoted above where it decided a charge.</p>`}
+    </section>`;
+}
+
 // Who could put a lien on this job, what they are owed, and what is on file for them. Findings
 // name what is wrong; this is how a reader satisfies themselves that nobody is missing — the one
 // question about waivers that a list of findings genuinely cannot answer.
@@ -185,41 +218,31 @@ function waiverSection(rows) {
     </section>`;
 }
 
-function buildReportHtml({ result, summary, projectName, contractor }) {
-  const s = summary || {};
-  const st = result.stats;
-  const critical = result.findings.filter(f => f.severity === SEVERITY.CRITICAL);
-  const material = result.findings.filter(f => f.severity === SEVERITY.MATERIAL);
-  const notes = result.findings.filter(f => f.severity === SEVERITY.NOTE);
+// Takes the report document built by payAppReportDoc — the same object the client PDF and the
+// Markdown export render. This page used to derive its own headlines, groupings and placements
+// from the raw engine result, which meant two renderers quietly interpreting the same findings
+// their own way. Now it only lays out what it is given.
+function buildReportHtml({ report }) {
+  const doc = report;
+  const h = doc.header;
+  const st = doc.stats;
 
-  const VERDICT = {
-    'do-not-certify': ['crit', 'Do not certify'],
-    'certify-with-corrections': ['warn', 'Certify with corrections'],
-    'no-issues-found': ['ok', 'No issues found'],
+  const VERDICT_CLASS = {
+    'do-not-certify': 'crit', 'certify-with-corrections': 'warn', 'no-issues-found': 'ok',
   };
-  const [vcls, vlabel] = VERDICT[result.verdict] || VERDICT['no-issues-found'];
-
-  // The one sentence someone reads if they read nothing else.
-  const call = critical.length
-    ? `${critical.length === 1 ? 'One figure does not hold' : `${critical.length} figures do not hold`}. `
-      + `Everything else on this application adds up.`
-    : material.length
-      ? `The arithmetic is sound. ${material.length} item${material.length === 1 ? '' : 's'} need${material.length === 1 ? 's' : ''} an answer from the contractor before this is certified.`
-      : `${st.passed} of ${st.checksRun} checks passed and nothing was found to question.`;
-
-  const completePct = isNum(s.line3) && s.line3 ? s.line4 / s.line3 : null;
+  const vcls = VERDICT_CLASS[doc.verdict] || 'ok';
 
   const facts = [
-    ['Applied for', money(s.line8), true],
-    ['This period', money(result.thisPeriod ?? null)],
-    ['Retainage', money(s.line5 ?? s.line5Total)],
-    ['Complete', completePct == null ? '—' : pct(completePct)],
+    ['Applied for', money(h.appliedFor), true],
+    ['This period', money(h.thisPeriod)],
+    ['Retainage', money(h.retainage)],
+    ['Complete', h.pctComplete == null ? '—' : pct(h.pctComplete)],
   ];
 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pay Application Review${s.applicationNumber ? ` — Application ${esc(s.applicationNumber)}` : ''}</title>
+<title>Pay Application Review${h.applicationNumber != null ? ` — Application ${esc(h.applicationNumber)}` : ''}</title>
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   :root{
@@ -289,27 +312,29 @@ function buildReportHtml({ result, summary, projectName, contractor }) {
 
   <header class="masthead">
     <div class="eyebrow">Pay Application Review</div>
-    <h1>${esc(projectName || s.projectName || 'Pay Application')}</h1>
-    <div class="sub">${[contractor || s.contractor,
-    s.applicationNumber != null ? `Application ${esc(s.applicationNumber)}` : null,
-    s.periodTo ? `Period to ${esc(s.periodTo)}` : null].filter(Boolean).map(esc).join(' · ')}</div>
+    <h1>${esc(h.projectName)}</h1>
+    <div class="sub">${[h.contractor,
+    h.applicationNumber != null ? `Application ${h.applicationNumber}` : null,
+    h.periodTo ? `Period to ${h.periodTo}` : null].filter(Boolean).map(esc).join(' · ')}</div>
     <div class="facts">
       ${facts.map(([l, v, big]) => `<div class="fact"><span class="eyebrow">${esc(l)}</span><span class="v${big ? ' big' : ''}">${v}</span></div>`).join('')}
     </div>
   </header>
 
   <div class="verdict ${vcls}">
-    <span class="call">${vlabel}</span>
-    <p>${esc(call)}</p>
+    <span class="call">${esc(doc.verdictLabel)}</span>
+    <p>${esc(doc.headline)}</p>
   </div>
 
-  ${findingSection('What to resolve', critical)}
-  ${findingSection('To confirm', material)}
-  ${findingSection('Noted, no action expected', notes, 4)}
+  ${findingSection('What to resolve', doc.resolve)}
+  ${findingSection('To confirm', doc.confirm)}
+  ${findingSection('Noted, no action expected', doc.noted, 4)}
 
-  ${subMatchSection(result.subMatch)}
+  ${subMatchSection(doc.subMatch)}
+  ${vendorRollupSection(doc.vendorRollup)}
+  ${taxSection(doc.tax, doc.taxToDeduct)}
 
-  ${waiverSection(result.waivers)}
+  ${waiverSection(doc.waivers)}
 
   <section class="sec">
     <h2>Checked and clean</h2>
@@ -319,7 +344,7 @@ function buildReportHtml({ result, summary, projectName, contractor }) {
       <div><span class="n">${st.lineItems}</span><span class="l">schedule lines read and recalculated</span></div>
       <div><span class="n">${st.enginesRun.length}</span><span class="l">of ${st.enginesTotal} review passes had documents to work with</span></div>
     </div>
-    ${result.notChecked.length ? `<p class="quiet"><b>Not checked.</b> ${result.notChecked.map(esc).join(' ')}</p>` : ''}
+    ${doc.notChecked.length ? `<p class="quiet"><b>Not checked.</b> ${doc.notChecked.map(esc).join(' ')}</p>` : ''}
   </section>
 
   <footer>

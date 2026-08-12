@@ -189,7 +189,31 @@ function payAppShape(withSubBreakdowns) {
           totalToDate: { type: 'number' },
           retainage: { type: 'number', description: 'Total retainage withheld from them to date.' },
           retainageRate: { type: 'number', description: 'As a decimal.' },
+          balanceToFinish: { type: 'number', description: 'Their balance to finish, if their sheet prints one.' },
           currentDue: { type: 'number' },
+          // The subcontractor's own sheet is frequently divided — base contract rows under one
+          // cost code, an approved change under another — and that division is usually the same
+          // division as the owner's schedule. Capturing the group totals lets the review say WHICH
+          // piece of a subcontract is billed where, rather than only that the whole ties.
+          groups: {
+            type: 'array',
+            description: 'If their continuation sheet separates its rows into groups — by cost '
+              + 'code, contract-change number, or a subtotal line — give one entry per group with '
+              + "that group's column totals. Omit entirely if the sheet is one undivided list. Do "
+              + 'not list individual rows here; only groups.',
+            items: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', description: 'The cost code or change number the group carries.' },
+                description: { type: 'string' },
+                scheduledValue: { type: 'number' },
+                previous: { type: 'number' },
+                thisPeriod: { type: 'number' },
+                totalToDate: { type: 'number' },
+                retainage: { type: 'number' },
+              },
+            },
+          },
         },
         required: ['vendor'],
       },
@@ -259,8 +283,136 @@ function payAppShape(withSubBreakdowns) {
           vendor: { type: 'string' },
           ref: { type: 'string', description: 'Invoice number.' },
           amount: { type: 'number', description: 'The tax amount only, not the invoice total.' },
+          // Whether the owner owes a tax depends on what was bought, not on the tax itself. Two
+          // identical $412.50 charges get opposite answers when one is a rented lift and the
+          // other is office furniture, and the only thing that can tell them apart is what the
+          // invoice says it is selling.
+          description: {
+            type: 'string',
+            description: 'What the invoice is charging for, in its own words — "Crane rental '
+              + '4/1-4/30", "Office furniture", "Diesel fuel". This decides who owes the tax, so '
+              + 'copy the wording rather than summarising it.',
+          },
+          category: {
+            type: 'string',
+            enum: ['consumable', 'furnishing', 'material', 'rental', 'labor', 'freight'],
+            description: 'Only when the DOCUMENT makes it plain — a rental agreement, a line '
+              + 'under a "Consumables" heading, a delivery ticket. Omit when you are inferring '
+              + 'from the description alone; the review infers too, and says so when it does, '
+              + 'which a stated category would wrongly suppress.',
+          },
+          taxableBase: {
+            type: 'number',
+            description: 'The amount the tax was charged on, if the invoice states it separately.',
+          },
+          rate: { type: 'number', description: 'The tax rate as a decimal — 8.25% is 0.0825.' },
+          code: { type: 'string', description: 'Cost code the charge is booked to, if shown.' },
+          inFeeBase: {
+            type: 'boolean',
+            description: "True only if the contractor's fee is visibly calculated on a total that "
+              + 'includes this tax.',
+          },
         },
       },
+    };
+
+    // THE BACKUP ITSELF.
+    //
+    // Everything the contractor encloses to prove a cost: invoices, receipts, rental statements,
+    // permit fees. Two whole review passes read this and nothing else, so when it is missing they
+    // stand down and the report says nothing was submitted — which, for a package with fifty
+    // pages of invoices bound into it, is simply false.
+    shape.properties.backupDocuments = {
+      type: 'array',
+      description: 'Every invoice, receipt or statement enclosed as backup. Empty only if the '
+        + 'package genuinely contains none.',
+      items: {
+        type: 'object',
+        properties: {
+          vendor: { type: 'string' },
+          ref: { type: 'string', description: 'Invoice or receipt number, exactly as printed.' },
+          date: { type: 'string', description: 'YYYY-MM-DD if possible.' },
+          amount: { type: 'number', description: 'The document total.' },
+          tax: { type: 'number', description: 'Sales tax shown separately, if any.' },
+          description: { type: 'string', description: 'What was bought, in the document\'s words.' },
+          supportsItemNo: {
+            type: 'string',
+            description: 'The schedule-of-values item number or cost code this document supports, '
+              + 'if the package makes it clear — a cost code stamped on it, or the breakdown '
+              + 'section it sits under. Omit rather than guess: a document tied to the wrong line '
+              + 'produces a confident finding about a line that is perfectly fine.',
+          },
+          supportsLine: {
+            type: 'string',
+            description: 'The schedule-of-values line description it supports, if stated.',
+          },
+          excludedThisPeriod: {
+            type: 'boolean',
+            description: 'True if the document is annotated as NOT billed on this application — '
+              + '"not included this month", "next pay app", or similar.',
+          },
+          excludedAmount: { type: 'number', description: 'The part excluded, if only part is.' },
+          note: { type: 'string', description: 'Any handwritten annotation, transcribed.' },
+          page: { type: 'number' },
+        },
+      },
+    };
+
+    // A job-cost transaction report, when the contractor encloses one. It prints its own total,
+    // which is what makes a complete read provable rather than assumed.
+    shape.properties.costReports = {
+      type: 'array',
+      description: 'Empty unless the package encloses a job-cost or transaction report.',
+      items: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'What the report covers, short — "GC", "Cost of Work", "General Conditions".',
+          },
+          printedTotal: {
+            type: 'number',
+            description: 'The grand total the report prints for itself. Important: it is what '
+              + 'proves every row was read.',
+          },
+          transactions: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                source: {
+                  type: 'string',
+                  description: 'The posting type column — AP, PY, JC, EM. Copy it as printed; it '
+                    + 'distinguishes a vendor invoice from an internal allocation.',
+                },
+                date: { type: 'string' },
+                vendor: { type: 'string' },
+                ref: { type: 'string', description: 'Invoice or draw reference, exactly as printed.' },
+                description: { type: 'string' },
+                amount: { type: 'number' },
+                quantity: { type: 'number', description: 'Hours or units, when the row shows them.' },
+                costCode: { type: 'string' },
+                costCodeName: { type: 'string' },
+                removed: {
+                  type: 'boolean',
+                  description: 'True if the row or its cost code is annotated as removed from '
+                    + 'this billing ("Cost Removed").',
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    // How much of the package is backup at all. Without it, "no backup was submitted" and "the
+    // backup could not be read" are indistinguishable in the report — and they are completely
+    // different statements to put in front of a contractor.
+    shape.properties.backupPageCount = {
+      type: 'number',
+      description: 'Roughly how many pages after the pay application itself are backup of any '
+        + 'kind — invoices, receipts, cost reports, subcontractor applications, lien waivers. '
+        + '0 if the package is the application alone.',
     };
   }
   return shape;
@@ -298,10 +450,13 @@ Rules:
 - Never merge or average line items to shorten the response — every row on the continuation sheet must appear.
 - "subBreakdowns" (current application only): capture EVERY subcontractor or vendor cost-breakdown section that appears after the continuation sheet — these detail the amount shown as a single line on the G703. Read "basis" from the breakdown's own wording (a heading like "this period" or "billed to date"); use "unclear" rather than guessing. Include every component row. If the document has no such sections, use [].
 - On every component row, copy the invoice or draw reference EXACTLY as printed — "225020-003-2", "64328", "AR847666". The format of that reference is itself checked (a commitment draw looks different from a vendor invoice number), so a cleaned-up or reformatted reference is worse than no reference at all. Record the heading each row sits under as "category".
-- "subApplications": if the package encloses subcontractors' OWN applications for payment — their G702/G703 addressed to the contractor rather than to the owner — record each one. These are usually behind the contractor's invoice. Take "thisPeriod" from their THIS PERIOD column only, never their total to date.
+- "subApplications": if the package encloses subcontractors' OWN applications for payment — their G702/G703 addressed to the contractor rather than to the owner — record each one. These are usually behind the contractor's invoice. Take "thisPeriod" from their THIS PERIOD column only, never their total to date. Record EVERY column total their sheet prints — contract sum, previous, this period, to date, balance to finish and retainage — even when some repeat figures you have already recorded elsewhere. The review adds a subcontractor's columns up against the owner's schedule to find scope that is billed in two separate places, and it can only do that with the whole row; a missing column is a check that cannot run.
 - "contractorInvoice": if the contractor encloses its own invoice with a summary block stating a cost base, a fee and its rate, a total and retainage, record those figures.
-- "taxes": if any backup invoice shows a separate sales tax line, record the tax amount only — not the invoice total.
-- "waivers": record every lien waiver, release or affidavit of bills paid in the package. Read "type" from what the document DOES, not its title — a page headed "Release of Liens" that swears all bills are paid AND releases on disbursement is both, so name both. If the package contains only an audit trail or transmittal showing a waiver was submitted, record it with onRecordOnly true and no amount; do not invent figures for a document you cannot see.`;
+- "taxes": if any backup invoice or subcontractor breakdown shows a separate sales or use tax line, record the tax amount only — not the invoice total — and record WHAT THE CHARGE IS FOR in its own words. That description decides who owes the tax: on most contracts the tax on equipment RENTED for the job (a crane, a tractor, a lift, portable toilets) is a reimbursable job cost, while the tax on things bought and consumed or kept (fuel, blades, safety supplies, furniture, tools) is the contractor's or subcontractor's own cost. The review makes that call, and it can only make it from the wording. Record the taxable base and rate whenever the invoice prints them.
+- "waivers": record every lien waiver, release or affidavit of bills paid in the package. Read "type" from what the document DOES, not its title — a page headed "Release of Liens" that swears all bills are paid AND releases on disbursement is both, so name both. If the package contains only an audit trail or transmittal showing a waiver was submitted, record it with onRecordOnly true and no amount; do not invent figures for a document you cannot see.
+- "backupDocuments": record EVERY invoice, receipt and statement enclosed as backup, one entry each — these are usually bound in behind the pay application rather than sent separately. Set "supportsItemNo" only when the package actually says which line a document belongs to (a cost code stamped on it, or the breakdown section it sits under); omit it rather than guessing, because a document tied to the wrong line produces a confident finding about a line that is perfectly correct. Transcribe any handwritten annotation into "note", and set "excludedThisPeriod" when the annotation says the cost is not being billed this month.
+- "costReports": if a job-cost or transaction report is enclosed, record its rows and — this matters more than any single row — the grand total it prints for itself, which is what proves the read was complete.
+- "backupPageCount": roughly how many pages of the package are backup rather than the application itself. This is how the review tells "no backup was submitted" apart from "backup was submitted and could not be read", which are very different things to tell a contractor.`;
 }
 
 const TOO_MANY_LINE_ITEMS = 'These pay applications have too many line items to extract in one '

@@ -386,7 +386,11 @@ function runWaiverChecks(app) {
       waivers: (app.waivers || []).length,
     },
     verdict: findings.some(f => f.severity === SEVERITY.CRITICAL) ? 'do-not-certify'
-      : findings.length ? 'certify-with-corrections' : 'no-issues-found',
+      // Notes do not move the verdict. They print under a heading that says no action is
+      // expected, so letting one downgrade an otherwise clean application would have the
+      // report contradict itself.
+      : findings.some(f => f.severity === SEVERITY.MATERIAL) ? 'certify-with-corrections'
+        : 'no-issues-found',
   };
 }
 

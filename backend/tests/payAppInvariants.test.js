@@ -24,12 +24,16 @@ const { runBackupChecks } = require('../lib/payAppBackup');
 const { runCoverageChecks, coverageTable } = require('../lib/payAppCoverage');
 const { runSubcontractChecks, chainTable } = require('../lib/payAppSubcontracts');
 const { runWaiverChecks, waiverTable } = require('../lib/payAppWaivers');
+const { runVendorRollupChecks } = require('../lib/payAppVendorRollup');
+const { runTaxChecks, taxTable } = require('../lib/payAppTax');
 
 const ENGINES = {
   backup: runBackupChecks,
   coverage: runCoverageChecks,
   subcontracts: runSubcontractChecks,
   waivers: runWaiverChecks,
+  vendorRollup: runVendorRollupChecks,
+  tax: runTaxChecks,
 };
 
 const DIR = path.join(__dirname, 'fixtures', 'payapp');
@@ -74,7 +78,7 @@ function runFixture(file) {
   // Three families, three engines. Arithmetic fixtures carry G702/G703 figures; backup fixtures
   // carry transactions and receipts; coverage fixtures carry a schedule of values and the
   // documents attached to each line. The `kind` field says which.
-  const { findings, summary, verdict, results, lines, codes } =
+  const { findings, summary, verdict, results, lines, codes, rolls } =
     (ENGINES[fixture.kind] || runInvariants)(fixture);
 
   const unmatchedActual = [...findings];
@@ -96,7 +100,28 @@ function runFixture(file) {
   }
   const unexpected = unmatchedActual;
   const verdictOk = !expected.verdict || expected.verdict === verdict;
-  const ok = missed.length === 0 && unexpected.length === 0 && verdictOk;
+
+  // A rollup fixture scored on findings alone would prove nothing. Its whole point is that the
+  // application is CORRECT and the engine has to work out which lines belong to which subcontract
+  // to see that — and an engine that found nothing at all would sit just as silently. So the
+  // fixture states the set it must arrive at, and arriving somewhere else fails the run.
+  const rollupMisses = [];
+  for (const exp of expected.rollup || []) {
+    const r = (rolls || []).find(x => x.vendor.vendor === exp.vendor);
+    if (!r) { rollupMisses.push(`${exp.vendor} — was not rolled up at all`); continue; }
+    if (exp.status && exp.status !== r.outcome) {
+      rollupMisses.push(`${exp.vendor} — came out "${r.outcome}", expected "${exp.status}"`);
+    }
+    if (exp.lines) {
+      const got = (r.lines || []).map(l => l.description).sort();
+      const want = [...exp.lines].sort();
+      if (got.join(' | ') !== want.join(' | ')) {
+        rollupMisses.push(`${exp.vendor} — matched [${got.join('; ') || 'nothing'}], expected [${want.join('; ')}]`);
+      }
+    }
+  }
+
+  const ok = missed.length === 0 && unexpected.length === 0 && verdictOk && rollupMisses.length === 0;
 
   console.log(`\n${paint('bold', fixture.name || file)}`);
   console.log(paint('dim', `  ${fixture.$source || file}`));
@@ -120,6 +145,19 @@ function runFixture(file) {
     console.log(paint('red', `\n  UNEXPECTED ${unexpected.length} finding(s) on something not known to be wrong:`));
     for (const u of unexpected) {
       console.log(`    ${u.id.padEnd(4)} ${place(u).padEnd(30)} ${u.detail}`);
+    }
+  }
+
+  if (expected.rollup?.length) {
+    console.log(rollupMisses.length ? paint('red', '\n  the rollup landed in the wrong place:')
+      : paint('green', `\n  rolled up ${expected.rollup.length} subcontract(s) onto the right lines:`));
+    for (const m of rollupMisses) console.log(paint('red', `    ${m}`));
+    if (!rollupMisses.length) {
+      for (const exp of expected.rollup) {
+        const r = rolls.find(x => x.vendor.vendor === exp.vendor);
+        console.log(`    ${exp.vendor.padEnd(20)} ${String(r.lines.length).padStart(2)} line(s), `
+          + `${r.cmp.matched.length}/${r.cmp.comparable} columns — ${exp.why || r.outcome}`);
+      }
     }
   }
 
@@ -164,6 +202,19 @@ function runFixture(file) {
           + (row.subcontractors.length ? paint('dim', `  <- ${row.subcontractors.join('; ')}`) : ''));
       }
     }
+    // Who owes each tax charge and why. For a tax fixture this table IS the review — the findings
+    // only name the ones that are wrong, and a reader has to be able to see that a quiet charge is
+    // quiet because it was classified and allowed, not because nobody looked at it.
+    if (fixture.kind === 'tax') {
+      console.log(paint('blue', '\n  every tax charge, and who owes it:'));
+      for (const row of taxTable(runTaxChecks(fixture).taxes)) {
+        const mark = row.verdict === 'owner pays' ? 'green'
+          : row.verdict === 'needs a ruling' ? 'yellow' : 'red';
+        console.log(`    ${paint(mark, row.verdict.padEnd(22))} ${money(row.amount).padStart(11)}  `
+          + `${String(row.vendor).slice(0, 22).padEnd(24)}${row.category}`
+          + (row.inferred ? paint('dim', `  (${row.why})`) : ''));
+      }
+    }
     // Who could file a lien, what they are owed, and what is on file for them. A reader has to be
     // able to satisfy themselves that nobody is missing by reading a column.
     if (fixture.kind === 'waivers') {
@@ -204,7 +255,45 @@ const MUTATIONS = [
   ['a line billed $100 beyond its value',  a => { const li = a.lineItems.find(x => x.c > 0); li.g = li.c + 100; }],
   ['a line claims $100 more done before',  a => { a.lineItems[0].d += 100; }],
   ['the grand total inflated by $100',     a => { a.grandTotals.g += 100; }],
+
+  // The six ported from the retired check suite. These name the rule that must catch them,
+  // because each is the ONLY rule watching its particular failure — "some finding appeared"
+  // would not tell us the right one did.
+  ['the percent-complete column disagrees with the money', 'I25',
+    (a) => { const li = a.lineItems.find(x => x.c > 0 && x.g > 0); li.pct = 3; }],
+  ['the application number skips one', 'I26',
+    (a) => { needPrior(a); a.meta.applicationNumber = Number(a.prior.applicationNumber) + 3; }],
+  ['the billing period runs backwards', 'I27',
+    (a) => { needPrior(a); a.prior.periodTo = '2099-01-01'; a.meta.periodTo = '2026-01-01'; }],
+  ['the change order log disagrees with line 2', 'I28',
+    (a) => {
+      a.contract = { ...(a.contract || {}), changeOrderLog: [{ coNumber: '1', amount: 12.34 }] };
+    }],
+  ['a previously billed line is dropped from the schedule', 'I29',
+    (a) => {
+      needPrior(a);
+      const billed = a.prior.lineItems.find(li => (li.g || 0) > 0);
+      if (!billed) throw new Error('not in this fixture');
+      a.lineItems = a.lineItems.filter(li => String(li.itemNo) !== String(billed.itemNo));
+    }],
+  ['a started line stops while the job moves', 'I30',
+    (a) => {
+      needPrior(a);
+      // Pick a line that IS moving, and freeze it at what the previous application showed.
+      const moving = a.lineItems.find((li) => {
+        const was = a.prior.lineItems.find(x => String(x.itemNo) === String(li.itemNo));
+        return was && li.c >= 5000 && li.g > (was.g || 0) && li.g < li.c;
+      });
+      if (!moving) throw new Error('not in this fixture');
+      const was = a.prior.lineItems.find(x => String(x.itemNo) === String(moving.itemNo));
+      moving.g = was.g; moving.e = 0; moving.d = was.g;
+    }],
 ];
+
+const needPrior = (a) => {
+  if (!a.prior || !(a.prior.lineItems || []).length) throw new Error('not in this fixture');
+  return a.prior;
+};
 
 // A coverage fixture cannot be scored the same way. Its clean lines are clean because no
 // documentation packet was supplied for them, and the honest expectation is silence — so
@@ -369,6 +458,117 @@ function runSubMutations(base) {
   return undetected.length === 0;
 }
 
+// The rollup fixture is a CORRECT application — the whole finding is that the two halves of one
+// subcontract were found and tie — so it is silent by design and every rule has to be proved by
+// breaking something. Each mutation is a real way this goes wrong on a job.
+const gsLine = (a, desc) => {
+  const l = (a.sovLines || []).find(x => x.description.startsWith(desc));
+  if (!l) throw new Error('not in this fixture');
+  return l;
+};
+const gsVendor = (a) => {
+  const v = (a.vendors || []).find(x => x.vendor === 'GreenScape');
+  if (!v) throw new Error('not in this fixture');
+  return v;
+};
+
+const ROLLUP_MUTATIONS = [
+  // The one that pays for the engine: the sub billed one amount, the owner is billed another,
+  // and the contract sum still ties so it is unmistakably the same scope.
+  ['the owner is billed $2,500 more this period than the sub billed', 'V1',
+    (a) => {
+      const l = gsLine(a, 'Tree Protection');
+      l.thisPeriod += 2500; l.totalToDate += 2500; l.balance -= 2500; l.retainage += 125;
+    }],
+  ['the sub is retained at a different rate than the owner', 'V1',
+    a => { gsVendor(a).retainage += 400; }],
+  ["the sub's contract sum no longer covers the lines billing their work", 'V1',
+    a => { gsVendor(a).scheduledValue += 5000; }],
+  ["a line bills under the sub's name outside the scope they invoiced", 'V2',
+    a => {
+      a.sovLines.push({ itemNo: 'BC-32.95', description: 'Irrigation Repair - GreenScape',
+        scheduledValue: 4200, previous: 0, thisPeriod: 900, totalToDate: 900,
+        balance: 3300, retainage: 45 });
+    }],
+  ["a scope group on the sub's own sheet lands on no schedule line", 'V3',
+    a => { gsVendor(a).groups[0].scheduledValue = 99999; }],
+];
+
+function runRollupMutations(base) {
+  const undetected = [];
+  let applicable = 0;
+  for (const [label, expectId, mutate] of ROLLUP_MUTATIONS) {
+    const copy = JSON.parse(JSON.stringify(base));
+    try { mutate(copy); } catch { continue; }
+    applicable++;
+    const { findings } = runVendorRollupChecks(copy);
+    if (!findings.some(f => f.id === expectId)) undetected.push(`${label} (expected ${expectId})`);
+  }
+  if (!applicable) return null;
+  console.log(`  sensitivity: ${applicable - undetected.length}/${applicable} single changes noticed`
+    + (undetected.length ? paint('red', ` — MISSED: ${undetected.join('; ')}`) : paint('green', ' ✓')));
+  return undetected.length === 0;
+}
+
+// The tax fixture already carries real errors, so mutations here prove the OTHER half: the rules
+// that are currently silent because the application is right. Each one names the check that must
+// notice, because several tax rules can fire on one charge and "something appeared" would not tell
+// us the right one did.
+const taxOn = (a, ref) => {
+  const t = (a.taxes || []).find(x => x.ref === ref);
+  if (!t) throw new Error('not in this fixture');
+  return t;
+};
+
+const TAX_MUTATIONS = [
+  // The reverse of the finding this engine exists for: a contract that does NOT make rental tax
+  // reimbursable, with rental tax billed anyway. Silent today and must not be.
+  ['the contract does not make rental tax reimbursable', 'T3',
+    (a) => {
+      a.taxRules.categories.find(c => c.category === 'rental').treatment = 'contractor-absorbs';
+    }],
+  ['tax is charged on the marked-up total rather than on the cost', 'T5',
+    a => { taxOn(a, '128-4471902').amount = 260.15; }],
+  ['the fee is taken across the tax as well as the cost', 'T6',
+    a => { taxOn(a, 'INV-559120').inFeeBase = true; }],
+  ['tax is billed on materials the exemption certificate covers', 'T4',
+    (a) => {
+      a.taxes.push({ vendor: 'Gulf Coast Steel', ref: 'GC-7781',
+        description: 'Structural steel delivered to site', category: 'material', amount: 1650.00 });
+    }],
+  ['no contract tax provisions were ever read for this project', 'T1',
+    a => { a.taxRules = null; }],
+  // A ruling the PM has given must silence the question, not be overridden by the contract text.
+  // The failure mode is the opposite of the others: this mutation must make a finding GO AWAY.
+  ['a ruling by the PM settles a category', 'T2-cleared',
+    (a) => {
+      a.taxRulings = [{ category: 'furnishing', treatment: 'reimbursable',
+        note: 'Owner agreed to fund site office furniture under the general conditions allowance' }];
+    }],
+];
+
+function runTaxMutations(base) {
+  const undetected = [];
+  let applicable = 0;
+  for (const [label, expectId, mutate] of TAX_MUTATIONS) {
+    const copy = JSON.parse(JSON.stringify(base));
+    try { mutate(copy); } catch { continue; }
+    applicable++;
+    const { findings } = runTaxChecks(copy);
+    // A "-cleared" expectation is the inverse test: the named finding must no longer be raised
+    // about the charge the ruling covers. A rule that cannot be switched off by the person
+    // entitled to switch it off is a rule that will be ignored within two applications.
+    const caught = expectId.endsWith('-cleared')
+      ? !findings.some(f => f.id === expectId.replace('-cleared', '') && f.where?.ref === '8841')
+      : findings.some(f => f.id === expectId);
+    if (!caught) undetected.push(`${label} (expected ${expectId})`);
+  }
+  if (!applicable) return null;
+  console.log(`  sensitivity: ${applicable - undetected.length}/${applicable} single changes noticed`
+    + (undetected.length ? paint('red', ` — MISSED: ${undetected.join('; ')}`) : paint('green', ' ✓')));
+  return undetected.length === 0;
+}
+
 function runCoverageMutations(base) {
   const undetected = [];
   for (const [label, expectId, mutate] of COVERAGE_MUTATIONS) {
@@ -389,18 +589,28 @@ function runMutations(file) {
   if (base.kind === 'subcontracts') return runSubMutations(base);
   if (base.kind === 'waivers') return runWaiverMutations(base);
   if (base.kind === 'backup') return runBackupMutations(base);
+  if (base.kind === 'vendorRollup') return runRollupMutations(base);
+  if (base.kind === 'tax') return runTaxMutations(base);
   if ((base.expected?.findings || []).length) return null;   // only meaningful on a clean one
 
   const undetected = [];
-  for (const [label, mutate] of MUTATIONS) {
+  // Two shapes. The older nudges are satisfied by any finding at all — they break a figure the
+  // whole form depends on, so several rules should react. The newer ones name the rule that must
+  // catch them, because each is the only rule watching that failure.
+  let applicable = 0;
+  for (const [label, second, third] of MUTATIONS) {
+    const named = typeof second === 'string';
+    const mutate = named ? third : second;
     const copy = JSON.parse(JSON.stringify(base));
     try { mutate(copy); } catch { continue; }                // fixture lacks what this nudges
+    applicable++;
     const { findings } = runInvariants(copy);
-    if (!findings.length) undetected.push(label);
+    const caught = named ? findings.some(f => f.id === second) : findings.length > 0;
+    if (!caught) undetected.push(named ? `${label} (expected ${second})` : label);
   }
 
-  const detected = MUTATIONS.length - undetected.length;
-  console.log(`  sensitivity: ${detected}/${MUTATIONS.length} single-figure changes noticed`
+  const detected = applicable - undetected.length;
+  console.log(`  sensitivity: ${detected}/${applicable} single-figure changes noticed`
     + (undetected.length ? paint('red', ` — MISSED: ${undetected.join('; ')}`) : paint('green', ' ✓')));
   return undetected.length === 0;
 }

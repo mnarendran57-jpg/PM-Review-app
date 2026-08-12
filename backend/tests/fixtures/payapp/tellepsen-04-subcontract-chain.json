@@ -1313,11 +1313,6 @@
     "why": "Tellepsen Field Support Department $20,828.50 \u2014 self-perform billed as a subcontract"
    },
    {
-    "id": "S7",
-    "ref": "AR847666",
-    "why": "$21.44 of Texas sales tax passed through to a tax-exempt school district"
-   },
-   {
     "id": "S9",
     "ref": "50331",
     "why": "the 1.90% contract fee is taken on an internal invoice that already carries $501.55 of its own fee"
@@ -1325,5 +1320,5 @@
   ]
  },
  "$source": "Parsed from \"225020 - Pay App 4-R2 - MWA Certified.pdf\" (28 pages). Continuation sheet pages 2-5, contractor invoice 50559 breakdown pages 7-10, Grant Mackay application 2 pages 12-13, Afton application 1 pages 16-17, Tellepsen Services invoice 50331 page 20, Seamless invoice AR847666 page 28, bond invoice 735998 page 22. Every one of the thirteen cost codes was reconciled three ways \u2014 parsed entries against the printed Sub-Total, the printed Summary and column G \u2014 before being written here.",
- "$note": "What makes this package worth keeping is how much of it is right. The fee is 1.90% of a stated base that really is the sum of the costs; retainage is 5% at both levels and Grant Mackay's $17,254.50 equals the owner's column K on the same two lines to the cent; the subcontractors and the contractor agree on what was billed BEFORE this period as well as during it. S6 is the check that earns its place: three subcontract charges carry vendor invoice numbers instead of commitment draws, and the one the PM annotated by hand \u2014 Ensolum, \"CO needed, contract currently under CT6 instead of CT7\" \u2014 is found by the shape of the reference alone, with no subcontract log to consult. NOT compared, deliberately: subcontract values against schedule of values lines. Grant Mackay's asbestos contract is $98,550 against an owner line of $255,872, because the line covers scope not yet bought out. Billing must agree; contract values need not."
+ "$note": "What makes this package worth keeping is how much of it is right. The fee is 1.90% of a stated base that really is the sum of the costs; retainage is 5% at both levels and Grant Mackay's $17,254.50 equals the owner's column K on the same two lines to the cent; the subcontractors and the contractor agree on what was billed BEFORE this period as well as during it. S6 is the check that earns its place: three subcontract charges carry vendor invoice numbers instead of commitment draws, and the one the PM annotated by hand \u2014 Ensolum, \"CO needed, contract currently under CT6 instead of CT7\" \u2014 is found by the shape of the reference alone, with no subcontract log to consult. NOT compared, deliberately: subcontract values against schedule of values lines. Grant Mackay's asbestos contract is $98,550 against an owner line of $255,872, because the line covers scope not yet bought out. Billing must agree; contract values need not. The S7 sales-tax expectation moved to the tax engine (T1-T8) on 2026-08-12: whether tax is owed depends on what was bought, and S7 could not tell a reimbursable equipment rental from a consumable. The AR847666 charge it named is carried in tax-consumables-vs-rentals.json."
 }

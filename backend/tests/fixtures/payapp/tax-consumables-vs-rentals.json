@@ -1,0 +1,114 @@
+{
+ "kind": "tax",
+ "name": "Tax \u2014 consumables the contractor owes, rentals the owner owes",
+ "$source": "The rule the PM applies by hand on every application and the review never did: on this contract the tax on things bought and consumed or kept is the contractor's, and the tax on equipment rented for the job is a reimbursable cost. Charges below are the shapes these actually arrive in \u2014 a rental house invoice, a furniture purchase inside a subcontractor breakdown, fuel, and one line too terse to place.",
+ "meta": {
+  "applicationNumber": "4",
+  "periodTo": "2026-05-31",
+  "contractor": "BCGC"
+ },
+ "contract": {
+  "ownerTaxExempt": true,
+  "taxExemptBasis": "Owner is a Texas independent school district",
+  "feeRate": 0.019
+ },
+ "taxRules": {
+  "categories": [
+   {
+    "category": "rental",
+    "treatment": "reimbursable",
+    "basis": "Rental charges for construction equipment, including taxes thereon, shall be a Cost of the Work"
+   },
+   {
+    "category": "consumable",
+    "treatment": "contractor-absorbs",
+    "basis": "Taxes on supplies consumed in the performance of the Work shall be borne by the Contractor"
+   },
+   {
+    "category": "furnishing",
+    "treatment": "contractor-absorbs",
+    "basis": "Taxes on equipment and furnishings purchased and retained by the Contractor or its Subcontractors are not reimbursable"
+   }
+  ],
+  "markupOnTaxAllowed": false,
+  "taxIncludedInContractSum": null,
+  "exemptionCertificate": true
+ },
+ "taxes": [
+  {
+   "vendor": "Sunbelt Rentals",
+   "ref": "128-4471902",
+   "description": "40' boom lift rental 5/1-5/31",
+   "amount": 214.5,
+   "taxableBase": 2600.0,
+   "rate": 0.0825
+  },
+  {
+   "vendor": "Maxim Crane Works",
+   "ref": "INV-559120",
+   "description": "90 ton crane rental, monthly rate",
+   "amount": 1031.25,
+   "taxableBase": 12500.0,
+   "rate": 0.0825
+  },
+  {
+   "vendor": "GreenScape",
+   "ref": "8841",
+   "description": "Site office furniture - desks and chairs",
+   "amount": 412.5,
+   "taxableBase": 5000.0,
+   "rate": 0.0825
+  },
+  {
+   "vendor": "Sunstate Equipment",
+   "ref": "9930112",
+   "description": "Diesel fuel for jobsite generators",
+   "amount": 66.0,
+   "taxableBase": 800.0,
+   "rate": 0.0825
+  },
+  {
+   "vendor": "Fastenal",
+   "ref": "TXHOU-118823",
+   "description": "Cut-off blades, gloves and safety supplies",
+   "amount": 18.15,
+   "taxableBase": 220.0,
+   "rate": 0.0825
+  },
+  {
+   "vendor": "Alpha Building Corp",
+   "ref": "5512",
+   "description": "Tax",
+   "amount": 318.4
+  },
+  {
+   "vendor": "Tellepsen Builders",
+   "ref": "AR847666",
+   "description": "Sales tax",
+   "amount": 21.44
+  }
+ ],
+ "expected": {
+  "verdict": "certify-with-corrections",
+  "findings": [
+   {
+    "id": "T2",
+    "ref": "8841",
+    "why": "$412.50 of tax on office furniture, which this contract makes the contractor absorb"
+   },
+   {
+    "id": "T2",
+    "ref": "9930112",
+    "why": "$66.00 of tax on diesel fuel \u2014 a consumable, the contractor's own cost"
+   },
+   {
+    "id": "T2",
+    "why": "$18.15 of tax on blades and safety supplies, rolled up as one note under the $25 floor"
+   },
+   {
+    "id": "T7",
+    "why": "$339.84 of tax on a tax-exempt job that says only \"Tax\" \u2014 including the $21.44 the retired S7 used to catch, now raised at the same weight but without pretending to know what was bought"
+   }
+  ]
+ }
+}

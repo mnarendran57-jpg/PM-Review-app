@@ -840,6 +840,211 @@ const INVARIANTS = [
       });
     },
   },
+
+  // ---- I25  The percent-complete column matches the money ------------------------------------
+  // The percentage is the column people actually read. It is derived, so it can drift from the
+  // figures beside it without any total disagreeing — and a line shown at 45% while its money
+  // says 80% is how a schedule quietly stops describing the job.
+  {
+    id: 'I25',
+    title: 'The percent complete shown matches the amount billed',
+    severity: SEVERITY.NOTE,
+    run(app) {
+      const out = [];
+      for (const li of app.lineItems || []) {
+        if (!isNum(li.pct) || !isNum(li.c) || !li.c || !isNum(li.g)) continue;
+        // Stored as a fraction by the engines, as a whole number by the form. Accept either.
+        const shown = Math.abs(li.pct) <= 1 ? li.pct * 100 : li.pct;
+        // A "percentage" of 18,822.6 is not an over-billed line, it is a misread cell — the
+        // figure beside it in the row, most often. Reporting it as a percentage mismatch would
+        // dress a reading failure up as a finding about the contractor, so the line stands down
+        // and says which figure could not be trusted.
+        if (shown > 1000 || shown < -100) {
+          out.push(skip(`The percent-complete cell on this line reads ${li.pct}, which is not a `
+            + 'percentage. It was not compared.', { where: { itemNo: li.itemNo, field: 'pct' } }));
+          continue;
+        }
+        const computed = (li.g / li.c) * 100;
+        const where = { itemNo: li.itemNo, description: li.description, page: li.page, field: 'pct' };
+        out.push(Math.abs(computed - shown) <= 0.5 ? pass({ where }) : fail({
+          where,
+          expected: computed,
+          actual: shown,
+          detail: `This line is shown as ${shown.toFixed(1)}% complete, but ${money(li.g)} billed `
+            + `against a scheduled value of ${money(li.c)} works out to ${computed.toFixed(1)}%.`,
+        }));
+      }
+      return out.length ? out : skip('No line states a percent complete that could be checked.');
+    },
+  },
+
+  // ---- I26  The application number follows the last one ----------------------------------------
+  {
+    id: 'I26',
+    title: 'This application follows the previous one in sequence',
+    severity: SEVERITY.NOTE,
+    run(app) {
+      const prior = app.prior;
+      const now = app.meta?.applicationNumber ?? app.summary?.applicationNumber;
+      if (!prior || !isNum(Number(now)) || !isNum(Number(prior.applicationNumber))) {
+        return skip('No previous application is on file to check the numbering against.');
+      }
+      const diff = Number(now) - Number(prior.applicationNumber);
+      return diff === 1 ? pass({}) : fail({
+        expected: Number(prior.applicationNumber) + 1,
+        actual: Number(now),
+        detail: `This is application ${now}, following application ${prior.applicationNumber}. `
+          + `${diff > 1
+            ? `${diff - 1} application(s) in between are missing from this project's record, so the `
+              + 'from-previous figures cannot be traced to anything.'
+            : 'An application number that does not advance means one of the two is mislabelled.'}`,
+      });
+    },
+  },
+
+  // ---- I27  The billing period follows the last one ---------------------------------------------
+  // Overlapping periods are how the same work gets billed twice: two applications can each be
+  // internally perfect and still cover some of the same days.
+  {
+    id: 'I27',
+    title: 'The billing period starts after the previous one ended',
+    severity: SEVERITY.MATERIAL,
+    run(app) {
+      const prior = app.prior;
+      const now = app.meta?.periodTo || app.summary?.periodTo;
+      if (!prior?.periodTo || !now) return skip('No previous period end is on file to compare against.');
+      const a = Date.parse(now);
+      const b = Date.parse(prior.periodTo);
+      if (Number.isNaN(a) || Number.isNaN(b)) return skip('One of the two period dates could not be read.');
+      return a > b ? pass({}) : fail({
+        where: { field: 'periodTo' },
+        expected: prior.periodTo,
+        actual: now,
+        detail: `This application bills through ${now}, but the previous one already billed through `
+          + `${prior.periodTo}. Either a date is wrong or the two periods overlap, in which case some `
+          + 'work is being billed on both.',
+      });
+    },
+  },
+
+  // ---- I28  Change orders agree with the change order log ----------------------------------------
+  {
+    id: 'I28',
+    title: 'Change orders agree with the project change order log',
+    severity: SEVERITY.MATERIAL,
+    run(app) {
+      const log = app.contract?.changeOrderLog;
+      if (!log || !log.length) return skip('No change order log was supplied to check against.');
+      const out = [];
+
+      const logTotal = log.reduce((a, c) => a + (isNum(c.amount) ? c.amount : 0), 0);
+      const s = app.summary || {};
+      if (isNum(s.line2)) {
+        out.push(close(s.line2, logTotal, TOL.aggregate) ? pass({ where: { field: 'line2' } }) : fail({
+          where: { field: 'line2' },
+          expected: logTotal,
+          actual: s.line2,
+          difference: s.line2 - logTotal,
+          detail: `Approved changes on this application total ${money(s.line2)}, but the project's `
+            + `change order log totals ${money(logTotal)}.`,
+        }));
+      }
+
+      // Which change orders each side knows about. A number on one and not the other is either a
+      // change order billed before it was approved, or one approved and never billed.
+      const listed = app.coBreakdown || [];
+      if (listed.length) {
+        const onLog = new Set(log.map(c => String(c.coNumber)));
+        const onApp = new Set(listed.map(c => String(c.coNumber)));
+        const notOnLog = [...onApp].filter(n => !onLog.has(n));
+        const notOnApp = [...onLog].filter(n => !onApp.has(n));
+        out.push(!notOnLog.length && !notOnApp.length ? pass({ where: { field: 'changeOrders' } }) : fail({
+          where: { field: 'changeOrders' },
+          detail: [
+            notOnLog.length && `Change order(s) ${notOnLog.join(', ')} are billed on this application `
+              + 'but are not on the project log — billed before approval, or approved and never recorded.',
+            notOnApp.length && `Change order(s) ${notOnApp.join(', ')} are on the project log but do not `
+              + 'appear on this application.',
+          ].filter(Boolean).join(' '),
+        }));
+      }
+      return out.length ? out : skip('This application does not itemise its change orders.');
+    },
+  },
+
+  // ---- I29  A line that was billed before has not vanished ----------------------------------------
+  // The one failure in this family that no arithmetic can reach. Delete a line from the schedule
+  // and everything remaining still adds up perfectly — while money already certified against that
+  // line has quietly left the document.
+  {
+    id: 'I29',
+    title: 'No previously billed line has disappeared from the schedule',
+    severity: SEVERITY.CRITICAL,
+    run(app) {
+      const prior = app.prior;
+      if (!prior || !(prior.lineItems || []).length) {
+        return skip('No previous application with line detail is on file to compare against.');
+      }
+      const nowByItem = new Set((app.lineItems || []).map(li => String(li.itemNo)));
+      const nowByDesc = new Set((app.lineItems || [])
+        .map(li => String(li.description || '').trim().toLowerCase()).filter(Boolean));
+
+      const vanished = (prior.lineItems || []).filter((li) => {
+        if (!isNum(li.g) || li.g <= TOL.aggregate) return false;      // never billed: nothing lost
+        if (nowByItem.has(String(li.itemNo))) return false;
+        const d = String(li.description || '').trim().toLowerCase();
+        return !d || !nowByDesc.has(d);
+      });
+      if (!vanished.length) return pass({});
+      return vanished.map(li => fail({
+        where: { itemNo: li.itemNo, description: li.description },
+        expected: li.g,
+        actual: 0,
+        detail: `This line carried ${money(li.g)} billed to date on application `
+          + `${prior.applicationNumber ?? 'the previous one'}, and does not appear on this schedule at `
+          + 'all. Money already certified against it has gone missing from the document.',
+      }));
+    },
+  },
+
+  // ---- I30  Started work has not stalled while the job moved ----------------------------------------
+  // Not an error — a question. A line that was started, is not finished, and did not move in a
+  // month when everything around it did is the shape of work that has stopped, and a PM would
+  // rather hear it from the paperwork than from the site.
+  {
+    id: 'I30',
+    title: 'Started scope moved this period',
+    severity: SEVERITY.NOTE,
+    run(app) {
+      const prior = app.prior;
+      if (!prior || !(prior.lineItems || []).length) {
+        return skip('No previous application with line detail is on file to compare against.');
+      }
+      const s = app.summary || {};
+      if (!isNum(s.line4) || !isNum(prior.line4) || s.line4 <= prior.line4 + TOL.aggregate) {
+        return skip('Overall billing did not move this period, so a line standing still means nothing.');
+      }
+      const priorByItem = new Map((prior.lineItems || []).map(li => [String(li.itemNo), li]));
+      // Below this a stall is not worth a sentence — small lines sit still for ordinary reasons.
+      const MATERIAL_LINE = 5000;
+
+      const stalled = (app.lineItems || []).filter((li) => {
+        const was = priorByItem.get(String(li.itemNo));
+        if (!was || !isNum(li.g) || !isNum(li.c) || !isNum(was.g)) return false;
+        if (li.c < MATERIAL_LINE) return false;
+        const started = li.g > TOL.aggregate;
+        const finished = li.g >= li.c - TOL.aggregate;
+        return started && !finished && Math.abs(li.g - was.g) <= TOL.aggregate;
+      });
+      if (!stalled.length) return pass({});
+      return stalled.map(li => fail({
+        where: { itemNo: li.itemNo, description: li.description, page: li.page },
+        actual: li.g,
+        detail: `This line has sat at ${money(li.g)} of its ${money(li.c)} scheduled value with no `
+          + 'progress this period, while the job as a whole moved. Worth asking why.',
+      }));
+    },
+  },
 ];
 
 // --- running them --------------------------------------------------------------------------
@@ -887,7 +1092,11 @@ function runInvariants(app) {
     // as drawn even when the money it asks for turns out to be right.
     verdict: findings.some(f => f.severity === SEVERITY.CRITICAL)
       ? 'do-not-certify'
-      : findings.length ? 'certify-with-corrections' : 'no-issues-found',
+      // Notes do not move the verdict. They print under a heading that says no action is
+      // expected, so letting one downgrade an otherwise clean application would have the
+      // report contradict itself.
+      : findings.some(f => f.severity === SEVERITY.MATERIAL) ? 'certify-with-corrections'
+        : 'no-issues-found',
   };
 }
 

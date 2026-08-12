@@ -8,7 +8,6 @@ import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import { useConfirm } from '../components/ConfirmDialog';
 import FileDrop from '../components/FileDrop';
-import PayAppReportView from '../components/PayAppReportView';
 import PayAppFindingsReport from '../components/PayAppFindingsReport';
 
 function money(n) {
@@ -275,28 +274,6 @@ function BudgetSummary({ budget }) {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// Everything the findings report deliberately leaves out: every check with its status, the
-// billing charts, the site-verification list. The report answers "what is wrong with this
-// application"; this answers "show me all of it", which is a different question asked far less
-// often — so it is here, and closed.
-function FullCheckDetail({ report }) {
-  const [open, setOpen] = useState(false);
-  if (!report) return null;
-  return (
-    <div>
-      <button
-        type="button"
-        className="btn-secondary px-3 py-1.5 w-full justify-center"
-        onClick={() => setOpen(o => !o)}
-        aria-expanded={open}
-      >
-        {open ? 'Hide full check detail' : 'Show full check detail'}
-      </button>
-      {open && <div className="mt-4"><PayAppReportView report={report} /></div>}
     </div>
   );
 }
@@ -749,7 +726,6 @@ export default function PayAppReview() {
                 </div>
               </div>
               <PayAppFindingsReport reviewId={result.id} />
-              <FullCheckDetail report={result.report} />
             </>
           )}
 
@@ -777,7 +753,6 @@ export default function PayAppReview() {
                 </div>
               </div>
               <PayAppFindingsReport reviewId={viewing.id} />
-              <FullCheckDetail report={viewing.report} />
             </>
           )}
 

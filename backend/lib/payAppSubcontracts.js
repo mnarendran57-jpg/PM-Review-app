@@ -396,30 +396,18 @@ const SUB_CHECKS = [
     },
   },
 
-  // ---- S7  Sales tax billed to an owner that does not pay sales tax --------------------------------------
-  // School districts and other public bodies are tax exempt, and the contractor is expected to buy
-  // on the exemption. Tax that slips through is small each time and never questioned, because it
-  // is printed on a genuine invoice for a genuine cost.
-  {
-    id: 'S7',
-    title: 'No sales tax is billed to a tax-exempt owner',
-    severity: SEVERITY.MATERIAL,
-    run(app) {
-      if (!app.contract?.ownerTaxExempt) return skip('The owner is not recorded as tax exempt, so tax was not questioned.');
-      const taxed = (app.taxes || []).filter(t => num(t.amount) > TOL.cent);
-      if (!taxed.length) return skip('No sales tax was found on the backup supplied.');
-      const total = sum(taxed, t => t.amount);
-      return taxed.map(t => fail({
-        where: { itemNo: t.code, vendor: t.vendor, ref: t.ref },
-        actual: t.amount,
-        detail: `${t.vendor}${t.ref ? ` ${t.ref}` : ''} bills ${money(t.amount)} of sales tax, passed `
-          + `through to an owner that is exempt from it.${taxed.length > 1
-            ? ` ${money(total)} of tax appears across ${taxed.length} invoices on this application.` : ''}`
-          + ` The contractor should be purchasing on the owner's exemption certificate and crediting `
-          + `the tax back.`,
-      }));
-    },
-  },
+  // ---- S7 was here, and has moved to lib/payAppTax.js ----------------------------------------------
+  //
+  // It asked one question — is any sales tax billed to a tax-exempt owner — and flagged every
+  // charge it found. That was too blunt to keep once the contract's own tax provisions were being
+  // read. Under most of these contracts the tax on equipment RENTED for the job is a proper
+  // reimbursable cost, so S7 would have condemned a crane rental in the same report where the tax
+  // pass approved it: two engines contradicting each other on one page, which is the exact failure
+  // that retiring the old check suite was meant to end.
+  //
+  // The question now belongs to T1-T8, which classifies what was bought before saying who owes the
+  // tax, and quotes the clause that decided it. Nothing was dropped: a taxed purchase on an exempt
+  // job that cannot be classified is still raised, by T7, at the same weight it had here.
 
   // ---- S9  The contract fee is not taken on top of another fee -------------------------------------------
   // Small money, every time. It survives because both figures are correct: the internal invoice is
@@ -527,7 +515,11 @@ function summarise(results, codes) {
       codesTotal: codes.length,
     },
     verdict: findings.some(f => f.severity === SEVERITY.CRITICAL) ? 'do-not-certify'
-      : findings.length ? 'certify-with-corrections' : 'no-issues-found',
+      // Notes do not move the verdict. They print under a heading that says no action is
+      // expected, so letting one downgrade an otherwise clean application would have the
+      // report contradict itself.
+      : findings.some(f => f.severity === SEVERITY.MATERIAL) ? 'certify-with-corrections'
+        : 'no-issues-found',
   };
 }
 

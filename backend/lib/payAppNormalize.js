@@ -1,4 +1,4 @@
-const { sum } = require('./payAppChecks');
+const { sum } = require('./money');
 
 // Fills in summary fields that the AI extraction left blank (null) but that can be
 // reliably derived from other fields already present — e.g. if Line 4 wasn't read

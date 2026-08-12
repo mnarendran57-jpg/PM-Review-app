@@ -15,7 +15,7 @@
 //   contractTerms: { taxExempt, taxExemptBasis, unallowableItems[], ... } | null
 // }
 
-const { money } = require('./payAppChecks');
+const { money } = require('./money');
 
 const LINE_TOL = 0.02;
 const AGG_TOL = 1.0;

@@ -1,4 +1,4 @@
-const { money } = require('./payAppChecks');
+const { money } = require('./money');
 
 // Assembles the PCO review into the same shape the pay app report uses: a plain-English
 // summary, the deterministic findings grouped by severity, and — kept deliberately

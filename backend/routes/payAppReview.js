@@ -3,17 +3,15 @@ const router = express.Router();
 const multer = require('multer');
 const db = require('../database');
 const { analyzePayApps } = require('../lib/payAppExtract');
-const { runChecks } = require('../lib/payAppChecks');
-const { buildReport } = require('../lib/payAppReport');
+const { buildReportDoc, annotationsFor } = require('../lib/payAppReportDoc');
 const { renderPayAppReportPdf } = require('../lib/payAppReportPdf');
 const { brandingFor } = require('../lib/orgBranding');
 const { annotatePayAppPdf } = require('../lib/payAppAnnotate');
 const { extractContractTerms } = require('../lib/contractExtract');
 const { proposePlaceholders, applyPlaceholders, readDocx } = require('../lib/memoCover');
-const { runEngines } = require('../lib/payAppEngines');
+const { runEngines, attachReadCheck } = require('../lib/payAppEngines');
+const { verifyRead } = require('../lib/payAppVerifyRead');
 const { buildReportHtml } = require('../lib/payAppReportHtml');
-const { buildSubReconciliation, runMissedItemChecks } = require('../lib/payAppReconcile');
-const { buildSiteVerificationChecklist } = require('../lib/payAppChecklist');
 const { backfillPayApp } = require('../lib/payAppNormalize');
 const { parseCoLogCsv } = require('../lib/csv');
 const { friendlyAiError } = require('../lib/aiErrors');
@@ -512,12 +510,6 @@ router.post('/', upload.fields([
     }
 
     const data = { current, previous, contract, retainagePolicy };
-    const subRecon = buildSubReconciliation(current);
-    const results = [
-      ...runChecks(data),
-      ...subRecon.results,
-      ...runMissedItemChecks({ current, previous, subReconciliation: subRecon }),
-    ];
 
     // Scope baseline for the in/out-of-contract comparison: the contract's schedule of
     // values when one was extracted, else the project's FIRST pay application, which
@@ -574,18 +566,32 @@ router.post('/', upload.fields([
     // backend/tests/fixtures/payapp, and each engine states out loud when it had no documents to
     // work with — so a quiet report can never mean an unexamined one.
     //
-    // Never allowed to sink the review: the checks above have already run and are what the
-    // stored figures come from.
+    // The engines ARE the review. Nothing else checks this application, so a failure here is a
+    // failure of the whole thing rather than a degraded extra — it is reported plainly instead
+    // of leaving a report that looks complete and has examined nothing.
+    // Before anything is checked, check the reading. The figures arrive from a model that is
+    // good at finding them in an unfamiliar layout and imperfect at copying them — one digit on
+    // one line is enough to make every arithmetic check downstream report a contractor for the
+    // reviewer's own mistake. Where the page has a text layer, each line is reconciled against
+    // it and an unambiguous misread is corrected from the document itself.
+    let readCheck = null;
+    try {
+      readCheck = await verifyRead(currentFile.buffer, current);
+    } catch (err) {
+      console.error('Read verification failed (review continues):', err.message);
+    }
+
     let engineResult = null;
     try {
       engineResult = runEngines(
         { current, previous, contract, retainagePolicy, priorApplication }, contractTerms);
+      attachReadCheck(engineResult, readCheck);
     } catch (err) {
       console.error('Pay app engines failed (review continues):', err.message);
     }
 
-    // The old compliance shape is still written so stored reviews and the markdown report keep
-    // rendering through one path. Its contents now come from the engines rather than a model.
+    // Kept only because stored reviews and the project dashboard already read this column.
+    // Everything in it now comes from the engines.
     const engineTax = (engineResult?.findings || []).filter(f => f.id === 'S7');
     const compliance = engineResult ? {
       audit: null,
@@ -607,16 +613,13 @@ router.post('/', upload.fields([
       notes: 'The review engines could not be run on this application.', incomplete: true,
     };
 
-    const report = buildReport({ data, results, compliance, contractTerms, subReconciliation: subRecon.rows });
+    const report = buildReportDoc({
+      result: engineResult, data,
+      projectName: current.summary.projectName, contractor: current.summary.contractor,
+    });
 
-    // The engines are the authority on what is wrong with an application, so the counts the
-    // history list sorts and colours by come from them when they ran.
-    const criticalCount = engineResult
-      ? engineResult.stats.critical
-      : results.filter(r => r.critical && r.status === 'FAIL').length;
-    const failCount = engineResult
-      ? engineResult.stats.failed
-      : results.filter(r => r.status === 'FAIL').length;
+    const criticalCount = engineResult ? engineResult.stats.critical : 0;
+    const failCount = engineResult ? engineResult.stats.failed : 0;
 
     const currentKey = (await storage.storeFile('pay-app', currentFile.buffer, currentFile.mimetype, currentFile.originalname)).key;
 
@@ -639,7 +642,7 @@ router.post('/', upload.fields([
       current.summary.line8 ?? null,
       current.summary.line9 ?? null,
       JSON.stringify({ current, previous }),
-      JSON.stringify(results),
+      JSON.stringify(engineResult?.findings || []),
       report.markdown,
       currentFile.originalname, currentKey ? Buffer.alloc(0) : currentFile.buffer, currentKey,
       previousReviewId,
@@ -652,7 +655,7 @@ router.post('/', upload.fields([
       engineResult ? JSON.stringify(engineResult) : null
     );
 
-    res.json({ id: insertResult.lastInsertRowid, projectId, report, results, engineResult });
+    res.json({ id: insertResult.lastInsertRowid, projectId, report, engineResult });
   } catch (err) {
     console.error('Pay app review error:', err);
     res.status(500).json({ error: err.message });
@@ -674,28 +677,38 @@ router.get('/', (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
+// Rebuilds a stored review's report document. Reviews produced before the engines existed have
+// no engine output to render, and are given null rather than being re-scored now against rules
+// that did not exist when they ran — a report that changes its findings the day the rules change
+// is not a record of anything.
+function storedReportDoc(row, extractedData, engineResult) {
+  if (!engineResult) return null;
+  return buildReportDoc({
+    result: engineResult,
+    data: extractedData,
+    projectName: row.project_name,
+    contractor: extractedData?.current?.summary?.contractor || null,
+  });
+}
+
+const NO_ENGINE_OUTPUT = 'This review was produced before the current review engines were in '
+  + 'place, so there is no findings report for it. Re-running the application will produce one.';
+
 router.get('/:id', (req, res) => {
   const row = visibleReview(req);
   if (!row) return res.status(404).json({ error: 'Not found' });
   const extractedData = JSON.parse(row.extracted_data);
-  const results = JSON.parse(row.checks_result);
-  const compliance = row.compliance_findings ? JSON.parse(row.compliance_findings) : null;
-  // Rebuild the full report server-side — the sub-reconciliation chart is derived from
-  // the stored extraction, and one builder means the stored view can never drift from
-  // what the reviewer saw when the review ran.
-  const report = buildReport({
-    data: extractedData, results, compliance,
-    subReconciliation: buildSubReconciliation(extractedData.current).rows,
-  });
+  const engineResult = row.engine_result ? JSON.parse(row.engine_result) : null;
+  const report = storedReportDoc(row, extractedData, engineResult);
   res.json({
     ...row,
     current_file: undefined,
     extracted_data: extractedData,
-    checks_result: results,
-    checklist: report.checklist,
+    checks_result: JSON.parse(row.checks_result || '[]'),
+    checklist: report?.checklist || [],
     co_log: row.co_log ? JSON.parse(row.co_log) : null,
-    compliance_findings: compliance,
-    engine_result: row.engine_result ? JSON.parse(row.engine_result) : null,
+    compliance_findings: row.compliance_findings ? JSON.parse(row.compliance_findings) : null,
+    engine_result: engineResult,
     report,
   });
 });
@@ -708,20 +721,14 @@ router.get('/:id/report.html', (req, res) => {
   const row = visibleReview(req);
   if (!row) return res.status(404).send('Not found');
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  if (!row.engine_result) {
-    return res.send('<!doctype html><meta charset="utf-8"><body style="font:15px/1.5 system-ui;'
-      + 'color:#535b67;padding:32px;max-width:44em">This review was produced before the current '
-      + 'review engines were in place, so there is no findings report to render. The original '
-      + 'report is still available as Markdown and PDF. Re-running the application will produce '
-      + 'the full report.</body>');
-  }
   const data = JSON.parse(row.extracted_data);
-  res.send(buildReportHtml({
-    result: JSON.parse(row.engine_result),
-    summary: data.current?.summary || {},
-    projectName: row.project_name,
-    contractor: data.current?.summary?.contractor || null,
-  }));
+  const engineResult = row.engine_result ? JSON.parse(row.engine_result) : null;
+  const report = storedReportDoc(row, data, engineResult);
+  if (!report) {
+    return res.send('<!doctype html><meta charset="utf-8"><body style="font:15px/1.5 system-ui;'
+      + `color:#535b67;padding:32px;max-width:44em">${NO_ENGINE_OUTPUT}</body>`);
+  }
+  res.send(buildReportHtml({ report }));
 });
 
 router.get('/:id/report.md', (req, res) => {
@@ -729,7 +736,7 @@ router.get('/:id/report.md', (req, res) => {
   if (!row) return res.status(404).json({ error: 'Not found' });
   res.setHeader('Content-Type', 'text/markdown');
   res.setHeader('Content-Disposition', `attachment; filename="PayApp_${row.application_number || row.id}_${(row.project_name || 'report').replace(/[^a-z0-9]+/gi, '_')}.md"`);
-  res.send(row.report_markdown);
+  res.send(row.report_markdown || NO_ENGINE_OUTPUT);
 });
 
 // Client-facing PDF of the review, on the Coaster letterhead. Rebuilt from the stored
@@ -741,12 +748,9 @@ router.get('/:id/report.pdf', async (req, res) => {
     if (!row) return res.status(404).json({ error: 'Not found' });
 
     const data = JSON.parse(row.extracted_data);
-    const results = JSON.parse(row.checks_result);
-    const report = buildReport({
-      data, results,
-      compliance: row.compliance_findings ? JSON.parse(row.compliance_findings) : null,
-      subReconciliation: buildSubReconciliation(data.current).rows,
-    });
+    const engineResult = row.engine_result ? JSON.parse(row.engine_result) : null;
+    const report = storedReportDoc(row, data, engineResult);
+    if (!report) return res.status(409).json({ error: NO_ENGINE_OUTPUT });
 
     // The reviewing organization's letterhead, not a hardcoded name.
     const branding = await brandingFor(req.orgId);
@@ -770,8 +774,8 @@ router.get('/:id/report.json', (req, res) => {
     application_number: row.application_number,
     period_to: row.period_to,
     extracted_data: extractedData,
-    checks_result: JSON.parse(row.checks_result),
-    checklist: buildSiteVerificationChecklist(extractedData.current, extractedData.previous),
+    findings: JSON.parse(row.checks_result || '[]'),
+    engine_result: row.engine_result ? JSON.parse(row.engine_result) : null,
   };
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Content-Disposition', `attachment; filename="PayApp_${row.application_number || row.id}_${(row.project_name || 'report').replace(/[^a-z0-9]+/gi, '_')}.json"`);
@@ -789,10 +793,17 @@ router.get('/:id/marked-up.pdf', async (req, res) => {
     const original = await storage.readFile({ key: row.current_file_key, blob: row.current_file });
     if (!original) return res.status(404).json({ error: 'The original pay application PDF is not on file for this review.' });
 
-    const results = JSON.parse(row.checks_result);
+    // Annotations come from the engine findings, through the same document builder as every
+    // other output. They used to come from a separate check suite, which is how the marked-up
+    // copy ended up showing findings the report beside it no longer agreed with.
+    const data = JSON.parse(row.extracted_data);
+    const engineResult = row.engine_result ? JSON.parse(row.engine_result) : null;
+    const report = storedReportDoc(row, data, engineResult);
+    if (!report) return res.status(409).json({ error: NO_ENGINE_OUTPUT });
+
     const { buffer, markedCount, unplacedCount } = await annotatePayAppPdf({
       pdfBuffer: original,
-      results,
+      results: annotationsFor(report),
       header: { projectName: row.project_name, applicationNumber: row.application_number },
     });
     console.log(`[pay app markup] review=${row.id} marked=${markedCount} unplaced=${unplacedCount}`);

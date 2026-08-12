@@ -1,1596 +1,1608 @@
 {
-  "$source": "PayApp #20-Signed.pdf (8 pages, every one a rotated scan with no text layer). Figures taken from the PM's review workbook \"Payapp edit sheet.xlsx\", tab \"Payapp 20\", which was verified line by line against the scan.",
-  "$note": "A clean multi-campus application. Four campuses on one continuation sheet with cumulative page subtotals, and change orders drawn from a $37,500 owner's contingency rather than added to the contract sum. This is the only fixture that exercises the cumulative subtotal, contingency reconciliation and campus split rules, and it must produce no findings at all.",
-  "name": "HCC Pay App #20 \u2014 four campuses, contingency-funded change orders (clean)",
-  "meta": {
-    "applicationNumber": "20",
-    "periodTo": "2025-02-28",
-    "projectName": "IFB 23-04 Renovations of Food Service Areas",
-    "contractNumber": "P22011.07.11C",
-    "isRetainageRelease": false
+ "$source": "PayApp #20-Signed.pdf (8 pages, every one a rotated scan with no text layer). Figures taken from the PM's review workbook \"Payapp edit sheet.xlsx\", tab \"Payapp 20\", which was verified line by line against the scan.",
+ "$note": "A clean multi-campus application. Four campuses on one continuation sheet with cumulative page subtotals, and change orders drawn from a $37,500 owner's contingency rather than added to the contract sum. This is the only fixture that exercises the cumulative subtotal, contingency reconciliation and campus split rules, and it must produce no findings at all.",
+ "name": "HCC Pay App #20 \u2014 four campuses, contingency-funded change orders (clean)",
+ "meta": {
+  "applicationNumber": "20",
+  "periodTo": "2025-02-28",
+  "projectName": "IFB 23-04 Renovations of Food Service Areas",
+  "contractNumber": "P22011.07.11C",
+  "isRetainageRelease": false
+ },
+ "contract": {
+  "retainageRate": 0.05
+ },
+ "summary": {
+  "line1": 497498.96,
+  "line2": 0,
+  "line3": 497498.96,
+  "line4": 485903.19,
+  "line5aRate": 0.05,
+  "line5aAmount": 24295.16,
+  "line5bRate": 0.05,
+  "line5bAmount": 0,
+  "line5Total": 24295.16,
+  "line6": 461608.03,
+  "line7": 459240.97,
+  "line8": 2367.06,
+  "line9": 35890.93,
+  "amountCertified": 2367.06
+ },
+ "campuses": [
+  {
+   "name": "Northeast"
   },
-  "contract": {
-    "retainageRate": 0.05
+  {
+   "name": "Central South"
   },
-  "summary": {
-    "line1": 497498.96,
-    "line2": 0,
-    "line3": 497498.96,
-    "line4": 485903.19,
-    "line5aRate": 0.05,
-    "line5aAmount": 24295.16,
-    "line5bRate": 0.05,
-    "line5bAmount": 0,
-    "line5Total": 24295.16,
-    "line6": 461608.03,
-    "line7": 459240.97,
-    "line8": 2367.06,
-    "line9": 35890.93,
-    "amountCertified": 2367.06
+  {
+   "name": "Southeast"
   },
-  "campuses": [
-    {
-      "name": "Northeast"
-    },
-    {
-      "name": "Central South"
-    },
-    {
-      "name": "Southeast"
-    },
-    {
-      "name": "Stafford"
-    }
-  ],
-  "contingency": {
-    "originalAmount": 37500.0,
-    "remainingItemNo": "89",
-    "changeOrderItemNos": [
-      "1-safe-removal",
-      "2-satfford-cut-floor-pipe",
-      "3-cs-northeast-floor",
-      "4-floor-change",
-      "5-cs-water-heater",
-      "6-stafford-sprinkler",
-      "co-7-stafford-heater-reloc",
-      "co-8-rejected",
-      "co-9-floor-for-stafford",
-      "co-10-trench-fill-stafford",
-      "co-11-fire-inspection",
-      "co-12-terrazo-credit"
-    ]
-  },
-  "lineItems": [
-    {
-      "itemNo": "1",
-      "description": "Insurance and sub bonds",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 1500,
-      "d": 1500,
-      "e": 0,
-      "f": 0,
-      "g": 1500,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "2",
-      "description": "Overhead and Fees",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 1500,
-      "d": 1500,
-      "e": 0,
-      "f": 0,
-      "g": 1500,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "3",
-      "description": "Permits",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 800,
-      "d": 800,
-      "e": 0,
-      "f": 0,
-      "g": 800,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "4",
-      "description": "General Conditions",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 4421.3,
-      "d": 4421.3,
-      "e": 0,
-      "f": 0,
-      "g": 4421.3,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "5",
-      "description": "Performance & Payment Bond",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 2187.9,
-      "d": 2187.9,
-      "e": 0,
-      "f": 0,
-      "g": 2187.9,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "6",
-      "description": "Division 2 - Site Construction",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 8513,
-      "d": 8513,
-      "e": 0,
-      "f": 0,
-      "g": 8513,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "7",
-      "description": "Division 3 - Concrete",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 7579.37,
-      "d": 7579.37,
-      "e": 0,
-      "f": 0,
-      "g": 7579.37,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "12",
-      "description": "Division 7 - Thermal and Moisture Protection",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 1684.38,
-      "d": 1684.38,
-      "e": 0,
-      "f": 0,
-      "g": 1684.38,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "13",
-      "description": "Division 9 - Finishes - Gypsum Board Assy",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 17635.42,
-      "d": 17635.42,
-      "e": 0,
-      "f": 0,
-      "g": 17635.42,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "14",
-      "description": "Division 9 - Finishes - Non-Structural Framing",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 7813.12,
-      "d": 7813.12,
-      "e": 0,
-      "f": 0,
-      "g": 7813.12,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "15",
-      "description": "Division 9 - Finishes - Accoustical Panel Ceiling",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 2013.26,
-      "d": 2013.26,
-      "e": 0,
-      "f": 0,
-      "g": 2013.26,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "18",
-      "description": "Division 9 - Interior Painting",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 2577.83,
-      "d": 2577.83,
-      "e": 0,
-      "f": 0,
-      "g": 2577.83,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "19",
-      "description": "Division 10 - Specialities - Fire Extinguishers",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 1842.69,
-      "d": 1842.69,
-      "e": 0,
-      "f": 0,
-      "g": 1842.69,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "20",
-      "description": "Division 22 - Plumbing",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 16166.46,
-      "d": 16166.46,
-      "e": 0,
-      "f": 0,
-      "g": 16166.46,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "21",
-      "description": "Division 26 - Electrical",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 3619.15,
-      "d": 3619.15,
-      "e": 0,
-      "f": 0,
-      "g": 3619.15,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "22",
-      "description": "Division 28 - Fire Detection and Alarm",
-      "page": 2,
-      "campus": "Northeast",
-      "c": 5975.07,
-      "d": 5975.07,
-      "e": 0,
-      "f": 0,
-      "g": 5975.07,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "23",
-      "description": "Insurance and sub bonds",
-      "page": 3,
-      "campus": "Central South",
-      "c": 1500,
-      "d": 1500,
-      "e": 0,
-      "f": 0,
-      "g": 1500,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "24",
-      "description": "Overhead and Fees",
-      "page": 3,
-      "campus": "Central South",
-      "c": 1500,
-      "d": 1500,
-      "e": 0,
-      "f": 0,
-      "g": 1500,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "25",
-      "description": "Permits",
-      "page": 3,
-      "campus": "Central South",
-      "c": 800,
-      "d": 800,
-      "e": 0,
-      "f": 0,
-      "g": 800,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "26",
-      "description": "General Conditions",
-      "page": 3,
-      "campus": "Central South",
-      "c": 4354.57,
-      "d": 4354.57,
-      "e": 0,
-      "f": 0,
-      "g": 4354.57,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "27",
-      "description": "Performance & Payment Bond",
-      "page": 3,
-      "campus": "Central South",
-      "c": 2719.82,
-      "d": 2719.82,
-      "e": 0,
-      "f": 0,
-      "g": 2719.82,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "28",
-      "description": "Division 2 - Site Construction",
-      "page": 3,
-      "campus": "Central South",
-      "c": 4821.84,
-      "d": 4821.84,
-      "e": 0,
-      "f": 0,
-      "g": 4821.84,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "29",
-      "description": "Division 3 - Concrete",
-      "page": 3,
-      "campus": "Central South",
-      "c": 11170.3,
-      "d": 11170.3,
-      "e": 0,
-      "f": 0,
-      "g": 11170.3,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "34",
-      "description": "Division 7 - Thermal and Moisture Protection",
-      "page": 3,
-      "campus": "Central South",
-      "c": 1479.32,
-      "d": 1479.32,
-      "e": 0,
-      "f": 0,
-      "g": 1479.32,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "35",
-      "description": "Division 9 - Finishes - Gypsum Board Assy",
-      "page": 3,
-      "campus": "Central South",
-      "c": 17448.59,
-      "d": 17448.59,
-      "e": 0,
-      "f": 0,
-      "g": 17448.59,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "36",
-      "description": "Division 9 - Finishes - Non-Structural Framing",
-      "page": 3,
-      "campus": "Central South",
-      "c": 9346.47,
-      "d": 9346.47,
-      "e": 0,
-      "f": 0,
-      "g": 9346.47,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "37",
-      "description": "Division 9 - Finishes - Accoustical Panel Ceiling",
-      "page": 3,
-      "campus": "Central South",
-      "c": 1768.17,
-      "d": 1768.17,
-      "e": 0,
-      "f": 0,
-      "g": 1768.17,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "40",
-      "description": "Division 9 - Interior Painting",
-      "page": 3,
-      "campus": "Central South",
-      "c": 4748.52,
-      "d": 4748.52,
-      "e": 0,
-      "f": 0,
-      "g": 4748.52,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "41",
-      "description": "Division 10 - Specialities - Fire Extinguishers",
-      "page": 3,
-      "campus": "Central South",
-      "c": 1842.69,
-      "d": 838.97,
-      "e": 1003.72,
-      "f": 0,
-      "g": 1842.69,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "42",
-      "description": "Division 22 - Plumbing",
-      "page": 3,
-      "campus": "Central South",
-      "c": 39896.68,
-      "d": 39896.68,
-      "e": 0,
-      "f": 0,
-      "g": 39896.68,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "43",
-      "description": "Division 26 - Electrical",
-      "page": 3,
-      "campus": "Central South",
-      "c": 4304.8,
-      "d": 4304.8,
-      "e": 0,
-      "f": 0,
-      "g": 4304.8,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "44",
-      "description": "Division 28 - Fire Detection and Alarm",
-      "page": 3,
-      "campus": "Central South",
-      "c": 5872.45,
-      "d": 5872.45,
-      "e": 0,
-      "f": 0,
-      "g": 5872.45,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "45",
-      "description": "Insurance and sub bonds",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 1500,
-      "d": 1500,
-      "e": 0,
-      "f": 0,
-      "g": 1500,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "46",
-      "description": "Overhead and Fees",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 1500,
-      "d": 1500,
-      "e": 0,
-      "f": 0,
-      "g": 1500,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "47",
-      "description": "Permits",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 800,
-      "d": 800,
-      "e": 0,
-      "f": 0,
-      "g": 800,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "48",
-      "description": "General Conditions",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 4345.67,
-      "d": 4345.67,
-      "e": 0,
-      "f": 0,
-      "g": 4345.67,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "49",
-      "description": "Performance & Payment Bond",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 2903.96,
-      "d": 2903.96,
-      "e": 0,
-      "f": 0,
-      "g": 2903.96,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "50",
-      "description": "Division 2 - Site Construction",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 14345.67,
-      "d": 14345.67,
-      "e": 0,
-      "f": 0,
-      "g": 14345.67,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "51",
-      "description": "Division 3 - Concrete",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 21864.11,
-      "d": 21864.11,
-      "e": 0,
-      "f": 0,
-      "g": 21864.11,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "52",
-      "description": "Division 3- Concrete- Polished Concrete",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 6168.7,
-      "d": 6168.7,
-      "e": 0,
-      "f": 0,
-      "g": 6168.7,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "54",
-      "description": "Division 5 - Metal",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 11064.84,
-      "d": 11064.84,
-      "e": 0,
-      "f": 0,
-      "g": 11064.84,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "56",
-      "description": "Division 7 - Thermal and Moisture Protection",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 1339.21,
-      "d": 1339.21,
-      "e": 0,
-      "f": 0,
-      "g": 1339.21,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "57",
-      "description": "Division 9 - Finishes - Gypsum Board Assy",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 13834.39,
-      "d": 13834.39,
-      "e": 0,
-      "f": 0,
-      "g": 13834.39,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "58",
-      "description": "Division 9 - Finishes - Non-Structural Framing",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 6212.05,
-      "d": 6212.05,
-      "e": 0,
-      "f": 0,
-      "g": 6212.05,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "59",
-      "description": "Division 9 - Finishes - Accoustical Panel Ceiling",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 1600.7,
-      "d": 1600.7,
-      "e": 0,
-      "f": 0,
-      "g": 1600.7,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "62",
-      "description": "Division 9 - Interior Painting",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 2049.58,
-      "d": 2049.58,
-      "e": 0,
-      "f": 0,
-      "g": 2049.58,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "63",
-      "description": "Division 10 - Specialities - Fire Extinguishers",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 1842.69,
-      "d": 1842.69,
-      "e": 0,
-      "f": 0,
-      "g": 1842.69,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "64",
-      "description": "Division 22 - Plumbing",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 23140.36,
-      "d": 23140.36,
-      "e": 0,
-      "f": 0,
-      "g": 23140.36,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "65",
-      "description": "Division 26 - Electrical",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 4469.83,
-      "d": 4469.83,
-      "e": 0,
-      "f": 0,
-      "g": 4469.83,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "66",
-      "description": "Division 28 - Fire Detection and Alarm",
-      "page": 4,
-      "campus": "Southeast",
-      "c": 7007.65,
-      "d": 7007.65,
-      "e": 0,
-      "f": 0,
-      "g": 7007.65,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "67",
-      "description": "Insurance and sub bonds",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 1500,
-      "d": 1500,
-      "e": 0,
-      "f": 0,
-      "g": 1500,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "68",
-      "description": "Overhead and Fees",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 1500,
-      "d": 1500,
-      "e": 0,
-      "f": 0,
-      "g": 1500,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "69",
-      "description": "Permits",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 800,
-      "d": 800,
-      "e": 0,
-      "f": 0,
-      "g": 800,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "70",
-      "description": "General Conditions",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 4335.73,
-      "d": 4335.73,
-      "e": 0,
-      "f": 0,
-      "g": 4335.73,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "71",
-      "description": "Performance & Payment Bond",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 3030.64,
-      "d": 3030.64,
-      "e": 0,
-      "f": 0,
-      "g": 3030.64,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "72",
-      "description": "Division 2 - Site Construction",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 4785.41,
-      "d": 4785.41,
-      "e": 0,
-      "f": 0,
-      "g": 4785.41,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "73",
-      "description": "Division 3 - Concrete",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 7795.34,
-      "d": 7795.34,
-      "e": 0,
-      "f": 0,
-      "g": 7795.34,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "77",
-      "description": "Division 6 - Wood & Plastics",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 7639.39,
-      "d": 7564.89,
-      "e": 74.5,
-      "f": 0,
-      "g": 7639.39,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "78",
-      "description": "Division 7 - Thermal and Moisture Protection",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 1822.09,
-      "d": 1822.09,
-      "e": 0,
-      "f": 0,
-      "g": 1822.09,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "79",
-      "description": "Division 9 - Finishes - Gypsum Board Assy",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 18822.58,
-      "d": 18822.58,
-      "e": 0,
-      "f": 0,
-      "g": 18822.58,
-      "pct": 18822.58,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "80",
-      "description": "Division 9 - Finishes - Non-Structural Framing",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 7091.3,
-      "d": 7091.3,
-      "e": 0,
-      "f": 0,
-      "g": 7091.3,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "81",
-      "description": "Division 9 - Finishes - Accoustical Panel Ceiling",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 817.25,
-      "d": 817.25,
-      "e": 0,
-      "f": 0,
-      "g": 817.25,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "83",
-      "description": "Division 9 -Terrazo flooring",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 33181.34,
-      "d": 21829.57,
-      "e": 0,
-      "f": 0,
-      "g": 21829.57,
-      "pct": 65.78869328363473,
-      "h": 11351.769999999997,
-      "i": null
-    },
-    {
-      "itemNo": "84",
-      "description": "Division 9 - Interior Painting",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 2788.59,
-      "d": 2788.59,
-      "e": 0,
-      "f": 0,
-      "g": 2788.59,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "85",
-      "description": "Division 10 - Specialities - Fire Extinguishers",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 1842.69,
-      "d": 1000,
-      "e": 842.69,
-      "f": 0,
-      "g": 1842.69,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "86",
-      "description": "Division 22 - Plumbing",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 28465.01,
-      "d": 28465.01,
-      "e": 0,
-      "f": 0,
-      "g": 28465.01,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "87",
-      "description": "Division 26 - Electrical",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 3018.29,
-      "d": 3018.29,
-      "e": 0,
-      "f": 0,
-      "g": 3018.29,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "88",
-      "description": "Division 28 - Fire Detection and Alarm",
-      "page": 5,
-      "campus": "Stafford",
-      "c": 5370.73,
-      "d": 4800,
-      "e": 570.73,
-      "f": 0,
-      "g": 5370.73,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "89",
-      "description": "Owner Contingency",
-      "page": 6,
-      "campus": null,
-      "c": 4033.69,
-      "d": 0,
-      "e": 0,
-      "f": 0,
-      "g": 0,
-      "pct": null,
-      "h": 4033.69,
-      "i": null
-    },
-    {
-      "itemNo": "1-safe-removal",
-      "description": "#1 - Safe Removal",
-      "page": 6,
-      "campus": null,
-      "c": 550,
-      "d": 550,
-      "e": 0,
-      "f": 0,
-      "g": 550,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "2-satfford-cut-floor-pipe",
-      "description": "#2 - Satfford- Cut Floor- Pipe",
-      "page": 6,
-      "campus": null,
-      "c": 15612.55,
-      "d": 15612.55,
-      "e": 0,
-      "f": 0,
-      "g": 15612.55,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "3-cs-northeast-floor",
-      "description": "#3- CS- Northeast Floor",
-      "page": 6,
-      "campus": null,
-      "c": 5902.56,
-      "d": 5902.56,
-      "e": 0,
-      "f": 0,
-      "g": 5902.56,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "4-floor-change",
-      "description": "#4 - Floor Change",
-      "page": 6,
-      "campus": null,
-      "c": 9566.84,
-      "d": 2179.89,
-      "e": 0,
-      "f": 0,
-      "g": 2179.89,
-      "pct": 22.78589377474694,
-      "h": 7386.950000000001,
-      "i": null
-    },
-    {
-      "itemNo": "5-cs-water-heater",
-      "description": "#5 - CS- Water Heater",
-      "page": 6,
-      "campus": null,
-      "c": 1886,
-      "d": 1886,
-      "e": 0,
-      "f": 0,
-      "g": 1886,
-      "pct": 100,
-      "h": null,
-      "i": null
-    },
-    {
-      "itemNo": "6-stafford-sprinkler",
-      "description": "#6 - Stafford Sprinkler",
-      "page": 6,
-      "campus": null,
-      "c": 1092.5,
-      "d": 1092.5,
-      "e": 0,
-      "f": 0,
-      "g": 1092.5,
-      "pct": 100,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "co-7-stafford-heater-reloc",
-      "description": "CO#7 Stafford heater reloc",
-      "page": 6,
-      "campus": null,
-      "c": 3720.46,
-      "d": 0,
-      "e": 0,
-      "f": 0,
-      "g": 0,
-      "pct": null,
-      "h": 3720.46,
-      "i": null
-    },
-    {
-      "itemNo": "co-8-rejected",
-      "description": "CO#8 Rejected",
-      "page": 6,
-      "campus": null,
-      "c": 0,
-      "d": 0,
-      "e": 0,
-      "f": 0,
-      "g": 0,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "co-9-floor-for-stafford",
-      "description": "CO#9 Floor for stafford",
-      "page": 6,
-      "campus": null,
-      "c": 6410,
-      "d": 6410,
-      "e": 0,
-      "f": 0,
-      "g": 6410,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "co-10-trench-fill-stafford",
-      "description": "CO#10 Trench Fill Stafford",
-      "page": 6,
-      "campus": null,
-      "c": 1725,
-      "d": 1725,
-      "e": 0,
-      "f": 0,
-      "g": 1725,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "co-11-fire-inspection",
-      "description": "CO#11 Fire Inspection",
-      "page": 6,
-      "campus": null,
-      "c": 1897.5,
-      "d": 1897.5,
-      "e": 0,
-      "f": 0,
-      "g": 1897.5,
-      "pct": null,
-      "h": 0,
-      "i": null
-    },
-    {
-      "itemNo": "co-12-terrazo-credit",
-      "description": "CO#12 Terrazo credit",
-      "page": 6,
-      "campus": null,
-      "c": -14897.1,
-      "d": 0,
-      "e": 0,
-      "f": 0,
-      "g": 0,
-      "pct": null,
-      "h": -14897.1,
-      "i": null
-    }
-  ],
-  "pageSubtotals": [
-    {
-      "page": 2,
-      "c": 85828.95000000001,
-      "d": 85828.95000000001,
-      "e": null,
-      "f": null,
-      "g": 85828.95000000001,
-      "h": null,
-      "i": null
-    },
-    {
-      "page": 3,
-      "c": 199403.17000000004,
-      "d": 198399.45000000004,
-      "e": 1003.72,
-      "f": null,
-      "g": 199403.17000000004,
-      "h": 0,
-      "i": null
-    },
-    {
-      "page": 4,
-      "c": 325392.5800000002,
-      "d": 324388.86000000016,
-      "e": 1003.72,
-      "f": null,
-      "g": 325392.5800000002,
-      "h": 0,
-      "i": null
-    },
-    {
-      "page": 5,
-      "c": 459998.96000000025,
-      "d": 446155.5500000002,
-      "e": 2491.6400000000003,
-      "f": null,
-      "g": 448647.19000000024,
-      "h": 11351.769999999997,
-      "i": null
-    },
-    {
-      "page": 6,
-      "c": 497498.9600000003,
-      "d": 483411.5500000002,
-      "e": 2491.6400000000003,
-      "f": null,
-      "g": 485903.19000000024,
-      "h": 11595.769999999995,
-      "i": null
-    }
-  ],
-  "grandTotals": {
-    "c": 497498.9600000003,
-    "d": 483411.5500000002,
-    "e": 2491.6400000000003,
-    "f": null,
-    "g": 485903.19000000024,
-    "h": 11595.769999999995,
-    "i": null
-  },
-  "prior": {
-    "applicationNumber": "19",
-    "line4": 483411.55,
-    "line6": 459240.97,
-    "line5Total": 24170.58,
-    "lineItems": [
-      {
-        "itemNo": "1",
-        "g": 1500
-      },
-      {
-        "itemNo": "2",
-        "g": 1500
-      },
-      {
-        "itemNo": "3",
-        "g": 800
-      },
-      {
-        "itemNo": "4",
-        "g": 4421.3
-      },
-      {
-        "itemNo": "5",
-        "g": 2187.9
-      },
-      {
-        "itemNo": "6",
-        "g": 8513
-      },
-      {
-        "itemNo": "7",
-        "g": 7579.37
-      },
-      {
-        "itemNo": "12",
-        "g": 1684.38
-      },
-      {
-        "itemNo": "13",
-        "g": 17635.42
-      },
-      {
-        "itemNo": "14",
-        "g": 7813.12
-      },
-      {
-        "itemNo": "15",
-        "g": 2013.26
-      },
-      {
-        "itemNo": "18",
-        "g": 2577.83
-      },
-      {
-        "itemNo": "19",
-        "g": 1842.69
-      },
-      {
-        "itemNo": "20",
-        "g": 16166.46
-      },
-      {
-        "itemNo": "21",
-        "g": 3619.15
-      },
-      {
-        "itemNo": "22",
-        "g": 5975.07
-      },
-      {
-        "itemNo": "23",
-        "g": 1500
-      },
-      {
-        "itemNo": "24",
-        "g": 1500
-      },
-      {
-        "itemNo": "25",
-        "g": 800
-      },
-      {
-        "itemNo": "26",
-        "g": 4354.57
-      },
-      {
-        "itemNo": "27",
-        "g": 2719.82
-      },
-      {
-        "itemNo": "28",
-        "g": 4821.84
-      },
-      {
-        "itemNo": "29",
-        "g": 11170.3
-      },
-      {
-        "itemNo": "34",
-        "g": 1479.32
-      },
-      {
-        "itemNo": "35",
-        "g": 17448.59
-      },
-      {
-        "itemNo": "36",
-        "g": 9346.47
-      },
-      {
-        "itemNo": "37",
-        "g": 1768.17
-      },
-      {
-        "itemNo": "40",
-        "g": 4748.52
-      },
-      {
-        "itemNo": "41",
-        "g": 838.97
-      },
-      {
-        "itemNo": "42",
-        "g": 39896.68
-      },
-      {
-        "itemNo": "43",
-        "g": 4304.8
-      },
-      {
-        "itemNo": "44",
-        "g": 5872.45
-      },
-      {
-        "itemNo": "45",
-        "g": 1500
-      },
-      {
-        "itemNo": "46",
-        "g": 1500
-      },
-      {
-        "itemNo": "47",
-        "g": 800
-      },
-      {
-        "itemNo": "48",
-        "g": 4345.67
-      },
-      {
-        "itemNo": "49",
-        "g": 2903.96
-      },
-      {
-        "itemNo": "50",
-        "g": 14345.67
-      },
-      {
-        "itemNo": "51",
-        "g": 21864.11
-      },
-      {
-        "itemNo": "52",
-        "g": 6168.7
-      },
-      {
-        "itemNo": "54",
-        "g": 11064.84
-      },
-      {
-        "itemNo": "56",
-        "g": 1339.21
-      },
-      {
-        "itemNo": "57",
-        "g": 13834.39
-      },
-      {
-        "itemNo": "58",
-        "g": 6212.05
-      },
-      {
-        "itemNo": "59",
-        "g": 1600.7
-      },
-      {
-        "itemNo": "62",
-        "g": 2049.58
-      },
-      {
-        "itemNo": "63",
-        "g": 1842.69
-      },
-      {
-        "itemNo": "64",
-        "g": 23140.36
-      },
-      {
-        "itemNo": "65",
-        "g": 4469.83
-      },
-      {
-        "itemNo": "66",
-        "g": 7007.65
-      },
-      {
-        "itemNo": "67",
-        "g": 1500
-      },
-      {
-        "itemNo": "68",
-        "g": 1500
-      },
-      {
-        "itemNo": "69",
-        "g": 800
-      },
-      {
-        "itemNo": "70",
-        "g": 4335.73
-      },
-      {
-        "itemNo": "71",
-        "g": 3030.64
-      },
-      {
-        "itemNo": "72",
-        "g": 4785.41
-      },
-      {
-        "itemNo": "73",
-        "g": 7795.34
-      },
-      {
-        "itemNo": "77",
-        "g": 7564.89
-      },
-      {
-        "itemNo": "78",
-        "g": 1822.09
-      },
-      {
-        "itemNo": "79",
-        "g": 18822.58
-      },
-      {
-        "itemNo": "80",
-        "g": 7091.3
-      },
-      {
-        "itemNo": "81",
-        "g": 817.25
-      },
-      {
-        "itemNo": "83",
-        "g": 21829.57
-      },
-      {
-        "itemNo": "84",
-        "g": 2788.59
-      },
-      {
-        "itemNo": "85",
-        "g": 1000
-      },
-      {
-        "itemNo": "86",
-        "g": 28465.01
-      },
-      {
-        "itemNo": "87",
-        "g": 3018.29
-      },
-      {
-        "itemNo": "88",
-        "g": 4800
-      },
-      {
-        "itemNo": "89",
-        "g": 0
-      },
-      {
-        "itemNo": "1-safe-removal",
-        "g": 550
-      },
-      {
-        "itemNo": "2-satfford-cut-floor-pipe",
-        "g": 15612.55
-      },
-      {
-        "itemNo": "3-cs-northeast-floor",
-        "g": 5902.56
-      },
-      {
-        "itemNo": "4-floor-change",
-        "g": 2179.89
-      },
-      {
-        "itemNo": "5-cs-water-heater",
-        "g": 1886
-      },
-      {
-        "itemNo": "6-stafford-sprinkler",
-        "g": 1092.5
-      },
-      {
-        "itemNo": "co-7-stafford-heater-reloc",
-        "g": 0
-      },
-      {
-        "itemNo": "co-8-rejected",
-        "g": 0
-      },
-      {
-        "itemNo": "co-9-floor-for-stafford",
-        "g": 6410
-      },
-      {
-        "itemNo": "co-10-trench-fill-stafford",
-        "g": 1725
-      },
-      {
-        "itemNo": "co-11-fire-inspection",
-        "g": 1897.5
-      },
-      {
-        "itemNo": "co-12-terrazo-credit",
-        "g": 0
-      }
-    ]
-  },
-  "expected": {
-    "verdict": "no-issues-found",
-    "findings": []
+  {
+   "name": "Stafford"
   }
+ ],
+ "contingency": {
+  "originalAmount": 37500.0,
+  "remainingItemNo": "89",
+  "changeOrderItemNos": [
+   "1-safe-removal",
+   "2-satfford-cut-floor-pipe",
+   "3-cs-northeast-floor",
+   "4-floor-change",
+   "5-cs-water-heater",
+   "6-stafford-sprinkler",
+   "co-7-stafford-heater-reloc",
+   "co-8-rejected",
+   "co-9-floor-for-stafford",
+   "co-10-trench-fill-stafford",
+   "co-11-fire-inspection",
+   "co-12-terrazo-credit"
+  ]
+ },
+ "lineItems": [
+  {
+   "itemNo": "1",
+   "description": "Insurance and sub bonds",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 1500,
+   "d": 1500,
+   "e": 0,
+   "f": 0,
+   "g": 1500,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "2",
+   "description": "Overhead and Fees",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 1500,
+   "d": 1500,
+   "e": 0,
+   "f": 0,
+   "g": 1500,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "3",
+   "description": "Permits",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 800,
+   "d": 800,
+   "e": 0,
+   "f": 0,
+   "g": 800,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "4",
+   "description": "General Conditions",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 4421.3,
+   "d": 4421.3,
+   "e": 0,
+   "f": 0,
+   "g": 4421.3,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "5",
+   "description": "Performance & Payment Bond",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 2187.9,
+   "d": 2187.9,
+   "e": 0,
+   "f": 0,
+   "g": 2187.9,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "6",
+   "description": "Division 2 - Site Construction",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 8513,
+   "d": 8513,
+   "e": 0,
+   "f": 0,
+   "g": 8513,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "7",
+   "description": "Division 3 - Concrete",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 7579.37,
+   "d": 7579.37,
+   "e": 0,
+   "f": 0,
+   "g": 7579.37,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "12",
+   "description": "Division 7 - Thermal and Moisture Protection",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 1684.38,
+   "d": 1684.38,
+   "e": 0,
+   "f": 0,
+   "g": 1684.38,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "13",
+   "description": "Division 9 - Finishes - Gypsum Board Assy",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 17635.42,
+   "d": 17635.42,
+   "e": 0,
+   "f": 0,
+   "g": 17635.42,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "14",
+   "description": "Division 9 - Finishes - Non-Structural Framing",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 7813.12,
+   "d": 7813.12,
+   "e": 0,
+   "f": 0,
+   "g": 7813.12,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "15",
+   "description": "Division 9 - Finishes - Accoustical Panel Ceiling",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 2013.26,
+   "d": 2013.26,
+   "e": 0,
+   "f": 0,
+   "g": 2013.26,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "18",
+   "description": "Division 9 - Interior Painting",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 2577.83,
+   "d": 2577.83,
+   "e": 0,
+   "f": 0,
+   "g": 2577.83,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "19",
+   "description": "Division 10 - Specialities - Fire Extinguishers",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 1842.69,
+   "d": 1842.69,
+   "e": 0,
+   "f": 0,
+   "g": 1842.69,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "20",
+   "description": "Division 22 - Plumbing",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 16166.46,
+   "d": 16166.46,
+   "e": 0,
+   "f": 0,
+   "g": 16166.46,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "21",
+   "description": "Division 26 - Electrical",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 3619.15,
+   "d": 3619.15,
+   "e": 0,
+   "f": 0,
+   "g": 3619.15,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "22",
+   "description": "Division 28 - Fire Detection and Alarm",
+   "page": 2,
+   "campus": "Northeast",
+   "c": 5975.07,
+   "d": 5975.07,
+   "e": 0,
+   "f": 0,
+   "g": 5975.07,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "23",
+   "description": "Insurance and sub bonds",
+   "page": 3,
+   "campus": "Central South",
+   "c": 1500,
+   "d": 1500,
+   "e": 0,
+   "f": 0,
+   "g": 1500,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "24",
+   "description": "Overhead and Fees",
+   "page": 3,
+   "campus": "Central South",
+   "c": 1500,
+   "d": 1500,
+   "e": 0,
+   "f": 0,
+   "g": 1500,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "25",
+   "description": "Permits",
+   "page": 3,
+   "campus": "Central South",
+   "c": 800,
+   "d": 800,
+   "e": 0,
+   "f": 0,
+   "g": 800,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "26",
+   "description": "General Conditions",
+   "page": 3,
+   "campus": "Central South",
+   "c": 4354.57,
+   "d": 4354.57,
+   "e": 0,
+   "f": 0,
+   "g": 4354.57,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "27",
+   "description": "Performance & Payment Bond",
+   "page": 3,
+   "campus": "Central South",
+   "c": 2719.82,
+   "d": 2719.82,
+   "e": 0,
+   "f": 0,
+   "g": 2719.82,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "28",
+   "description": "Division 2 - Site Construction",
+   "page": 3,
+   "campus": "Central South",
+   "c": 4821.84,
+   "d": 4821.84,
+   "e": 0,
+   "f": 0,
+   "g": 4821.84,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "29",
+   "description": "Division 3 - Concrete",
+   "page": 3,
+   "campus": "Central South",
+   "c": 11170.3,
+   "d": 11170.3,
+   "e": 0,
+   "f": 0,
+   "g": 11170.3,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "34",
+   "description": "Division 7 - Thermal and Moisture Protection",
+   "page": 3,
+   "campus": "Central South",
+   "c": 1479.32,
+   "d": 1479.32,
+   "e": 0,
+   "f": 0,
+   "g": 1479.32,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "35",
+   "description": "Division 9 - Finishes - Gypsum Board Assy",
+   "page": 3,
+   "campus": "Central South",
+   "c": 17448.59,
+   "d": 17448.59,
+   "e": 0,
+   "f": 0,
+   "g": 17448.59,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "36",
+   "description": "Division 9 - Finishes - Non-Structural Framing",
+   "page": 3,
+   "campus": "Central South",
+   "c": 9346.47,
+   "d": 9346.47,
+   "e": 0,
+   "f": 0,
+   "g": 9346.47,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "37",
+   "description": "Division 9 - Finishes - Accoustical Panel Ceiling",
+   "page": 3,
+   "campus": "Central South",
+   "c": 1768.17,
+   "d": 1768.17,
+   "e": 0,
+   "f": 0,
+   "g": 1768.17,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "40",
+   "description": "Division 9 - Interior Painting",
+   "page": 3,
+   "campus": "Central South",
+   "c": 4748.52,
+   "d": 4748.52,
+   "e": 0,
+   "f": 0,
+   "g": 4748.52,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "41",
+   "description": "Division 10 - Specialities - Fire Extinguishers",
+   "page": 3,
+   "campus": "Central South",
+   "c": 1842.69,
+   "d": 838.97,
+   "e": 1003.72,
+   "f": 0,
+   "g": 1842.69,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "42",
+   "description": "Division 22 - Plumbing",
+   "page": 3,
+   "campus": "Central South",
+   "c": 39896.68,
+   "d": 39896.68,
+   "e": 0,
+   "f": 0,
+   "g": 39896.68,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "43",
+   "description": "Division 26 - Electrical",
+   "page": 3,
+   "campus": "Central South",
+   "c": 4304.8,
+   "d": 4304.8,
+   "e": 0,
+   "f": 0,
+   "g": 4304.8,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "44",
+   "description": "Division 28 - Fire Detection and Alarm",
+   "page": 3,
+   "campus": "Central South",
+   "c": 5872.45,
+   "d": 5872.45,
+   "e": 0,
+   "f": 0,
+   "g": 5872.45,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "45",
+   "description": "Insurance and sub bonds",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 1500,
+   "d": 1500,
+   "e": 0,
+   "f": 0,
+   "g": 1500,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "46",
+   "description": "Overhead and Fees",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 1500,
+   "d": 1500,
+   "e": 0,
+   "f": 0,
+   "g": 1500,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "47",
+   "description": "Permits",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 800,
+   "d": 800,
+   "e": 0,
+   "f": 0,
+   "g": 800,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "48",
+   "description": "General Conditions",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 4345.67,
+   "d": 4345.67,
+   "e": 0,
+   "f": 0,
+   "g": 4345.67,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "49",
+   "description": "Performance & Payment Bond",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 2903.96,
+   "d": 2903.96,
+   "e": 0,
+   "f": 0,
+   "g": 2903.96,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "50",
+   "description": "Division 2 - Site Construction",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 14345.67,
+   "d": 14345.67,
+   "e": 0,
+   "f": 0,
+   "g": 14345.67,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "51",
+   "description": "Division 3 - Concrete",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 21864.11,
+   "d": 21864.11,
+   "e": 0,
+   "f": 0,
+   "g": 21864.11,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "52",
+   "description": "Division 3- Concrete- Polished Concrete",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 6168.7,
+   "d": 6168.7,
+   "e": 0,
+   "f": 0,
+   "g": 6168.7,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "54",
+   "description": "Division 5 - Metal",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 11064.84,
+   "d": 11064.84,
+   "e": 0,
+   "f": 0,
+   "g": 11064.84,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "56",
+   "description": "Division 7 - Thermal and Moisture Protection",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 1339.21,
+   "d": 1339.21,
+   "e": 0,
+   "f": 0,
+   "g": 1339.21,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "57",
+   "description": "Division 9 - Finishes - Gypsum Board Assy",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 13834.39,
+   "d": 13834.39,
+   "e": 0,
+   "f": 0,
+   "g": 13834.39,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "58",
+   "description": "Division 9 - Finishes - Non-Structural Framing",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 6212.05,
+   "d": 6212.05,
+   "e": 0,
+   "f": 0,
+   "g": 6212.05,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "59",
+   "description": "Division 9 - Finishes - Accoustical Panel Ceiling",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 1600.7,
+   "d": 1600.7,
+   "e": 0,
+   "f": 0,
+   "g": 1600.7,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "62",
+   "description": "Division 9 - Interior Painting",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 2049.58,
+   "d": 2049.58,
+   "e": 0,
+   "f": 0,
+   "g": 2049.58,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "63",
+   "description": "Division 10 - Specialities - Fire Extinguishers",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 1842.69,
+   "d": 1842.69,
+   "e": 0,
+   "f": 0,
+   "g": 1842.69,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "64",
+   "description": "Division 22 - Plumbing",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 23140.36,
+   "d": 23140.36,
+   "e": 0,
+   "f": 0,
+   "g": 23140.36,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "65",
+   "description": "Division 26 - Electrical",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 4469.83,
+   "d": 4469.83,
+   "e": 0,
+   "f": 0,
+   "g": 4469.83,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "66",
+   "description": "Division 28 - Fire Detection and Alarm",
+   "page": 4,
+   "campus": "Southeast",
+   "c": 7007.65,
+   "d": 7007.65,
+   "e": 0,
+   "f": 0,
+   "g": 7007.65,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "67",
+   "description": "Insurance and sub bonds",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 1500,
+   "d": 1500,
+   "e": 0,
+   "f": 0,
+   "g": 1500,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "68",
+   "description": "Overhead and Fees",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 1500,
+   "d": 1500,
+   "e": 0,
+   "f": 0,
+   "g": 1500,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "69",
+   "description": "Permits",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 800,
+   "d": 800,
+   "e": 0,
+   "f": 0,
+   "g": 800,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "70",
+   "description": "General Conditions",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 4335.73,
+   "d": 4335.73,
+   "e": 0,
+   "f": 0,
+   "g": 4335.73,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "71",
+   "description": "Performance & Payment Bond",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 3030.64,
+   "d": 3030.64,
+   "e": 0,
+   "f": 0,
+   "g": 3030.64,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "72",
+   "description": "Division 2 - Site Construction",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 4785.41,
+   "d": 4785.41,
+   "e": 0,
+   "f": 0,
+   "g": 4785.41,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "73",
+   "description": "Division 3 - Concrete",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 7795.34,
+   "d": 7795.34,
+   "e": 0,
+   "f": 0,
+   "g": 7795.34,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "77",
+   "description": "Division 6 - Wood & Plastics",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 7639.39,
+   "d": 7564.89,
+   "e": 74.5,
+   "f": 0,
+   "g": 7639.39,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "78",
+   "description": "Division 7 - Thermal and Moisture Protection",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 1822.09,
+   "d": 1822.09,
+   "e": 0,
+   "f": 0,
+   "g": 1822.09,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "79",
+   "description": "Division 9 - Finishes - Gypsum Board Assy",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 18822.58,
+   "d": 18822.58,
+   "e": 0,
+   "f": 0,
+   "g": 18822.58,
+   "pct": 100.0,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "80",
+   "description": "Division 9 - Finishes - Non-Structural Framing",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 7091.3,
+   "d": 7091.3,
+   "e": 0,
+   "f": 0,
+   "g": 7091.3,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "81",
+   "description": "Division 9 - Finishes - Accoustical Panel Ceiling",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 817.25,
+   "d": 817.25,
+   "e": 0,
+   "f": 0,
+   "g": 817.25,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "83",
+   "description": "Division 9 -Terrazo flooring",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 33181.34,
+   "d": 21829.57,
+   "e": 0,
+   "f": 0,
+   "g": 21829.57,
+   "pct": 65.78869328363473,
+   "h": 11351.769999999997,
+   "i": null
+  },
+  {
+   "itemNo": "84",
+   "description": "Division 9 - Interior Painting",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 2788.59,
+   "d": 2788.59,
+   "e": 0,
+   "f": 0,
+   "g": 2788.59,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "85",
+   "description": "Division 10 - Specialities - Fire Extinguishers",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 1842.69,
+   "d": 1000,
+   "e": 842.69,
+   "f": 0,
+   "g": 1842.69,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "86",
+   "description": "Division 22 - Plumbing",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 28465.01,
+   "d": 28465.01,
+   "e": 0,
+   "f": 0,
+   "g": 28465.01,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "87",
+   "description": "Division 26 - Electrical",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 3018.29,
+   "d": 3018.29,
+   "e": 0,
+   "f": 0,
+   "g": 3018.29,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "88",
+   "description": "Division 28 - Fire Detection and Alarm",
+   "page": 5,
+   "campus": "Stafford",
+   "c": 5370.73,
+   "d": 4800,
+   "e": 570.73,
+   "f": 0,
+   "g": 5370.73,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "89",
+   "description": "Owner Contingency",
+   "page": 6,
+   "campus": null,
+   "c": 4033.69,
+   "d": 0,
+   "e": 0,
+   "f": 0,
+   "g": 0,
+   "pct": null,
+   "h": 4033.69,
+   "i": null
+  },
+  {
+   "itemNo": "1-safe-removal",
+   "description": "#1 - Safe Removal",
+   "page": 6,
+   "campus": null,
+   "c": 550,
+   "d": 550,
+   "e": 0,
+   "f": 0,
+   "g": 550,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "2-satfford-cut-floor-pipe",
+   "description": "#2 - Satfford- Cut Floor- Pipe",
+   "page": 6,
+   "campus": null,
+   "c": 15612.55,
+   "d": 15612.55,
+   "e": 0,
+   "f": 0,
+   "g": 15612.55,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "3-cs-northeast-floor",
+   "description": "#3- CS- Northeast Floor",
+   "page": 6,
+   "campus": null,
+   "c": 5902.56,
+   "d": 5902.56,
+   "e": 0,
+   "f": 0,
+   "g": 5902.56,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "4-floor-change",
+   "description": "#4 - Floor Change",
+   "page": 6,
+   "campus": null,
+   "c": 9566.84,
+   "d": 2179.89,
+   "e": 0,
+   "f": 0,
+   "g": 2179.89,
+   "pct": 22.78589377474694,
+   "h": 7386.950000000001,
+   "i": null
+  },
+  {
+   "itemNo": "5-cs-water-heater",
+   "description": "#5 - CS- Water Heater",
+   "page": 6,
+   "campus": null,
+   "c": 1886,
+   "d": 1886,
+   "e": 0,
+   "f": 0,
+   "g": 1886,
+   "pct": 100,
+   "h": null,
+   "i": null
+  },
+  {
+   "itemNo": "6-stafford-sprinkler",
+   "description": "#6 - Stafford Sprinkler",
+   "page": 6,
+   "campus": null,
+   "c": 1092.5,
+   "d": 1092.5,
+   "e": 0,
+   "f": 0,
+   "g": 1092.5,
+   "pct": 100,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "co-7-stafford-heater-reloc",
+   "description": "CO#7 Stafford heater reloc",
+   "page": 6,
+   "campus": null,
+   "c": 3720.46,
+   "d": 0,
+   "e": 0,
+   "f": 0,
+   "g": 0,
+   "pct": null,
+   "h": 3720.46,
+   "i": null
+  },
+  {
+   "itemNo": "co-8-rejected",
+   "description": "CO#8 Rejected",
+   "page": 6,
+   "campus": null,
+   "c": 0,
+   "d": 0,
+   "e": 0,
+   "f": 0,
+   "g": 0,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "co-9-floor-for-stafford",
+   "description": "CO#9 Floor for stafford",
+   "page": 6,
+   "campus": null,
+   "c": 6410,
+   "d": 6410,
+   "e": 0,
+   "f": 0,
+   "g": 6410,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "co-10-trench-fill-stafford",
+   "description": "CO#10 Trench Fill Stafford",
+   "page": 6,
+   "campus": null,
+   "c": 1725,
+   "d": 1725,
+   "e": 0,
+   "f": 0,
+   "g": 1725,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "co-11-fire-inspection",
+   "description": "CO#11 Fire Inspection",
+   "page": 6,
+   "campus": null,
+   "c": 1897.5,
+   "d": 1897.5,
+   "e": 0,
+   "f": 0,
+   "g": 1897.5,
+   "pct": null,
+   "h": 0,
+   "i": null
+  },
+  {
+   "itemNo": "co-12-terrazo-credit",
+   "description": "CO#12 Terrazo credit",
+   "page": 6,
+   "campus": null,
+   "c": -14897.1,
+   "d": 0,
+   "e": 0,
+   "f": 0,
+   "g": 0,
+   "pct": null,
+   "h": -14897.1,
+   "i": null
+  }
+ ],
+ "pageSubtotals": [
+  {
+   "page": 2,
+   "c": 85828.95000000001,
+   "d": 85828.95000000001,
+   "e": null,
+   "f": null,
+   "g": 85828.95000000001,
+   "h": null,
+   "i": null
+  },
+  {
+   "page": 3,
+   "c": 199403.17000000004,
+   "d": 198399.45000000004,
+   "e": 1003.72,
+   "f": null,
+   "g": 199403.17000000004,
+   "h": 0,
+   "i": null
+  },
+  {
+   "page": 4,
+   "c": 325392.5800000002,
+   "d": 324388.86000000016,
+   "e": 1003.72,
+   "f": null,
+   "g": 325392.5800000002,
+   "h": 0,
+   "i": null
+  },
+  {
+   "page": 5,
+   "c": 459998.96000000025,
+   "d": 446155.5500000002,
+   "e": 2491.6400000000003,
+   "f": null,
+   "g": 448647.19000000024,
+   "h": 11351.769999999997,
+   "i": null
+  },
+  {
+   "page": 6,
+   "c": 497498.9600000003,
+   "d": 483411.5500000002,
+   "e": 2491.6400000000003,
+   "f": null,
+   "g": 485903.19000000024,
+   "h": 11595.769999999995,
+   "i": null
+  }
+ ],
+ "grandTotals": {
+  "c": 497498.9600000003,
+  "d": 483411.5500000002,
+  "e": 2491.6400000000003,
+  "f": null,
+  "g": 485903.19000000024,
+  "h": 11595.769999999995,
+  "i": null
+ },
+ "prior": {
+  "applicationNumber": "19",
+  "line4": 483411.55,
+  "line6": 459240.97,
+  "line5Total": 24170.58,
+  "lineItems": [
+   {
+    "itemNo": "1",
+    "g": 1500
+   },
+   {
+    "itemNo": "2",
+    "g": 1500
+   },
+   {
+    "itemNo": "3",
+    "g": 800
+   },
+   {
+    "itemNo": "4",
+    "g": 4421.3
+   },
+   {
+    "itemNo": "5",
+    "g": 2187.9
+   },
+   {
+    "itemNo": "6",
+    "g": 8513
+   },
+   {
+    "itemNo": "7",
+    "g": 7579.37
+   },
+   {
+    "itemNo": "12",
+    "g": 1684.38
+   },
+   {
+    "itemNo": "13",
+    "g": 17635.42
+   },
+   {
+    "itemNo": "14",
+    "g": 7813.12
+   },
+   {
+    "itemNo": "15",
+    "g": 2013.26
+   },
+   {
+    "itemNo": "18",
+    "g": 2577.83
+   },
+   {
+    "itemNo": "19",
+    "g": 1842.69
+   },
+   {
+    "itemNo": "20",
+    "g": 16166.46
+   },
+   {
+    "itemNo": "21",
+    "g": 3619.15
+   },
+   {
+    "itemNo": "22",
+    "g": 5975.07
+   },
+   {
+    "itemNo": "23",
+    "g": 1500
+   },
+   {
+    "itemNo": "24",
+    "g": 1500
+   },
+   {
+    "itemNo": "25",
+    "g": 800
+   },
+   {
+    "itemNo": "26",
+    "g": 4354.57
+   },
+   {
+    "itemNo": "27",
+    "g": 2719.82
+   },
+   {
+    "itemNo": "28",
+    "g": 4821.84
+   },
+   {
+    "itemNo": "29",
+    "g": 11170.3
+   },
+   {
+    "itemNo": "34",
+    "g": 1479.32
+   },
+   {
+    "itemNo": "35",
+    "g": 17448.59
+   },
+   {
+    "itemNo": "36",
+    "g": 9346.47
+   },
+   {
+    "itemNo": "37",
+    "g": 1768.17
+   },
+   {
+    "itemNo": "40",
+    "g": 4748.52
+   },
+   {
+    "itemNo": "41",
+    "g": 838.97
+   },
+   {
+    "itemNo": "42",
+    "g": 39896.68
+   },
+   {
+    "itemNo": "43",
+    "g": 4304.8
+   },
+   {
+    "itemNo": "44",
+    "g": 5872.45
+   },
+   {
+    "itemNo": "45",
+    "g": 1500
+   },
+   {
+    "itemNo": "46",
+    "g": 1500
+   },
+   {
+    "itemNo": "47",
+    "g": 800
+   },
+   {
+    "itemNo": "48",
+    "g": 4345.67
+   },
+   {
+    "itemNo": "49",
+    "g": 2903.96
+   },
+   {
+    "itemNo": "50",
+    "g": 14345.67
+   },
+   {
+    "itemNo": "51",
+    "g": 21864.11
+   },
+   {
+    "itemNo": "52",
+    "g": 6168.7
+   },
+   {
+    "itemNo": "54",
+    "g": 11064.84
+   },
+   {
+    "itemNo": "56",
+    "g": 1339.21
+   },
+   {
+    "itemNo": "57",
+    "g": 13834.39
+   },
+   {
+    "itemNo": "58",
+    "g": 6212.05
+   },
+   {
+    "itemNo": "59",
+    "g": 1600.7
+   },
+   {
+    "itemNo": "62",
+    "g": 2049.58
+   },
+   {
+    "itemNo": "63",
+    "g": 1842.69
+   },
+   {
+    "itemNo": "64",
+    "g": 23140.36
+   },
+   {
+    "itemNo": "65",
+    "g": 4469.83
+   },
+   {
+    "itemNo": "66",
+    "g": 7007.65
+   },
+   {
+    "itemNo": "67",
+    "g": 1500
+   },
+   {
+    "itemNo": "68",
+    "g": 1500
+   },
+   {
+    "itemNo": "69",
+    "g": 800
+   },
+   {
+    "itemNo": "70",
+    "g": 4335.73
+   },
+   {
+    "itemNo": "71",
+    "g": 3030.64
+   },
+   {
+    "itemNo": "72",
+    "g": 4785.41
+   },
+   {
+    "itemNo": "73",
+    "g": 7795.34
+   },
+   {
+    "itemNo": "77",
+    "g": 7564.89
+   },
+   {
+    "itemNo": "78",
+    "g": 1822.09
+   },
+   {
+    "itemNo": "79",
+    "g": 18822.58
+   },
+   {
+    "itemNo": "80",
+    "g": 7091.3
+   },
+   {
+    "itemNo": "81",
+    "g": 817.25
+   },
+   {
+    "itemNo": "83",
+    "g": 21829.57
+   },
+   {
+    "itemNo": "84",
+    "g": 2788.59
+   },
+   {
+    "itemNo": "85",
+    "g": 1000
+   },
+   {
+    "itemNo": "86",
+    "g": 28465.01
+   },
+   {
+    "itemNo": "87",
+    "g": 3018.29
+   },
+   {
+    "itemNo": "88",
+    "g": 4800
+   },
+   {
+    "itemNo": "89",
+    "g": 0
+   },
+   {
+    "itemNo": "1-safe-removal",
+    "g": 550
+   },
+   {
+    "itemNo": "2-satfford-cut-floor-pipe",
+    "g": 15612.55
+   },
+   {
+    "itemNo": "3-cs-northeast-floor",
+    "g": 5902.56
+   },
+   {
+    "itemNo": "4-floor-change",
+    "g": 2179.89
+   },
+   {
+    "itemNo": "5-cs-water-heater",
+    "g": 1886
+   },
+   {
+    "itemNo": "6-stafford-sprinkler",
+    "g": 1092.5
+   },
+   {
+    "itemNo": "co-7-stafford-heater-reloc",
+    "g": 0
+   },
+   {
+    "itemNo": "co-8-rejected",
+    "g": 0
+   },
+   {
+    "itemNo": "co-9-floor-for-stafford",
+    "g": 6410
+   },
+   {
+    "itemNo": "co-10-trench-fill-stafford",
+    "g": 1725
+   },
+   {
+    "itemNo": "co-11-fire-inspection",
+    "g": 1897.5
+   },
+   {
+    "itemNo": "co-12-terrazo-credit",
+    "g": 0
+   }
+  ]
+ },
+ "expected": {
+  "verdict": "no-issues-found",
+  "findings": [],
+  "unresolved": [
+   {
+    "id": "I30",
+    "itemNo": "83",
+    "why": "Terrazo flooring has sat at $21,829.57 of $33,181.34 since application 19 while the job moved. Genuinely stalled, or paused for a reason the PM knows?"
+   },
+   {
+    "id": "I30",
+    "itemNo": "4-floor-change",
+    "why": "Fourth floor change order work has sat at $2,179.89 of $9,566.84 while the job moved."
+   }
+  ]
+ }
 }

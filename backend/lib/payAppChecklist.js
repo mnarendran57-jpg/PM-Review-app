@@ -1,4 +1,4 @@
-const { money } = require('./payAppChecks');
+const { money } = require('./money');
 
 // Builds a deterministic (no AI call) checklist of items the PM should physically verify
 // on site: anything billed as NEW this period (completed work, stored materials, or a new

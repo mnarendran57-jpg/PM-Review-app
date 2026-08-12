@@ -1,0 +1,522 @@
+{
+ "kind": "vendorRollup",
+ "name": "Carver HS GMP 01, application 6 \u2014 the real one the team marked up",
+ "$source": "pay_app_13_marked_up 8-11 with corrections to be made.pdf, Aldine ISD Carver High School Rebuild GMP 01, Bartlett Cocke, application 6, period to 30 June 2026. Figures taken from the text layer of pages 2-3 (owner's schedule) and pages 7-14 (each subcontractor's own G702/G703). The marked-up copy carried six findings from the old check suite; three of them were this failure \u2014 a subcontract billed across lines the review could not gather.",
+ "meta": {
+  "applicationNumber": "6",
+  "periodTo": "2026-06-30",
+  "projectName": "Aldine ISD - Carver High School Rebuild - GMP 01",
+  "contractor": "Bartlett Cocke General Contractors, LLC"
+ },
+ "sovLines": [
+  {
+   "itemNo": null,
+   "description": "General Conditions",
+   "originalValue": 484339.0,
+   "changeOrders": 0,
+   "scheduledValue": 484339.0,
+   "previous": 342439.16,
+   "thisPeriod": 45539.13,
+   "totalToDate": 387978.29,
+   "balance": 96360.71,
+   "retainage": 19398.91
+  },
+  {
+   "itemNo": null,
+   "description": "General Liability / Umbrella",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 9917.0,
+   "previous": 9917.0,
+   "thisPeriod": 0,
+   "totalToDate": 9917.0,
+   "balance": 0,
+   "retainage": 495.85
+  },
+  {
+   "itemNo": null,
+   "description": "Payment & Performance Bond",
+   "originalValue": 13478.0,
+   "changeOrders": 10796.0,
+   "scheduledValue": 24274.0,
+   "previous": 24274.0,
+   "thisPeriod": 0,
+   "totalToDate": 24274.0,
+   "balance": 0,
+   "retainage": 1213.7
+  },
+  {
+   "itemNo": null,
+   "description": "Subcontractor Default Insurance",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 20586.0,
+   "previous": 10832.73,
+   "thisPeriod": 0,
+   "totalToDate": 10832.73,
+   "balance": 9753.27,
+   "retainage": 541.64
+  },
+  {
+   "itemNo": null,
+   "description": "Building Permit",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 4048.0,
+   "previous": 953.58,
+   "thisPeriod": 0,
+   "totalToDate": 953.58,
+   "balance": 3094.42,
+   "retainage": 47.68
+  },
+  {
+   "itemNo": null,
+   "description": "Plan Checking Fee",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 1075.0,
+   "previous": 0,
+   "thisPeriod": 0,
+   "totalToDate": 0,
+   "balance": 1075.0,
+   "retainage": 0
+  },
+  {
+   "itemNo": null,
+   "description": "Ground Breaking",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 12573.27,
+   "previous": 12573.27,
+   "thisPeriod": 0,
+   "totalToDate": 12573.27,
+   "balance": 0,
+   "retainage": 628.66
+  },
+  {
+   "itemNo": null,
+   "description": "Demolition - IDR",
+   "originalValue": 749270.0,
+   "changeOrders": -132890.0,
+   "scheduledValue": 616380.0,
+   "previous": 579380.0,
+   "thisPeriod": 37000.0,
+   "totalToDate": 616380.0,
+   "balance": 0,
+   "retainage": 30819.0
+  },
+  {
+   "itemNo": null,
+   "description": "Relocate Statue - Watson Signs & Monuments",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 5095.0,
+   "previous": 5095.0,
+   "thisPeriod": 0,
+   "totalToDate": 5095.0,
+   "balance": 0,
+   "retainage": 254.75
+  },
+  {
+   "itemNo": null,
+   "description": "Survey Existing Piers - IDR",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 6050.0,
+   "previous": 4537.5,
+   "thisPeriod": 1512.5,
+   "totalToDate": 6050.0,
+   "balance": 0,
+   "retainage": 302.5
+  },
+  {
+   "itemNo": null,
+   "description": "Site Investigation - Existing Foundations",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 2654.77,
+   "previous": 2654.77,
+   "thisPeriod": 0,
+   "totalToDate": 2654.77,
+   "balance": 0,
+   "retainage": 132.74
+  },
+  {
+   "itemNo": null,
+   "description": "Abatement - IDR",
+   "originalValue": 101200.0,
+   "changeOrders": -11650.0,
+   "scheduledValue": 89550.0,
+   "previous": 89550.0,
+   "thisPeriod": 0,
+   "totalToDate": 89550.0,
+   "balance": 0,
+   "retainage": 4477.5
+  },
+  {
+   "itemNo": null,
+   "description": "Temporary Power Permit Fee",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 8984.91,
+   "previous": 8984.91,
+   "thisPeriod": 0,
+   "totalToDate": 8984.91,
+   "balance": 0,
+   "retainage": 449.25
+  },
+  {
+   "itemNo": "BC-31.92",
+   "description": "Roadway Mud & Dust Control - BCGC Self-Perform",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 69128.0,
+   "previous": 55302.4,
+   "thisPeriod": 13825.6,
+   "totalToDate": 69128.0,
+   "balance": 0,
+   "retainage": 3456.4
+  },
+  {
+   "itemNo": null,
+   "description": "Erosion Controls - Greenrise",
+   "originalValue": 15807.0,
+   "changeOrders": -1686.0,
+   "scheduledValue": 14121.0,
+   "previous": 6230.0,
+   "thisPeriod": 400.0,
+   "totalToDate": 6630.0,
+   "balance": 7491.0,
+   "retainage": 331.5
+  },
+  {
+   "itemNo": "BC-31.91",
+   "description": "Weekly SWPPP Maintenenance - BCGC Self-Perform",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 24521.0,
+   "previous": 20842.85,
+   "thisPeriod": 3678.15,
+   "totalToDate": 24521.0,
+   "balance": 0,
+   "retainage": 1226.05
+  },
+  {
+   "itemNo": null,
+   "description": "Tree Protection - GreenScape",
+   "originalValue": 89052.0,
+   "changeOrders": 21328.0,
+   "scheduledValue": 110380.0,
+   "previous": 100780.0,
+   "thisPeriod": 3200.0,
+   "totalToDate": 103980.0,
+   "balance": 6400.0,
+   "retainage": 5199.0
+  },
+  {
+   "itemNo": "BC-32.91",
+   "description": "Watering, Protection Maintenance, Tree Foliage - BCGC Self-Perform",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 47825.0,
+   "previous": 38260.0,
+   "thisPeriod": 9565.0,
+   "totalToDate": 47825.0,
+   "balance": 0,
+   "retainage": 2391.25
+  },
+  {
+   "itemNo": null,
+   "description": "CM Construction Contingency",
+   "originalValue": 36730.0,
+   "changeOrders": -2323.0,
+   "scheduledValue": 34407.0,
+   "previous": 0,
+   "thisPeriod": 0,
+   "totalToDate": 0,
+   "balance": 34407.0,
+   "retainage": 0
+  },
+  {
+   "itemNo": "AEA 01",
+   "description": "CPR 001 - Camera Existing Storm Lines (IDR)",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 2323.0,
+   "previous": 2323.0,
+   "thisPeriod": 0,
+   "totalToDate": 2323.0,
+   "balance": 0,
+   "retainage": 116.15
+  },
+  {
+   "itemNo": null,
+   "description": "Allowance #1 - Assistance with Removal of Loose Furniture",
+   "originalValue": 20000.0,
+   "changeOrders": -1954.0,
+   "scheduledValue": 18046.0,
+   "previous": 0,
+   "thisPeriod": 0,
+   "totalToDate": 0,
+   "balance": 18046.0,
+   "retainage": 0
+  },
+  {
+   "itemNo": "AEA 06",
+   "description": "CPR 007 - Relocate Fence (BCGC)",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 1954.0,
+   "previous": 0,
+   "thisPeriod": 1954.0,
+   "totalToDate": 1954.0,
+   "balance": 0,
+   "retainage": 97.7
+  },
+  {
+   "itemNo": null,
+   "description": "Allowance #2 - Unknown Deep Foundation Removal",
+   "originalValue": 400000.0,
+   "changeOrders": -9514.0,
+   "scheduledValue": 390486.0,
+   "previous": 0,
+   "thisPeriod": 0,
+   "totalToDate": 0,
+   "balance": 390486.0,
+   "retainage": 0
+  },
+  {
+   "itemNo": "AEA 07",
+   "description": "CPR 008 - Test Pits to Investigate Existing Soils (IDR)",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 9514.0,
+   "previous": 0,
+   "thisPeriod": 9514.0,
+   "totalToDate": 9514.0,
+   "balance": 0,
+   "retainage": 475.7
+  },
+  {
+   "itemNo": null,
+   "description": "Allowance #3 - Unforeseen Asbestos",
+   "originalValue": 50000.0,
+   "changeOrders": -44744.0,
+   "scheduledValue": 5256.0,
+   "previous": 0,
+   "thisPeriod": 0,
+   "totalToDate": 0,
+   "balance": 5256.0,
+   "retainage": 0
+  },
+  {
+   "itemNo": "AEA 04",
+   "description": "CPR 005 - Unforeseen Asbestos Abatement - Windows (IDR)",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 10582.0,
+   "previous": 10582.0,
+   "thisPeriod": 0,
+   "totalToDate": 10582.0,
+   "balance": 0,
+   "retainage": 529.1
+  },
+  {
+   "itemNo": "AEA 05",
+   "description": "CPR 006 - Unforeseen Asbestos - Vapor Barrier Under Gym Slab (IDR)",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 34162.0,
+   "previous": 34162.0,
+   "thisPeriod": 0,
+   "totalToDate": 34162.0,
+   "balance": 0,
+   "retainage": 1708.1
+  },
+  {
+   "itemNo": null,
+   "description": "Allowance #4 - Tree Trimming / Arborist",
+   "originalValue": 40000.0,
+   "changeOrders": -27335.0,
+   "scheduledValue": 12665.0,
+   "previous": 0,
+   "thisPeriod": 0,
+   "totalToDate": 0,
+   "balance": 12665.0,
+   "retainage": 0
+  },
+  {
+   "itemNo": "AEA 02",
+   "description": "CPR 002 - Tree Trimming & Arborist Inspections (GreenScape)",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 27335.0,
+   "previous": 20329.58,
+   "thisPeriod": 1401.1,
+   "totalToDate": 21730.68,
+   "balance": 5604.32,
+   "retainage": 1086.53
+  },
+  {
+   "itemNo": null,
+   "description": "Allowance #5 - Site Security (Cameras)",
+   "originalValue": 48000.0,
+   "changeOrders": -15991.0,
+   "scheduledValue": 32009.0,
+   "previous": 0,
+   "thisPeriod": 0,
+   "totalToDate": 0,
+   "balance": 32009.0,
+   "retainage": 0
+  },
+  {
+   "itemNo": "AEA 03",
+   "description": "CPR 003 - Site Surveillance Cameras (BCGC)",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 15991.0,
+   "previous": 13149.36,
+   "thisPeriod": 0,
+   "totalToDate": 13149.36,
+   "balance": 2841.64,
+   "retainage": 657.47
+  },
+  {
+   "itemNo": null,
+   "description": "Work Remaining to be Procured",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 60164.32,
+   "previous": 0,
+   "thisPeriod": 0,
+   "totalToDate": 0,
+   "balance": 60164.32,
+   "retainage": 0
+  },
+  {
+   "itemNo": null,
+   "description": "Buyout Contingency",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 18579.73,
+   "previous": 0,
+   "thisPeriod": 0,
+   "totalToDate": 0,
+   "balance": 18579.73,
+   "retainage": 0
+  },
+  {
+   "itemNo": null,
+   "description": "CM Fee",
+   "originalValue": null,
+   "changeOrders": null,
+   "scheduledValue": 35126.0,
+   "previous": 21920.57,
+   "thisPeriod": 2052.63,
+   "totalToDate": 23973.2,
+   "balance": 11152.8,
+   "retainage": 1198.66
+  }
+ ],
+ "vendors": [
+  {
+   "vendor": "Integrated Demolition and Remediation Inc.",
+   "applicationNumber": "6",
+   "commitment": "253016-004",
+   "contractFor": "Demolition and Abatement",
+   "scheduledValue": 768561.0,
+   "previous": 720534.5,
+   "thisPeriod": 48026.5,
+   "totalToDate": 768561.0,
+   "balance": 0.0,
+   "retainage": 5776.88
+  },
+  {
+   "vendor": "GREENRISE TECHNOLOGIES LLC FKA CONSTRUCTION ECO SERVICES II LLC",
+   "applicationNumber": "6",
+   "commitment": "253016-002",
+   "contractFor": "SWPPP",
+   "scheduledValue": 14121.0,
+   "previous": 6230.0,
+   "thisPeriod": 400.0,
+   "totalToDate": 6630.0,
+   "balance": 7491.0,
+   "retainage": 331.5
+  },
+  {
+   "vendor": "Greenscape Associates",
+   "applicationNumber": "6",
+   "commitment": "253016-003",
+   "contractFor": "Tree Protection",
+   "scheduledValue": 137715.0,
+   "previous": 121109.58,
+   "thisPeriod": 4601.1,
+   "totalToDate": 125710.68,
+   "balance": 12004.32,
+   "retainage": 6285.53,
+   "groups": [
+    {
+     "code": "000*253016-2000*S*51684419",
+     "description": "Tree protection - base contract",
+     "scheduledValue": 110380.0,
+     "previous": 100780.0,
+     "thisPeriod": 3200.0,
+     "totalToDate": 103980.0,
+     "retainage": 5199.0
+    },
+    {
+     "code": "001*253016-2000*S*51688092",
+     "description": "CPR002 - Tree Trimming & Arborist",
+     "scheduledValue": 27335.0,
+     "previous": 20329.58,
+     "thisPeriod": 1401.1,
+     "totalToDate": 21730.68,
+     "retainage": 1086.53
+    }
+   ]
+  }
+ ],
+ "expected": {
+  "verdict": "no-issues-found",
+  "findings": [
+   {
+    "id": "V1",
+    "vendor": "Integrated Demolition and Remediation Inc.",
+    "why": "IDR is retained at 0.75% while the owner holds 5% on the same work \u2014 a note, not an error"
+   }
+  ],
+  "rollup": [
+   {
+    "vendor": "Integrated Demolition and Remediation Inc.",
+    "status": "differs",
+    "lines": [
+     "Demolition - IDR",
+     "Survey Existing Piers - IDR",
+     "Abatement - IDR",
+     "CPR 001 - Camera Existing Storm Lines (IDR)",
+     "CPR 005 - Unforeseen Asbestos Abatement - Windows (IDR)",
+     "CPR 006 - Unforeseen Asbestos - Vapor Barrier Under Gym Slab (IDR)",
+     "CPR 008 - Test Pits to Investigate Existing Soils (IDR)"
+    ],
+    "why": "seven lines across four divisions and two allowances, five of six columns exact"
+   },
+   {
+    "vendor": "GREENRISE TECHNOLOGIES LLC FKA CONSTRUCTION ECO SERVICES II LLC",
+    "status": "reconciled",
+    "lines": [
+     "Erosion Controls - Greenrise"
+    ],
+    "why": "the unnumbered row the old suite read past, in favour of the numbered one below it"
+   },
+   {
+    "vendor": "Greenscape Associates",
+    "status": "reconciled",
+    "lines": [
+     "Tree Protection - GreenScape",
+     "CPR 002 - Tree Trimming & Arborist Inspections (GreenScape)"
+    ],
+    "why": "base scope in Division 32 plus the allowance draw, six of six columns exact"
+   }
+  ]
+ }
+}
