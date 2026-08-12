@@ -30,8 +30,11 @@ api.interceptors.request.use(config => {
   if (token) config.headers.Authorization = `Bearer ${token}`;
   // Which organization the user is working in travels with every request. The server
   // always re-checks their membership of it, so this is a convenience, not a grant.
+  // A call may name its own organization — the platform owner's Team page lists every customer
+  // at once, so acting on one must not depend on which is selected in the header. An explicit
+  // header on the request wins; without one, the selected organization travels by default.
   const org = localStorage.getItem(ORG_KEY);
-  if (org) {
+  if (org && !config.headers['X-Org-Id']) {
     try { config.headers['X-Org-Id'] = String(JSON.parse(org).id); } catch { /* ignore */ }
   }
   return config;
@@ -151,19 +154,34 @@ export const programsApi = {
   delete: id => api.delete(`/programs/${id}`).then(r => r.data),
 };
 
+// Every member call acts on ONE organization. Normally that is whichever the user has selected,
+// which the client sends as a header on every request. The platform owner is the exception: their
+// Team page lists all customers at once, so acting on a particular one has to name it rather than
+// requiring them to switch context between every click. The server validates it either way — a
+// supplied id gets you nothing you could not already reach.
+// Named as a HEADER rather than a query parameter. The server prefers the header when both are
+// present, so a query parameter would have been silently overridden by whichever organization
+// happened to be selected — the owner would have clicked "add administrator" on one customer and
+// added them to another.
+const inOrg = orgId => (orgId ? { headers: { 'X-Org-Id': String(orgId) } } : undefined);
+
 export const adminApi = {
-  // People in the active organization.
-  listMembers: () => api.get('/admin/members').then(r => r.data),
+  // People in one organization — the active one unless `orgId` names another.
+  listMembers: orgId => api.get('/admin/members', inOrg(orgId)).then(r => r.data),
   listPeople: () => api.get('/admin/people').then(r => r.data),
-  addMember: data => api.post('/admin/members', data).then(r => r.data),
-  updateMember: (userId, data) => api.put(`/admin/members/${userId}`, data).then(r => r.data),
-  removeMember: userId => api.delete(`/admin/members/${userId}`).then(r => r.data),
-  // What one person can reach in the active organization, and rewriting it wholesale.
-  getMemberAccess: userId => api.get(`/admin/members/${userId}/access`).then(r => r.data),
-  setMemberAccess: (userId, data) => api.put(`/admin/members/${userId}/access`, data).then(r => r.data),
+  addMember: (data, orgId) => api.post('/admin/members', data, inOrg(orgId)).then(r => r.data),
+  updateMember: (userId, data, orgId) =>
+    api.put(`/admin/members/${userId}`, data, inOrg(orgId)).then(r => r.data),
+  removeMember: (userId, orgId) =>
+    api.delete(`/admin/members/${userId}`, inOrg(orgId)).then(r => r.data),
+  // What one person can reach in that organization, and rewriting it wholesale.
+  getMemberAccess: (userId, orgId) =>
+    api.get(`/admin/members/${userId}/access`, inOrg(orgId)).then(r => r.data),
+  setMemberAccess: (userId, data, orgId) =>
+    api.put(`/admin/members/${userId}/access`, data, inOrg(orgId)).then(r => r.data),
   // Invitations — the preferred way to add someone, since they set their own password.
-  listInvitations: () => api.get('/admin/invitations').then(r => r.data),
-  invite: data => api.post('/admin/invitations', data).then(r => r.data),
+  listInvitations: orgId => api.get('/admin/invitations', inOrg(orgId)).then(r => r.data),
+  invite: (data, orgId) => api.post('/admin/invitations', data, inOrg(orgId)).then(r => r.data),
   revokeInvitation: id => api.delete(`/admin/invitations/${id}`).then(r => r.data),
   // Coaster plans. Reading and setting a customer's plan is vendor-only; "my plan" is what
   // the signed-in user's own organization includes, used to hide tools they haven't bought.

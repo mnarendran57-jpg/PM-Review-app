@@ -1,9 +1,66 @@
 import { useState, useEffect } from 'react';
-import { CheckIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
-import { settingsApi } from '../api';
+import { CheckIcon, Cog6ToothIcon, KeyIcon } from '@heroicons/react/24/outline';
+import { settingsApi, authApi } from '../api';
 import PageHeader from '../components/PageHeader';
 import MemoTemplateEditor from '../components/MemoTemplateEditor';
 import OrgSwitcher from '../components/OrgSwitcher';
+
+// Your own password.
+//
+// This used to sit on the Team page, which is about other people — a page that manages a customer's
+// staff is the wrong place to keep a personal control, and having it there was most of the reason
+// that page did three unrelated jobs. Changing your own password is a setting, so it lives here.
+function ChangeMyPassword() {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState(null);           // { ok, text }
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setMsg(null);
+    if (next.length < 8) { setMsg({ ok: false, text: 'New password must be at least 8 characters.' }); return; }
+    setSaving(true);
+    try {
+      await authApi.changePassword({ current_password: current, new_password: next });
+      setCurrent(''); setNext('');
+      setMsg({ ok: true, text: 'Password changed. Other devices will need to sign in again.' });
+    } catch (err) {
+      setMsg({ ok: false, text: err?.response?.data?.error || 'Could not change your password.' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-5 py-4 flex items-center gap-2"
+        style={{ borderBottom: '1px solid #f3f4f6', background: '#fafbfc' }}>
+        <KeyIcon className="w-4 h-4 text-gray-400" />
+        <h2 className="text-sm font-semibold text-gray-900">Your password</h2>
+      </div>
+      <form className="px-5 py-4 space-y-3" onSubmit={submit}>
+        <div>
+          <label className="label">Current password</label>
+          <input className="input" type="password" value={current} autoComplete="current-password"
+            onChange={e => setCurrent(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">New password</label>
+          <input className="input" type="password" value={next} autoComplete="new-password"
+            onChange={e => setNext(e.target.value)} />
+          <p className="text-[11px] text-gray-400 mt-1">At least 8 characters.</p>
+        </div>
+        {msg && (
+          <p className="text-xs" style={{ color: msg.ok ? '#047857' : '#b91c1c' }}>{msg.text}</p>
+        )}
+        <button type="submit" className="btn-primary w-full justify-center" disabled={saving || !current || !next}>
+          {saving ? 'Changing…' : 'Change password'}
+        </button>
+      </form>
+    </div>
+  );
+}
 
 export default function Settings() {
   const [settings, setSettings] = useState({ rfi_response_days: '10', submittal_review_days: '14' });
@@ -75,6 +132,8 @@ export default function Settings() {
               </button>
             </div>
           </div>
+
+          <ChangeMyPassword />
 
           {/* About card */}
           <div className="card overflow-hidden">

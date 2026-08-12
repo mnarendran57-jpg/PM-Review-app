@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  UserGroupIcon, PlusIcon, PencilIcon, TrashIcon, KeyIcon,
+  UserGroupIcon, PlusIcon, PencilIcon, TrashIcon,
   BuildingOffice2Icon, CheckCircleIcon, EnvelopeIcon, XMarkIcon, RectangleGroupIcon,
 } from '@heroicons/react/24/outline';
 import { adminApi, authApi, selectedOrg } from '../api';
@@ -30,11 +30,15 @@ function RoleBadge({ role }) {
 
 // Adding someone creates their account outright — there is no email invitation yet, so
 // the password set here is what they sign in with until they change it themselves.
-function PersonModal({ person, onClose, onSaved }) {
+// `orgId` names the organization being acted on. Left out it means the one the user has
+// selected, which is the org admin's only choice. The platform owner passes it explicitly,
+// because their page lists every customer at once and clicking "add administrator" on the third
+// one must not depend on which organization happens to be selected in the header.
+function PersonModal({ person, onClose, onSaved, orgId, fixedRole }) {
   const editing = !!person;
   const [name, setName] = useState(person?.name || '');
   const [email, setEmail] = useState(person?.email || '');
-  const [role, setRole] = useState(person?.role === 'Admin' ? 'Admin' : 'Member');
+  const [role, setRole] = useState(fixedRole || (person?.role === 'Admin' ? 'Admin' : 'Member'));
   const [status, setStatus] = useState(person?.status || 'Active');
   const [password, setPassword] = useState('');
   const [saving, setSaving] = useState(false);
@@ -58,9 +62,10 @@ function PersonModal({ person, onClose, onSaved }) {
           // Omitted entirely when locked, so the request carries only what may change.
           ...(accountLocked ? {} : { name: name.trim() || null, status }),
           ...(password && !accountLocked ? { new_password: password } : {}),
-        });
+        }, orgId);
       } else {
-        await adminApi.addMember({ name: name.trim() || null, email: email.trim(), role, password });
+        await adminApi.addMember(
+          { name: name.trim() || null, email: email.trim(), role, password }, orgId);
       }
       onSaved();
     } catch (e) {
@@ -141,7 +146,7 @@ function PersonModal({ person, onClose, onSaved }) {
 // Which programs and projects one person can reach. Programs are listed first because a
 // program grant covers everything inside it — including projects added later — so ticking
 // one is usually the right answer and makes the project boxes under it redundant.
-function AccessModal({ person, onClose, onSaved }) {
+function AccessModal({ person, onClose, onSaved, orgId }) {
   const [data, setData] = useState(null);
   const [programIds, setProgramIds] = useState([]);
   const [projectIds, setProjectIds] = useState([]);
@@ -149,14 +154,14 @@ function AccessModal({ person, onClose, onSaved }) {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    adminApi.getMemberAccess(person.user_id)
+    adminApi.getMemberAccess(person.user_id, orgId)
       .then(d => {
         setData(d);
         setProgramIds(d.programs.filter(p => p.granted).map(p => p.id));
         setProjectIds(d.projects.filter(p => p.granted).map(p => p.id));
       })
       .catch(e => setError(e?.response?.data?.error || 'Could not load this person\'s access.'));
-  }, [person.user_id]);
+  }, [person.user_id, orgId]);
 
   const toggle = (list, setList, id) =>
     setList(list.includes(id) ? list.filter(x => x !== id) : [...list, id]);
@@ -164,7 +169,8 @@ function AccessModal({ person, onClose, onSaved }) {
   const save = async () => {
     setError(''); setSaving(true);
     try {
-      await adminApi.setMemberAccess(person.user_id, { program_ids: programIds, project_ids: projectIds });
+      await adminApi.setMemberAccess(
+        person.user_id, { program_ids: programIds, project_ids: projectIds }, orgId);
       onSaved();
       onClose();
     } catch (e) {
@@ -373,9 +379,9 @@ function PlanModal({ org, onClose, onSaved }) {
   );
 }
 
-function InviteModal({ onClose, onSent }) {
+function InviteModal({ onClose, onSent, orgId, fixedRole }) {
   const [address, setAddress] = useState('');
-  const [role, setRole] = useState('Member');
+  const [role, setRole] = useState(fixedRole || 'Member');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
@@ -385,7 +391,7 @@ function InviteModal({ onClose, onSent }) {
     setError('');
     if (!address.trim()) { setError('Enter an email address.'); return; }
     setSaving(true);
-    try { setResult(await adminApi.invite({ email: address.trim(), role })); onSent(); }
+    try { setResult(await adminApi.invite({ email: address.trim(), role }, orgId)); onSent(); }
     catch (e) { setError(e?.response?.data?.error || 'Could not send this invitation.'); }
     finally { setSaving(false); }
   };
@@ -505,72 +511,262 @@ function FirmModal({ onClose, onSaved }) {
   );
 }
 
-function ChangeMyPassword() {
-  const [current, setCurrent] = useState('');
-  const [next, setNext] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState(null); // { ok, text }
+// One customer, as the platform owner needs to see them: who runs it, what they are paying for,
+// and how much of the product they can reach.
+//
+// Administrators only, deliberately. The owner's question is who is accountable for each customer
+// and whether that list is right; the roll of everyone inside a customer is their own admin's
+// business, and putting a hundred names here would bury the six that matter. The member count is
+// shown so the owner can see a customer is populated without reading its staff list.
+function OrganizationCard({ org, onChanged, onPlan, confirm, setError }) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(undefined);   // undefined closed, null new
+  const [accessFor, setAccessFor] = useState(null);
+  const [inviting, setInviting] = useState(false);
 
-  const submit = async () => {
-    setMsg(null);
-    if (next.length < 8) { setMsg({ ok: false, text: 'New password must be at least 8 characters.' }); return; }
-    setSaving(true);
-    try {
-      await authApi.changePassword({ current_password: current, new_password: next });
-      setCurrent(''); setNext('');
-      setMsg({ ok: true, text: 'Password changed.' });
-    } catch (e) {
-      setMsg({ ok: false, text: e?.response?.data?.error || 'Could not change your password.' });
-    } finally { setSaving(false); }
+  const admins = org.admins || [];
+
+  const removeAdmin = async (person) => {
+    const ok = await confirm({
+      title: 'Remove administrator',
+      message: `Remove ${person.name || person.email} from ${org.name}? They keep their account and `
+        + 'any access to other organizations.',
+      confirmLabel: 'Remove',
+    });
+    if (!ok) return;
+    setError('');
+    try { await adminApi.removeMember(person.user_id, org.id); onChanged(); }
+    catch (e) { setError(e?.response?.data?.error || 'Could not remove this administrator.'); }
   };
 
   return (
-    <div className="card p-5 space-y-3">
-      <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-        <KeyIcon className="w-4 h-4 text-gray-400" /> Your password
-      </h3>
-      <div>
-        <label className="label">Current password</label>
-        <input className="input" type="password" value={current} onChange={e => setCurrent(e.target.value)} />
+    <div className="card overflow-hidden">
+      <div className="px-5 py-4 flex items-start justify-between gap-4"
+        style={{ borderBottom: open ? '1px solid #f3f4f6' : 'none' }}>
+        <button type="button" className="flex-1 text-left min-w-0" onClick={() => setOpen(o => !o)}>
+          <div className="flex items-center gap-2">
+            <BuildingOffice2Icon className="w-4 h-4 text-gray-400 flex-shrink-0" />
+            <span className="text-sm font-semibold text-gray-900 truncate">{org.name}</span>
+            <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold flex-shrink-0"
+              style={{ background: admins.length ? '#eff6ff' : '#fef2f2', color: admins.length ? '#1d4ed8' : '#b91c1c' }}>
+              {admins.length === 1 ? '1 admin' : `${admins.length} admins`}
+            </span>
+          </div>
+          <p className="text-[11px] text-gray-400 mt-1">
+            {org.member_count_non_admin} other member{org.member_count_non_admin === 1 ? '' : 's'} ·
+            {' '}{org.program_count} program{org.program_count === 1 ? '' : 's'} ·
+            {' '}{org.project_count} project{org.project_count === 1 ? '' : 's'}
+          </p>
+        </button>
+
+        <div className="text-right flex-shrink-0">
+          <p className="text-sm font-medium text-gray-700">{org.planName}</p>
+          <p className="text-[11px] text-gray-400">
+            {org.features?.length ?? 0} of {org.featureTotal ?? org.features?.length ?? 0} tools
+          </p>
+          <button className="btn-secondary px-2.5 py-1 text-xs mt-1.5" onClick={() => onPlan(org)}>
+            Change plan
+          </button>
+        </div>
       </div>
-      <div>
-        <label className="label">New password</label>
-        <input className="input" type="password" value={next} onChange={e => setNext(e.target.value)} placeholder="At least 8 characters" />
-      </div>
-      {msg && (
-        <p className="text-xs flex items-center gap-1" style={{ color: msg.ok ? '#059669' : '#b91c1c' }}>
-          {msg.ok && <CheckCircleIcon className="w-4 h-4" />}{msg.text}
-        </p>
+
+      {open && (
+        <div className="px-5 py-4 space-y-2" style={{ background: '#fafbfc' }}>
+          {admins.length === 0 && (
+            <p className="text-xs" style={{ color: '#b91c1c' }}>
+              Nobody administers this organization. Its people cannot be managed until someone does.
+            </p>
+          )}
+          {admins.map(a => (
+            <div key={a.user_id} className="flex items-center justify-between gap-3 py-1.5">
+              <div className="min-w-0">
+                <p className="text-sm text-gray-900 truncate">
+                  {a.name || '—'}
+                  {a.status !== 'Active' && (
+                    <span className="ml-2 text-[11px] font-semibold" style={{ color: '#b91c1c' }}>disabled</span>
+                  )}
+                  {a.is_platform_admin ? (
+                    <span className="ml-2 text-[11px] text-gray-400">Coaster</span>
+                  ) : null}
+                </p>
+                <p className="text-xs text-gray-400 truncate">{a.email}</p>
+              </div>
+              <div className="flex gap-1 flex-shrink-0">
+                <button className="btn-secondary px-2 py-1" title="Programs and projects they can see"
+                  onClick={() => setAccessFor(a)}>
+                  <RectangleGroupIcon className="w-4 h-4" />
+                </button>
+                <button className="btn-secondary px-2 py-1" title="Edit, change role, reset password"
+                  onClick={() => setEditing(a)}>
+                  <PencilIcon className="w-4 h-4" />
+                </button>
+                <button className="btn-danger" title="Remove from this organization"
+                  onClick={() => removeAdmin(a)}>
+                  <TrashIcon className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+
+          <div className="flex gap-2 pt-2">
+            <button className="btn-secondary px-2.5 py-1 text-xs" onClick={() => setEditing(null)}>
+              <PlusIcon className="w-4 h-4" /> Add administrator
+            </button>
+            <button className="btn-secondary px-2.5 py-1 text-xs" onClick={() => setInviting(true)}>
+              <EnvelopeIcon className="w-4 h-4" /> Invite one
+            </button>
+          </div>
+        </div>
       )}
-      <button className="btn-primary w-full justify-center" onClick={submit} disabled={saving || !current || !next}>
-        {saving ? 'Saving…' : 'Change password'}
-      </button>
+
+      {editing !== undefined && (
+        <PersonModal
+          person={editing}
+          orgId={org.id}
+          fixedRole={editing ? undefined : 'Admin'}
+          onClose={() => setEditing(undefined)}
+          onSaved={() => { setEditing(undefined); onChanged(); }}
+        />
+      )}
+      {accessFor && (
+        <AccessModal person={accessFor} orgId={org.id}
+          onClose={() => setAccessFor(null)} onSaved={onChanged} />
+      )}
+      {inviting && (
+        <InviteModal orgId={org.id} fixedRole="Admin"
+          onClose={() => setInviting(false)} onSent={onChanged} />
+      )}
     </div>
   );
 }
 
 export default function Team() {
   const me = authApi.user();
-  const isSuperadmin = me?.isPlatformAdmin;
-  const [people, setPeople] = useState(null);
+  return me?.isPlatformAdmin ? <OwnerTeam /> : <OrgTeam me={me} />;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The platform owner. Every customer on Coaster, who administers each, and what they are paying
+// for. Nothing here is scoped to a selected organization, because the question being asked spans
+// all of them.
+// ---------------------------------------------------------------------------------------------
+function OwnerTeam() {
   const [orgs, setOrgs] = useState(null);
-  const [invites, setInvites] = useState(null);
-  const [editing, setEditing] = useState(undefined); // undefined = closed, null = new
-  const [accessFor, setAccessFor] = useState(null);
-  const [inviting, setInviting] = useState(false);
   const [addingOrg, setAddingOrg] = useState(false);
   const [pricingOrg, setPricingOrg] = useState(null);
+  const [error, setError] = useState('');
+  const [confirm, confirmDialog] = useConfirm();
+
+  const load = () => adminApi.listOrganizations().then(setOrgs).catch(() => setOrgs([]));
+  useEffect(() => { load(); }, []);
+
+  const totalAdmins = (orgs || []).reduce((a, o) => a + (o.admins?.length || 0), 0);
+  const unmanned = (orgs || []).filter(o => !(o.admins?.length));
+
+  return (
+    <div className="p-8">
+      <PageHeader
+        icon={BuildingOffice2Icon}
+        accent="blue"
+        title="Organizations"
+        subtitle="Every customer on Coaster, who administers them, and what they can reach"
+        actions={(
+          <button className="btn-primary" onClick={() => setAddingOrg(true)}>
+            <PlusIcon className="w-4 h-4" /> Add organization
+          </button>
+        )}
+      />
+
+      {error && (
+        <div className="mb-4 p-3 rounded-xl text-sm" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c' }}>
+          {error}
+        </div>
+      )}
+
+      {/* An organization with no administrator is stuck: nobody inside it can add its people.
+          It is the one condition on this page worth interrupting for. */}
+      {unmanned.length > 0 && (
+        <div className="mb-4 p-3 rounded-xl text-sm" style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412' }}>
+          {unmanned.length === 1
+            ? `${unmanned[0].name} has no administrator, so nobody inside it can manage its people.`
+            : `${unmanned.length} organizations have no administrator, so nobody inside them can manage their people.`}
+        </div>
+      )}
+
+      <div className="grid grid-cols-5 gap-6 items-start">
+        <div className="col-span-3 space-y-3">
+          {orgs == null && <div className="card px-5 py-8 text-center text-sm text-gray-400">Loading…</div>}
+          {orgs?.length === 0 && (
+            <div className="card px-5 py-8 text-center text-sm text-gray-400">
+              No organizations yet — add the first one.
+            </div>
+          )}
+          {orgs?.map(o => (
+            <OrganizationCard
+              key={o.id}
+              org={o}
+              onChanged={load}
+              onPlan={setPricingOrg}
+              confirm={confirm}
+              setError={setError}
+            />
+          ))}
+        </div>
+
+        <div className="col-span-2 space-y-4">
+          <div className="card p-5">
+            <h3 className="text-sm font-semibold text-gray-900 mb-2">At a glance</h3>
+            <div className="space-y-1.5 text-xs text-gray-500">
+              <p>{orgs?.length ?? '·'} organization{orgs?.length === 1 ? '' : 's'} on Coaster</p>
+              <p>{totalAdmins} administrator{totalAdmins === 1 ? '' : 's'} between them</p>
+            </div>
+          </div>
+          <div className="card p-5">
+            <h3 className="text-sm font-semibold text-gray-900 mb-2">Who manages whom</h3>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              You add and remove the <span className="font-medium text-gray-700">administrators</span> of
+              each organization, and set what their plan includes.
+            </p>
+            <p className="text-xs text-gray-500 leading-relaxed mt-2">
+              Each administrator then manages the people inside their own organization — adding
+              members, promoting them, and setting which projects they see. They cannot see any
+              other customer.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {confirmDialog}
+      {addingOrg && (
+        <FirmModal onClose={() => setAddingOrg(false)} onSaved={() => { setAddingOrg(false); load(); }} />
+      )}
+      {pricingOrg && (
+        <PlanModal org={pricingOrg} onClose={() => setPricingOrg(null)} onSaved={load} />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// An organization's own administrator. Their people, and nothing else — no other customer exists
+// as far as this page is concerned, and the server enforces the same boundary on every write.
+// ---------------------------------------------------------------------------------------------
+function OrgTeam({ me }) {
+  const [people, setPeople] = useState(null);
+  const [invites, setInvites] = useState(null);
+  const [editing, setEditing] = useState(undefined);
+  const [accessFor, setAccessFor] = useState(null);
+  const [inviting, setInviting] = useState(false);
   const [error, setError] = useState('');
   const [confirm, confirmDialog] = useConfirm();
 
   const load = () => {
     adminApi.listMembers().then(setPeople).catch(() => setPeople([]));
     adminApi.listInvitations().then(setInvites).catch(() => setInvites([]));
-    if (isSuperadmin) adminApi.listOrganizations().then(setOrgs).catch(() => setOrgs([]));
   };
   useEffect(() => { load(); }, []);
 
-  const revokeInvite = async inv => {
+  const revokeInvite = async (inv) => {
     const ok = await confirm({
       title: 'Cancel invitation',
       message: `Cancel the invitation to ${inv.email}? Their link will stop working immediately.`,
@@ -582,10 +778,11 @@ export default function Team() {
     catch (e) { setError(e?.response?.data?.error || 'Could not cancel this invitation.'); }
   };
 
-  const remove = async person => {
+  const remove = async (person) => {
     const ok = await confirm({
       title: 'Remove person',
-      message: `Remove ${person.name || person.email} from this organization? They keep their account and any access to other organizations.`,
+      message: `Remove ${person.name || person.email} from this organization? They keep their `
+        + 'account and any access to other organizations.',
       confirmLabel: 'Remove',
     });
     if (!ok) return;
@@ -594,15 +791,45 @@ export default function Team() {
     catch (e) { setError(e?.response?.data?.error || 'Could not remove this person.'); }
   };
 
+  // Promoting and demoting is the everyday change, so it is a click in the row rather than a trip
+  // through the edit dialog. The server refuses to demote the last administrator, which is the
+  // only way this can go wrong.
+  const setRole = async (person, role) => {
+    setError('');
+    try { await adminApi.updateMember(person.user_id, { role }); load(); }
+    catch (e) { setError(e?.response?.data?.error || 'Could not change this role.'); }
+  };
+
+  const adminCount = (people || []).filter(p => p.role === 'Admin' && p.status === 'Active').length;
+
+  // The sidebar already hides this page from members, but a link or a bookmark reaches it anyway.
+  // Every request behind it would be refused by the server, so without this the page renders its
+  // full furniture — Add, Invite, an empty table — and nothing works. Say why instead.
+  if (!selectedOrg.get()?.is_admin && !me?.isPlatformAdmin) {
+    return (
+      <div className="p-8">
+        <PageHeader icon={UserGroupIcon} accent="blue" title="Team"
+          subtitle="People in this organization" actions={<OrgSwitcher />} />
+        <div className="card p-6 max-w-xl">
+          <p className="text-sm text-gray-600">
+            Only an administrator of {selectedOrg.get()?.name || 'this organization'} can manage its
+            people. Ask one of them to add someone, change a role, or grant access to a project.
+          </p>
+          <p className="text-xs text-gray-400 mt-2">
+            To change your own password, go to Settings.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-8">
       <PageHeader
         icon={UserGroupIcon}
         accent="blue"
         title="Team"
-        subtitle="People who can reach this organization, and what they can see"
-        // An admin of several organizations manages them from here rather than going back
-        // out to the picker between each one.
+        subtitle={`People in ${selectedOrg.get()?.name || 'this organization'}, and what they can see`}
         actions={<OrgSwitcher adminOnly />}
       />
 
@@ -617,7 +844,7 @@ export default function Team() {
           <div className="card overflow-hidden">
             <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid #f3f4f6', background: '#fafbfc' }}>
               <div className="flex items-center gap-2">
-                <h2 className="text-sm font-semibold text-gray-900">People with access</h2>
+                <h2 className="text-sm font-semibold text-gray-900">People</h2>
                 <span className="px-2 py-0.5 rounded-full text-xs font-semibold" style={{ background: '#f1f5f9', color: '#64748b' }}>
                   {people?.length ?? '·'}
                 </span>
@@ -631,7 +858,11 @@ export default function Team() {
                 </button>
               </div>
             </div>
-            <table className="w-full">
+            {/* The row carries a role badge, a promote/demote link and three buttons. Below about
+                1100px those stop fitting, and a table that silently clips its last column hides
+                the Remove button rather than looking broken — so it scrolls instead. */}
+            <div style={{ overflowX: 'auto' }}>
+            <table className="w-full" style={{ minWidth: 560 }}>
               <thead style={{ borderBottom: '1px solid #f3f4f6', background: '#fafbfc' }}>
                 <tr>
                   <th className="table-th">Name</th>
@@ -645,7 +876,7 @@ export default function Team() {
                   <tr><td colSpan={4} className="table-td text-center text-gray-400 py-8">Loading…</td></tr>
                 )}
                 {people?.length === 0 && (
-                  <tr><td colSpan={4} className="table-td text-center text-gray-400 py-8">Nobody yet — click "Add Person".</td></tr>
+                  <tr><td colSpan={4} className="table-td text-center text-gray-400 py-8">Nobody yet — add or invite someone.</td></tr>
                 )}
                 {people?.map(p => (
                   <tr key={p.id} className="table-tr">
@@ -657,7 +888,24 @@ export default function Team() {
                       )}
                     </td>
                     <td className="table-td text-gray-500 text-sm">{p.email}</td>
-                    <td className="table-td"><RoleBadge role={p.role} /></td>
+                    <td className="table-td">
+                      <div className="flex items-center gap-2">
+                        <RoleBadge role={p.role} />
+                        {/* Demoting the last administrator would lock the organization out of its
+                            own people, so the control is not offered when it would be refused. */}
+                        {p.role === 'Admin'
+                          ? (adminCount > 1 && (
+                            <button className="text-[11px] text-gray-400 underline" onClick={() => setRole(p, 'Member')}>
+                              make member
+                            </button>
+                          ))
+                          : (
+                            <button className="text-[11px] text-gray-400 underline" onClick={() => setRole(p, 'Admin')}>
+                              make admin
+                            </button>
+                          )}
+                      </div>
+                    </td>
                     <td className="table-td">
                       <div className="flex gap-1 justify-end">
                         <button className="btn-secondary px-2 py-1" title="Programs and projects they can see"
@@ -678,9 +926,9 @@ export default function Team() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
 
-          {/* Invitations that haven't been accepted yet. */}
           {invites?.length > 0 && (
             <div className="card overflow-hidden">
               <div className="px-5 py-4 flex items-center gap-2" style={{ borderBottom: '1px solid #f3f4f6', background: '#fafbfc' }}>
@@ -713,81 +961,29 @@ export default function Team() {
               </div>
             </div>
           )}
-
-          {/* Vendor-only: the list of customer firms. */}
-          {isSuperadmin && (
-            <div className="card overflow-hidden">
-              <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid #f3f4f6', background: '#fafbfc' }}>
-                <div className="flex items-center gap-2">
-                  <BuildingOffice2Icon className="w-4 h-4 text-gray-400" />
-                  <h2 className="text-sm font-semibold text-gray-900">Organizations using Coaster</h2>
-                </div>
-                <button className="btn-primary" onClick={() => setAddingOrg(true)}>
-                  <PlusIcon className="w-4 h-4" /> Add Organization
-                </button>
-              </div>
-              <table className="w-full">
-                <thead style={{ borderBottom: '1px solid #f3f4f6', background: '#fafbfc' }}>
-                  <tr>
-                    <th className="table-th">Organization</th>
-                    <th className="table-th">People</th>
-                    <th className="table-th">Programs</th>
-                    <th className="table-th">Projects</th>
-                    <th className="table-th">Plan</th>
-                    <th className="table-th"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {orgs?.map(f => (
-                    <tr key={f.id} className="table-tr">
-                      <td className="table-td font-medium text-gray-900">{f.name}</td>
-                      <td className="table-td text-gray-500 text-sm">{f.member_count}</td>
-                      <td className="table-td text-gray-500 text-sm">{f.program_count}</td>
-                      <td className="table-td text-gray-500 text-sm">{f.project_count}</td>
-                      <td className="table-td text-sm">
-                        <span className="font-medium text-gray-700">{f.planName}</span>
-                        <span className="block text-[11px] text-gray-400">
-                          {f.features?.length ?? 0} of 6 tools
-                        </span>
-                      </td>
-                      <td className="table-td">
-                        <div className="flex justify-end">
-                          <button className="btn-secondary px-2.5 py-1 text-xs" onClick={() => setPricingOrg(f)}>
-                            Change plan
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {orgs?.length === 0 && (
-                    <tr><td colSpan={6} className="table-td text-center text-gray-400 py-8">No organizations yet.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
         </div>
 
         <div className="col-span-2 space-y-4">
-          <ChangeMyPassword />
           <div className="card p-5">
             <h3 className="text-sm font-semibold text-gray-900 mb-2">How access works</h3>
             <p className="text-xs text-gray-500 leading-relaxed">
-              Everyone listed here belongs to <span className="font-medium text-gray-700">{selectedOrg.get()?.name || 'this organization'}</span> and
-              Administrators see everything in it; members see only the projects they're added to.
+              Everyone listed here belongs to <span className="font-medium text-gray-700">{selectedOrg.get()?.name || 'this organization'}</span>.
+              Administrators see every program and project in it and can manage its people; members
+              see only the projects they are added to.
             </p>
             <p className="text-xs text-gray-500 leading-relaxed mt-2">
-              Locked out? They can reset it themselves from "Forgot your password?" on the sign-in page, once
-              email sending is set up. Until then, edit them here and set a new password.
+              Locked out? They can reset it themselves from "Forgot your password?" on the sign-in
+              page. Until email sending is set up, edit them here and set a new password.
+            </p>
+            <p className="text-xs text-gray-500 leading-relaxed mt-2">
+              Changing your own password now lives in <span className="font-medium text-gray-700">Settings</span>.
             </p>
           </div>
         </div>
       </div>
 
       {confirmDialog}
-      {inviting && (
-        <InviteModal onClose={() => setInviting(false)} onSent={load} />
-      )}
+      {inviting && <InviteModal onClose={() => setInviting(false)} onSent={load} />}
       {editing !== undefined && (
         <PersonModal
           person={editing}
@@ -797,12 +993,6 @@ export default function Team() {
       )}
       {accessFor && (
         <AccessModal person={accessFor} onClose={() => setAccessFor(null)} onSaved={load} />
-      )}
-      {addingOrg && (
-        <FirmModal onClose={() => setAddingOrg(false)} onSaved={() => { setAddingOrg(false); load(); }} />
-      )}
-      {pricingOrg && (
-        <PlanModal org={pricingOrg} onClose={() => setPricingOrg(null)} onSaved={load} />
       )}
     </div>
   );

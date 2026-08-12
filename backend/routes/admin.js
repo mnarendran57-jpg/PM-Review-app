@@ -29,13 +29,34 @@ router.get('/organizations', requirePlatformAdmin, (req, res) => {
       (SELECT COUNT(*) FROM projects pr WHERE pr.org_id = o.id) AS project_count
     FROM organizations o ORDER BY o.name ASC
   `).all();
+  // Each organization's administrators travel with it. The owner's job on this page is to see
+  // who runs each customer and to change that; fetching them one organization at a time meant
+  // switching organization context to answer a question about all of them at once.
+  const adminsOf = db.prepare(`
+    SELECT u.id AS user_id, u.name, u.email, u.status, m.role, m.created_at,
+      (u.role = 'superadmin') AS is_platform_admin
+    FROM org_members m JOIN users u ON u.id = m.user_id
+    WHERE m.org_id = ? AND m.role = 'Admin'
+    ORDER BY u.name IS NULL, u.name ASC, u.email ASC
+  `);
+
   // The resolved feature list travels with each row so the owner sees what a customer can
-  // actually reach, not just the plan name — the two differ for a custom deal.
-  res.json(rows.map(o => ({
-    ...o,
-    planName: o.plan ? (plans.planByKey(o.plan)?.name || o.plan) : 'All features',
-    features: plans.featuresForOrg(o.id),
-  })));
+  // actually reach, not just the plan name — the two differ for a custom deal. `featureTotal`
+  // comes from the catalogue rather than being written into the page: the count was hard-coded
+  // as 6 and the catalogue has grown to 9, so every customer was shown "9 of 6 tools".
+  res.json(rows.map((o) => {
+    const admins = adminsOf.all(o.id);
+    return {
+      ...o,
+      planName: o.plan ? (plans.planByKey(o.plan)?.name || o.plan) : 'All features',
+      features: plans.featuresForOrg(o.id),
+      featureTotal: plans.FEATURE_KEYS.length,
+      admins,
+      // Members who are not administrators. A count rather than a list: the owner's page is
+      // about who runs each customer, and the roll of everyone inside it is the admin's business.
+      member_count_non_admin: Math.max(0, o.member_count - admins.length),
+    };
+  }));
 });
 
 // Creates the organization, its first program (every organization always has at least
