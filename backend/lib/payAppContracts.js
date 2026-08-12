@@ -20,7 +20,7 @@
 //      the nearest candidate, because the whole value here is that a subcontractor is measured
 //      against their own agreement and not against somebody else's.
 //
-// DELIVERY METHOD is the other half, and it exists to stop the review nagging. A CSR application
+// DELIVERY METHOD is the other half, and it exists to stop the review nagging. A CSP application
 // is the general contractor billing directly, with a release of lien behind it; a CMAR application
 // carries every subcontractor's own application too. Told nothing, a review treats the first as an
 // incomplete version of the second and reports missing subcontractor paperwork on a package that
@@ -35,7 +35,7 @@ const num = v => (isNum(v) ? v : 0);
 const sum = (list, f) => (list || []).reduce((a, x) => a + num(f(x)), 0);
 const pct = r => `${(r * 100).toFixed(r * 100 % 1 ? 2 : 0)}%`;
 
-const CSR = 'CSR';
+const CSP = 'CSP';
 const CMAR = 'CMAR';
 
 // A rate read off a form is a rounded rate. 5% withheld from $103,980 is $5,199.00 exactly, but
@@ -132,7 +132,7 @@ const named = c => c.party || c.label || c.fileName || 'an unnamed contract';
 
 const CONTRACT_CHECKS = [
   // ---- K1  Which parties are covered by a contract, and which are not ---------------------------
-  // The delivery method earns its keep here and nowhere else. On a CSR application there is one
+  // The delivery method earns its keep here and nowhere else. On a CSP application there is one
   // agreement and one biller, and asking after subcontracts would be asking after documents that
   // do not exist. On a CMAR application a subcontractor billing with no subcontract on file is a
   // genuine hole: nothing states what they are entitled to, so nothing below can check it.
@@ -145,22 +145,41 @@ const CONTRACT_CHECKS = [
       const subs = app.subApplications || [];
       const matched = rows.filter(r => r.biller);
       const hasPrime = matched.some(r => r.biller.kind === 'prime');
+      const out = [];
+
+      // A contract still being read is not a missing contract, and the difference matters: told
+      // the wrong one, the reader goes looking for a document that is already uploaded. Reading a
+      // long agreement takes minutes, so a review run straight after an upload lands here.
+      const pending = app.contractsPending || [];
+      if (pending.length) {
+        out.push({
+          status: 'FAIL',
+          severity: SEVERITY.NOTE,
+          detail: `${pending.length} contract(s) on this project are still being read `
+            + `(${pending.map(c => c.party || c.label || c.fileName).join(', ')}), so their terms `
+            + 'were not available to this review. Nothing is missing — review the application '
+            + 'again once they finish and the checks below will cover them.',
+        });
+      }
 
       if (!rows.length) {
-        return {
+        out.push({
           status: 'FAIL',
           severity: method === CMAR ? SEVERITY.MATERIAL : SEVERITY.NOTE,
-          detail: 'No contract is on file for this project, so nothing on this application was '
-            + 'checked against an agreement — only against itself. '
+          detail: (pending.length
+            ? 'No contract with readable terms is on file yet, so nothing on this application was '
+              + 'checked against an agreement — only against itself. '
+            : 'No contract is on file for this project, so nothing on this application was '
+              + 'checked against an agreement — only against itself. ')
             + (method === CMAR
               ? 'On a CMAR job that means neither the contractor\'s terms nor any subcontract were '
                 + 'available, and the tax, retainage and contract-sum checks all stood down.'
               : 'Upload the contractor\'s agreement and the retainage rate, contract sum and tax '
                 + 'rules stop having to be taken on trust.'),
-        };
+        });
+        return out;
       }
 
-      const out = [];
       if (!hasPrime) {
         out.push({
           status: 'FAIL',
@@ -209,7 +228,7 @@ const CONTRACT_CHECKS = [
       return {
         status: 'PASS',
         detail: `${matched.length} contract(s) on file, each tied to the party billing under it`
-          + `${method === CSR ? '. This is a CSR application, so the contractor bills directly and '
+          + `${method === CSP ? '. This is a CSP application, so the contractor bills directly and '
             + 'no subcontracts are expected' : ''}.`,
       };
     },
@@ -432,7 +451,7 @@ const CONTRACT_CHECKS = [
       const matched = rows.filter(r => r.biller);
       const parts = [
         method
-          ? `This was reviewed as a ${method} application${method === CSR
+          ? `This was reviewed as a ${method} application${method === CSP
             ? ', so the contractor bills directly and no subcontractor applications were expected '
               + 'or looked for'
             : ', so every subcontractor billing through the contractor was expected to have their '
@@ -506,4 +525,4 @@ function contractTable(rows) {
   }));
 }
 
-module.exports = { CONTRACT_CHECKS, runContractChecks, contractTable, survey, billerFor, CSR, CMAR };
+module.exports = { CONTRACT_CHECKS, runContractChecks, contractTable, survey, billerFor, CSP, CMAR };

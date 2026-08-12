@@ -477,6 +477,42 @@ if (!db.prepare(`PRAGMA table_info(pay_app_reviews)`).all().map(c => c.name).inc
   db.exec(`ALTER TABLE pay_app_reviews ADD COLUMN delivery_method TEXT`);
 }
 
+// How a project is procured, recorded on the PROJECT.
+//
+// It started life on the pay application upload form, which was the wrong place: a job does not
+// change delivery method between applications, so asking every month was asking a question whose
+// answer was already settled when the project was set up. It moves to the project, where it sits
+// beside the other things that are true of the job rather than of one document.
+//
+// Each review still records the method it ran under — that history stays accurate even if a
+// project's setting is later corrected — but the value now comes from the project.
+//
+// CSR was the wrong abbreviation. The delivery method is Competitive Sealed Proposal, CSP, and any
+// row already written under the old spelling is corrected here rather than left to mean nothing.
+{
+  const cols = db.prepare(`PRAGMA table_info(projects)`).all().map(c => c.name);
+  if (!cols.includes('delivery_method')) db.exec(`ALTER TABLE projects ADD COLUMN delivery_method TEXT`);
+  db.prepare(`UPDATE projects SET delivery_method='CSP' WHERE delivery_method='CSR'`).run();
+  db.prepare(`UPDATE pay_app_reviews SET delivery_method='CSP' WHERE delivery_method='CSR'`).run();
+}
+
+// Contract terms are read in the background, so a stored contract has a state as well as content.
+//
+// Reading a long agreement takes several AI passes and, on this account's rate limit, minutes —
+// far longer than any HTTP request should be held open. Uploading a 200-page contract therefore
+// failed with a timeout, which made the size of a document decide whether the feature worked. The
+// upload now stores the file and returns; the reading happens afterwards and this column says
+// where it has got to.
+{
+  const cols = db.prepare(`PRAGMA table_info(project_contracts)`).all().map(c => c.name);
+  if (!cols.includes('terms_status')) {
+    db.exec(`ALTER TABLE project_contracts ADD COLUMN terms_status TEXT`);
+    // Everything already on file was read synchronously at upload, so it is done.
+    db.prepare(`UPDATE project_contracts SET terms_status='ready' WHERE terms_status IS NULL`).run();
+  }
+  if (!cols.includes('terms_error')) db.exec(`ALTER TABLE project_contracts ADD COLUMN terms_error TEXT`);
+}
+
 // Who a stored contract is WITH.
 //
 // Contracts were stored one-per-project because only the prime agreement was ever read. On a CMAR

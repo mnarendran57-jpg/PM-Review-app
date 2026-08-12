@@ -57,6 +57,17 @@ router.get('/:id', (req, res) => {
   res.json({ ...decorate(project), myRoles: access.rolesOnProject(req.user, project.id) });
 });
 
+// How the job is procured. It decides what a complete pay application package looks like — a CSP
+// job is the contractor billing directly, a CMAR job carries a subcontractor application and a
+// subcontract behind each of them — so a review told the wrong one reports paperwork missing that
+// was never going to exist. Anything unrecognised is stored as null rather than guessed at, which
+// makes the review say it does not know instead of assuming.
+const DELIVERY_METHODS = ['CSP', 'CMAR'];
+const deliveryMethod = (v) => {
+  const up = String(v || '').trim().toUpperCase();
+  return DELIVERY_METHODS.includes(up) ? up : null;
+};
+
 // Creating a project is an organization-admin action: it decides what work exists, and
 // members are then added to it individually.
 router.post('/', requireOrgAdmin, (req, res) => {
@@ -82,8 +93,8 @@ router.post('/', requireOrgAdmin, (req, res) => {
 
   const result = db.prepare(`
     INSERT INTO projects (org_id, program_id, project_name, project_number, client_name, project_type, project_type_other,
-      contract_value, start_date, projected_end_date, status, project_manager, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      contract_value, start_date, projected_end_date, status, project_manager, notes, delivery_method)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     req.orgId,
     program.id,
@@ -97,7 +108,8 @@ router.post('/', requireOrgAdmin, (req, res) => {
     projected_end_date ?? null,
     status ?? 'Active',
     project_manager ?? null,
-    notes ?? null
+    notes ?? null,
+    deliveryMethod(req.body.delivery_method)
   );
   res.json({ id: result.lastInsertRowid, program_id: program.id });
 });
@@ -121,7 +133,8 @@ router.put('/:id', requireOrgAdmin, (req, res) => {
 
   db.prepare(`
     UPDATE projects SET program_id=?, project_name=?, project_number=?, client_name=?, project_type=?, project_type_other=?,
-      contract_value=?, start_date=?, projected_end_date=?, status=?, project_manager=?, notes=?
+      contract_value=?, start_date=?, projected_end_date=?, status=?, project_manager=?, notes=?,
+      delivery_method=?
     WHERE id=? AND org_id=?
   `).run(
     programId,
@@ -136,6 +149,7 @@ router.put('/:id', requireOrgAdmin, (req, res) => {
     status ?? 'Active',
     project_manager ?? null,
     notes ?? null,
+    deliveryMethod(req.body.delivery_method),
     req.params.id,
     req.orgId
   );

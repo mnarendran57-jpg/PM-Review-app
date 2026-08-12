@@ -574,7 +574,7 @@ const contractFor = (a, part) => {
 
 const CONTRACT_MUTATIONS = [
   // A subcontractor billing through the application with nothing on file saying what they agreed
-  // to. On CMAR that is a hole; the CSR fixture proves the same absence is silent there.
+  // to. On CMAR that is a hole; the CSP fixture proves the same absence is silent there.
   // contractFor() first, so this THROWS rather than silently doing nothing on a fixture with no
   // GreenScape contract to remove. A mutation that quietly changes nothing and then reports the
   // engine blind is worse than no mutation: it fails the run for the wrong reason.

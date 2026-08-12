@@ -1,8 +1,8 @@
 {
  "kind": "contracts",
- "name": "CSR \u2014 one contractor, one contract, no subcontractor paperwork to be missing",
- "$source": "The shape of a CSR application: the general contractor bills the owner directly and a release of lien is the backup. The point of the fixture is what is NOT reported \u2014 no subcontract is asked after, because on this delivery method there are none.",
- "deliveryMethod": "CSR",
+ "name": "CSP \u2014 one contractor, one contract, no subcontractor paperwork to be missing",
+ "$source": "The shape of a CSP application: the general contractor bills the owner directly and a release of lien is the backup. The point of the fixture is what is NOT reported \u2014 no subcontract is asked after, because on this delivery method there are none.",
+ "deliveryMethod": "CSP",
  "meta": {
   "applicationNumber": "20",
   "periodTo": "2026-05-31",

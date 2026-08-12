@@ -9,6 +9,7 @@ function AddProjectModal({ onClose, onCreated }) {
   const [name, setName] = useState('');
   const [client, setClient] = useState('');
   const [contract, setContract] = useState(null);
+  const [delivery, setDelivery] = useState('');
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
@@ -23,17 +24,21 @@ function AddProjectModal({ onClose, onCreated }) {
         project_name: name.trim(),
         program_id: program?.id || null,
         client_name: client.trim() || null,
+        delivery_method: delivery || null,
       });
       if (contract) {
-        setStatus('Reading the contract — this can take a moment…');
+        // Uploading is fast whatever the size; the reading happens afterwards, in the background.
+        // It used to be read here, which meant a long agreement held this dialog open until the
+        // request timed out — and the project appeared to fail when it had already been created.
+        setStatus('Uploading the contract…');
         const fd = new FormData();
         fd.append('contract_file', contract);
         try {
           await payAppReviewApi.uploadContract(id, fd);
         } catch {
-          // The project is already created; a contract that fails to parse shouldn't
-          // block it. The user can re-upload it from the project's Overview page.
-          setStatus('Project created — the contract couldn\'t be read and can be re-added inside the project.');
+          // The project exists either way. A contract that fails to upload can be added again
+          // from the project's Overview page.
+          setStatus('Project created — the contract could not be uploaded and can be added inside the project.');
         }
       }
       onCreated(id);
@@ -57,11 +62,41 @@ function AddProjectModal({ onClose, onCreated }) {
           <input className="input" value={client} onChange={e => setClient(e.target.value)}
             placeholder="e.g. Houston Community College" />
         </div>
+        {/* How the job is procured. Asked once, here, because it is a property of the job rather
+            than of any one pay application — and it decides what a complete pay application
+            package looks like, so a review told the wrong one reports paperwork missing that was
+            never going to exist. */}
+        <div>
+          <label className="label">Delivery Method (optional)</label>
+          <div className="flex gap-2">
+            {[['CSP', 'Contractor bills directly. Lien release as backup.'],
+              ['CMAR', 'Subcontractor applications, and a subcontract behind each.']].map(([key, blurb]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setDelivery(d => (d === key ? '' : key))}
+                  className="flex-1 text-left rounded-xl px-3 py-2 transition"
+                  style={{
+                    border: delivery === key ? '1.5px solid #0f172a' : '1px solid #e2e8f0',
+                    background: delivery === key ? '#f8fafc' : '#fff',
+                  }}
+                >
+                  <span className="block text-xs font-semibold text-gray-900">{key}</span>
+                  <span className="block text-[11px] text-gray-500 mt-0.5 leading-snug">{blurb}</span>
+                </button>
+              ))}
+          </div>
+          <p className="text-[11px] text-gray-400 mt-1.5">
+            Changeable later in the project's settings. Without it a pay app review cannot tell
+            missing subcontractor paperwork from a job that never has any.
+          </p>
+        </div>
         <div>
           <FileDrop file={contract} onChange={setContract} label="Executed Contract (optional — shared across all tools)" />
           <p className="text-[11px] text-gray-400 mt-1.5">
             Upload it once here and every tool in this project reads from it — no need to attach it again per review.
-            You can also add or replace it later from the project's Overview page.
+            Any size: it is read in the background after upload, so a long agreement never holds
+            this up. You can add or replace it later from the project's Overview page.
           </p>
         </div>
 

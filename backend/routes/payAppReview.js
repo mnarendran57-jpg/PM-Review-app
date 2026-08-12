@@ -7,7 +7,7 @@ const { buildReportDoc, annotationsFor } = require('../lib/payAppReportDoc');
 const { renderPayAppReportPdf } = require('../lib/payAppReportPdf');
 const { brandingFor } = require('../lib/orgBranding');
 const { annotatePayAppPdf } = require('../lib/payAppAnnotate');
-const { extractContractTerms } = require('../lib/contractExtract');
+const contractQueue = require('../lib/contractQueue');
 const { proposePlaceholders, applyPlaceholders, readDocx } = require('../lib/memoCover');
 const { runEngines, attachReadCheck } = require('../lib/payAppEngines');
 const { verifyRead } = require('../lib/payAppVerifyRead');
@@ -186,7 +186,7 @@ function listDocuments(projectId) {
   // been confirmed without a second request per row.
   return db.prepare(`
     SELECT id, project_id, file_name, label, doc_type, is_primary, terms, terms_edited,
-           party, party_role, created_at, updated_at
+           party, party_role, terms_status, terms_error, created_at, updated_at
     FROM project_contracts WHERE project_id = ?
     ORDER BY (doc_type = 'contract') DESC, is_primary DESC, doc_type ASC, created_at ASC
   `).all(projectId);
@@ -234,14 +234,12 @@ async function addDocument(req, res) {
         notes: proposal.notes,
         paragraphs: proposal.paragraphs,
       };
-    } else if (docType === 'contract') {
-      const terms = await extractContractTerms(file.buffer);
-      const { usage, ...rest } = terms;
-      storedTerms = rest;
-      if (usage) {
-        console.log(`[contract extract] project=${req.params.id} in=${usage.inputTokens} out=${usage.outputTokens} tokens`);
-      }
     }
+    // A contract is NOT read here. Reading a long agreement is several AI calls with rate-limit
+    // waits between them — minutes of work — and doing it inside the upload meant the browser held
+    // a connection open for all of it and gave up at three minutes. The length of a document
+    // decided whether the feature worked at all, which is not something a user can do anything
+    // about. The file is stored now and queued; lib/contractQueue.js takes it from there.
 
     // The first contract on a project becomes its primary, which is what Pay App Review and
     // Change Order Review read. Existing projects keep the contract they already had.
@@ -260,20 +258,28 @@ async function addDocument(req, res) {
     const partyRole = ['prime', 'subcontractor', 'supplier'].includes(req.body.party_role)
       ? req.body.party_role : (storedTerms.partyRole || null);
 
+    // Only a contract has terms to wait for. Anything else — a memo cover, a schedule — is
+    // complete the moment it is stored.
+    const status = docType === 'contract' ? contractQueue.STATUS.PENDING : 'ready';
+
     const result = db.prepare(`
       INSERT INTO project_contracts
         (project_id, file_name, label, doc_type, is_primary, file_blob, file_key, terms,
-         created_by, party, party_role)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         created_by, party, party_role, terms_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.params.id, file.originalname, label, docType, isPrimary,
       key ? Buffer.alloc(0) : file.buffer, key, JSON.stringify(storedTerms),
-      req.body.created_by || null, party, partyRole,
+      req.body.created_by || null, party, partyRole, status,
     );
+
+    // Handed over AFTER the row exists, so the queue always has something to read back.
+    if (docType === 'contract') contractQueue.enqueue(result.lastInsertRowid);
 
     res.json({
       id: result.lastInsertRowid, file_name: file.originalname,
-      label, doc_type: docType, is_primary: isPrimary, terms: storedTerms, party, party_role: partyRole,
+      label, doc_type: docType, is_primary: isPrimary, terms: storedTerms,
+      party, party_role: partyRole, terms_status: status,
     });
   } catch (err) {
     console.error('Shared document error:', err);
@@ -525,7 +531,8 @@ router.post('/', upload.fields([
     let contracts = [];
     if (projectId) {
       contracts = db.prepare(`
-        SELECT id, file_name, label, terms, is_primary, party, party_role FROM project_contracts
+        SELECT id, file_name, label, terms, is_primary, party, party_role, terms_status
+        FROM project_contracts
         WHERE project_id = ? AND doc_type = 'contract'
         ORDER BY is_primary DESC, created_at ASC
       `).all(projectId).map((row) => {
@@ -541,18 +548,29 @@ router.post('/', upload.fields([
           partyRole: row.party_role || terms.partyRole || null,
           partyScope: terms.partyScope || null,
           commitment: terms.commitment || null,
+          termsStatus: row.terms_status || 'ready',
           terms,
         };
       });
-      const primary = contracts.find(c => c.isPrimary) || contracts[0];
+      // A contract still being read has no terms yet. Including it would have the review measure
+      // a party against an empty agreement and report everything about them as unverified, which
+      // is worse than saying plainly that its reading is not finished.
+      const readable = contracts.filter(c => c.termsStatus === 'ready');
+      const primary = readable.find(c => c.isPrimary) || readable[0];
       if (primary) contractTerms = primary.terms;
     }
 
-    // How the job was procured. Asked on every upload, defaulting on the form to whatever the
-    // last review of this project said, so nothing about this month's package is inferred from
-    // an earlier one.
-    const deliveryMethod = ['CSR', 'CMAR'].includes((req.body.delivery_method || '').toUpperCase())
-      ? req.body.delivery_method.toUpperCase() : null;
+    // How this job is procured now comes from the PROJECT, set when it was created. The request
+    // body is still honoured so an older client keeps working, and whatever is used is recorded on
+    // the review itself — a project's setting can be corrected later without rewriting history.
+    const projectRow = projectId
+      ? db.prepare(`SELECT delivery_method FROM projects WHERE id=?`).get(projectId) : null;
+    const requested = String(req.body.delivery_method || '').trim().toUpperCase();
+    const deliveryMethod = ['CSP', 'CMAR'].includes(requested)
+      ? requested
+      : (['CSP', 'CMAR'].includes(projectRow?.delivery_method) ? projectRow.delivery_method : null);
+
+
     if (contractTerms) {
       if (originalContractSum == null && contractTerms.originalContractSum != null) {
         originalContractSum = contractTerms.originalContractSum;
@@ -641,7 +659,8 @@ router.post('/', upload.fields([
     try {
       engineResult = runEngines(
         { current, previous, contract, retainagePolicy, priorApplication }, contractTerms,
-        { deliveryMethod, contracts });
+        { deliveryMethod, contracts: contracts.filter(c => c.termsStatus === 'ready'),
+          contractsPending: contracts.filter(c => c.termsStatus !== 'ready') });
       attachReadCheck(engineResult, readCheck);
     } catch (err) {
       console.error('Pay app engines failed (review continues):', err.message);

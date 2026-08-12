@@ -208,8 +208,8 @@ function contractsSection(rows, method) {
           <tbody>${body}</tbody>
         </table>
       </div>
-      <p class="quiet">${method === 'CSR'
-    ? `Reviewed as a CSR application: the contractor bills the owner directly, so no subcontractor
+      <p class="quiet">${method === 'CSP'
+    ? `Reviewed as a CSP application: the contractor bills the owner directly, so no subcontractor
        applications were expected and none were looked for.`
     : method === 'CMAR'
       ? `Reviewed as a CMAR application: every subcontractor billing through the contractor is

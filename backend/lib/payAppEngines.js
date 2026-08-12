@@ -31,7 +31,7 @@ const { runCoverageChecks, coverageTable } = require('./payAppCoverage');
 const { runWaiverChecks, waiverTable } = require('./payAppWaivers');
 const { runVendorRollupChecks, vendorRollupTable } = require('./payAppVendorRollup');
 const { runTaxChecks, taxTable } = require('./payAppTax');
-const { runContractChecks, contractTable, CSR } = require('./payAppContracts');
+const { runContractChecks, contractTable, CSP } = require('./payAppContracts');
 
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 const num = v => (isNum(v) ? v : 0);
@@ -346,7 +346,7 @@ function contractInput(data, contractTerms, options = {}) {
   const { current } = data;
   const s = current.summary || {};
   const contracts = options.contracts || [];
-  if (!contracts.length && !options.deliveryMethod) return null;
+  if (!contracts.length && !options.deliveryMethod && !(options.contractsPending || []).length) return null;
 
   // Which schedule lines belong to which subcontractor, borrowed from the rollup so the
   // unallowable-cost check looks only at the lines a party is actually billing. Absent the rollup
@@ -368,6 +368,9 @@ function contractInput(data, contractTerms, options = {}) {
     subApplications: current.subApplications || [],
     linesByVendor,
     contracts,
+    // Uploaded but not yet read. Named separately so K1 can say "still being read" rather than
+    // "missing" — the same absence, two very different instructions to the reader.
+    contractsPending: options.contractsPending || [],
   };
 }
 
@@ -439,17 +442,17 @@ const ENGINES = [
 ];
 
 // `options` carries what the REVIEW knows rather than what the application says: which contracts
-// are on file for the project, and whether this was submitted as a CSR or CMAR package. Both come
+// are on file for the project, and whether this was submitted as a CSP or CMAR package. Both come
 // from the upload form and the project's document shelf, and neither can be read off the PDF.
-// On a CSR job the contractor bills the owner directly and there are no subcontractor
+// On a CSP job the contractor bills the owner directly and there are no subcontractor
 // applications to enclose. The generic sentences say a document is missing, which on that package
 // is simply false — and a report that lists three things as unsubmitted when none of them was ever
 // going to exist teaches its reader to skip the section where the real omission would appear.
 const SUBCONTRACT_PASSES = new Set(['subcontracts', 'vendorRollup']);
 
 function absentFor(engine, current, options) {
-  if (options.deliveryMethod === CSR && SUBCONTRACT_PASSES.has(engine.key)) {
-    return 'This was reviewed as a CSR application, where the contractor bills the owner directly. '
+  if (options.deliveryMethod === CSP && SUBCONTRACT_PASSES.has(engine.key)) {
+    return 'This was reviewed as a CSP application, where the contractor bills the owner directly. '
       + `Nothing was looked for under ${engine.label} — that absence is how the job is procured `
       + 'rather than a gap in the package.';
   }

@@ -42,4 +42,12 @@ app.use('/api/precon-review', require('./routes/preconReview'));
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`PM Review backend running on http://0.0.0.0:${PORT}`);
+  // Contracts are read in the background, so a deploy or restart can land mid-read. Anything
+  // unfinished is picked back up here — without this a contract uploaded seconds before a deploy
+  // would sit saying "reading" for ever, with nothing left to move it along.
+  try {
+    require('./lib/contractQueue').resumePending();
+  } catch (err) {
+    console.error('Could not resume unfinished contract reads:', err.message);
+  }
 });

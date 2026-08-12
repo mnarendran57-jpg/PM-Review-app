@@ -8,10 +8,17 @@ import StatusBadge from '../components/StatusBadge';
 const EMPTY = {
   project_name: '', project_number: '', client_name: '',
   project_type: 'MEP', project_type_other: '', contract_value: '', start_date: '',
-  projected_end_date: '', status: 'Active', project_manager: '', notes: ''
+  projected_end_date: '', status: 'Active', project_manager: '', notes: '',
+  delivery_method: ''
 };
 
 const PROJECT_TYPES = ['MEP', 'Electrical', 'Mechanical', 'Plumbing', 'General'];
+// Competitive Sealed Proposal and Construction Manager at Risk — the two ways these jobs are
+// procured, and the thing that decides what a complete pay application looks like.
+const DELIVERY_METHODS = [
+  { key: 'CSP', blurb: 'Contractor bills directly. Lien release as backup.' },
+  { key: 'CMAR', blurb: 'Subcontractor applications, and a subcontract behind each.' },
+];
 const STATUSES = ['Active', 'On Hold', 'Closed'];
 
 function fmt$(n) {
@@ -55,6 +62,39 @@ function ProjectForm({ initial, onSave, onCancel }) {
             />
           </div>
         )}
+
+        {/* How the job is procured. It lives here rather than on the pay app upload because a job
+            does not change delivery method between applications — asking every month asked a
+            question that was settled when the project was set up. It decides what a complete pay
+            application package looks like, so the review can tell a genuine omission from the
+            ordinary shape of a CSP job. */}
+        <div className="col-span-2">
+          <label className="label">Delivery Method</label>
+          <div className="flex gap-2">
+            {DELIVERY_METHODS.map(m => (
+              <button
+                key={m.key}
+                type="button"
+                onClick={() => setForm(f => ({ ...f, delivery_method: f.delivery_method === m.key ? '' : m.key }))}
+                className="flex-1 text-left rounded-xl px-3 py-2 transition"
+                style={{
+                  border: form.delivery_method === m.key ? '1.5px solid #0f172a' : '1px solid #e2e8f0',
+                  background: form.delivery_method === m.key ? '#f8fafc' : '#fff',
+                }}
+              >
+                <span className="block text-xs font-semibold text-gray-900">{m.key}</span>
+                <span className="block text-[11px] text-gray-500 mt-0.5 leading-snug">{m.blurb}</span>
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-gray-400 mt-1">
+            {form.delivery_method === 'CSP'
+              ? 'Pay app reviews will not look for subcontractor applications, so none are reported missing.'
+              : form.delivery_method === 'CMAR'
+                ? 'Pay app reviews expect a subcontractor application and a subcontract behind each subcontractor billing.'
+                : 'Optional, and changeable later. Without it a pay app review cannot tell missing subcontractor paperwork from a job that never has any.'}
+          </p>
+        </div>
         <div>
           <label className="label">Contract Value ($)</label>
           <input className="input" type="number" step="0.01" value={form.contract_value} onChange={set('contract_value')} />
@@ -281,7 +321,7 @@ export default function Projects() {
             <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{saveError}</div>
           )}
           <ProjectForm
-            initial={editTarget ? { ...editTarget, project_type_other: editTarget.project_type_other || '' } : { ...EMPTY }}
+            initial={editTarget ? { ...editTarget, project_type_other: editTarget.project_type_other || '', delivery_method: editTarget.delivery_method || '' } : { ...EMPTY }}
             onSave={handleSave}
             onCancel={() => { setSaveError(''); setModal(null); setEditTarget(null); }}
           />

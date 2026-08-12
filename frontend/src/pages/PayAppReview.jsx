@@ -84,49 +84,32 @@ function HistoryItem({ item, onView, onDelete }) {
   );
 }
 
-// How the job was procured, asked on every upload.
+// How the job is procured, as the project records it.
 //
-// It is the first question because it changes what a complete package looks like. A CSR
-// application is the general contractor billing the owner directly, with a release of lien behind
-// it; a CMAR application carries every subcontractor's own application and a subcontract behind
-// each of them. Told nothing, the review treats the first as an incomplete version of the second
-// and reports paperwork missing that was never going to exist.
-//
-// It defaults to whatever this project was last reviewed as, so the usual case is no clicks — but
-// the answer is recorded against THIS application, never inherited silently.
-function DeliveryMethodPicker({ value, onChange, defaultedFrom }) {
-  const option = (key, title, blurb) => {
-    const on = value === key;
+// This used to be a question on this form, asked every month. It belongs to the project — a job
+// does not change delivery method between applications — so it now lives in the project's own
+// settings and this only reports what it says. Shown rather than hidden, because it changes what
+// the review will and will not look for, and a reviewer should not have to remember which.
+function DeliveryMethodNote({ method }) {
+  if (!method) {
     return (
-      <button
-        key={key}
-        type="button"
-        onClick={() => onChange(key)}
-        className="flex-1 text-left rounded-xl px-3 py-2 transition"
-        style={{
-          border: on ? '1.5px solid #0f172a' : '1px solid #e2e8f0',
-          background: on ? '#f8fafc' : '#fff',
-        }}
-      >
-        <span className="block text-xs font-semibold text-gray-900">{title}</span>
-        <span className="block text-[11px] text-gray-500 mt-0.5 leading-snug">{blurb}</span>
-      </button>
-    );
-  };
-  return (
-    <div>
-      <label className="label">How is this job delivered? *</label>
-      <div className="flex gap-2">
-        {option('CSR', 'CSR', 'Contractor bills directly. Lien release as backup.')}
-        {option('CMAR', 'CMAR', 'Subcontractor applications, and a subcontract behind each.')}
+      <div className="rounded-xl px-3 py-2" style={{ background: '#fff7ed', border: '1px solid #fed7aa' }}>
+        <p className="text-xs font-medium" style={{ color: '#9a3412' }}>No delivery method set for this project</p>
+        <p className="text-[11px] mt-0.5" style={{ color: '#9a3412' }}>
+          The review cannot tell missing subcontractor paperwork from a job that never has any.
+          Set it on the project — Projects → edit → Delivery Method.
+        </p>
       </div>
-      <p className="text-[11px] text-gray-400 mt-1">
-        {value === 'CSR'
-          ? 'No subcontractor applications will be looked for, so none will be reported missing.'
-          : value === 'CMAR'
-            ? 'Every subcontractor billing through the contractor is expected to have a contract on file.'
-            : 'This decides whether missing subcontractor paperwork is an omission or just how the job is procured.'}
-        {defaultedFrom && value === defaultedFrom ? ' Carried over from the last application on this project.' : ''}
+    );
+  }
+  return (
+    <div className="rounded-xl px-3 py-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+      <p className="text-xs font-medium text-gray-900">{method} delivery</p>
+      <p className="text-[11px] text-gray-500 mt-0.5">
+        {method === 'CSP'
+          ? 'The contractor bills directly, so no subcontractor applications are expected or looked for.'
+          : 'Every subcontractor billing through the contractor is expected to have their own contract on file.'}
+        {' '}Change it on the project if that is wrong.
       </p>
     </div>
   );
@@ -139,6 +122,27 @@ function DeliveryMethodPicker({ value, onChange, defaultedFrom }) {
 // party's billing against their own contract, and the party name is what makes that possible, so
 // it is editable here: the model reads it off a signature block that also names the owner and
 // often a surety, and getting it wrong sends a subcontractor's figures to the wrong agreement.
+// Where a contract's reading has got to.
+//
+// Worth showing plainly rather than hiding behind a spinner: a contract whose terms are not read
+// yet governs nothing, so a review run in the meantime will say so, and the reviewer needs to be
+// able to tell that from a contract that failed and will never be read at all.
+function ContractStatus({ doc }) {
+  const s = doc.terms_status || 'ready';
+  if (s === 'ready') {
+    return <span className="text-[10px] flex-shrink-0" style={{ color: '#047857' }}>read ✓</span>;
+  }
+  if (s === 'failed') {
+    return (
+      <span className="text-[10px] flex-shrink-0" style={{ color: '#b91c1c' }}
+        title={doc.terms_error || 'The contract could not be read.'}>
+        could not read
+      </span>
+    );
+  }
+  return <span className="text-[10px] text-gray-400 flex-shrink-0">reading…</span>;
+}
+
 function ExtraContractsPanel({ projectId, onChange }) {
   const [docs, setDocs] = useState([]);
   const [file, setFile] = useState(null);
@@ -155,6 +159,16 @@ function ExtraContractsPanel({ projectId, onChange }) {
   };
   useEffect(load, [projectId]);
 
+  // A contract is read after it is uploaded, not during — a long agreement is minutes of work and
+  // holding the request open for it is what made a big file fail. So the list polls while anything
+  // is still being read, and stops as soon as nothing is.
+  const reading = docs.filter(d => d.terms_status === 'pending' || d.terms_status === 'reading');
+  useEffect(() => {
+    if (!reading.length) return undefined;
+    const timer = setInterval(load, 4000);
+    return () => clearInterval(timer);
+  }, [reading.length, projectId]);
+
   if (!projectId) return null;
 
   const add = async () => {
@@ -170,7 +184,7 @@ function ExtraContractsPanel({ projectId, onChange }) {
       setFile(null); setParty('');
       load(); onChange?.();
     } catch (err) {
-      setError(err.response?.data?.error || 'Could not read this contract.');
+      setError(err.response?.data?.error || 'Could not upload this contract.');
     } finally {
       setBusy(false);
     }
@@ -197,14 +211,17 @@ function ExtraContractsPanel({ projectId, onChange }) {
           {docs.length > 0 && (
             <div className="space-y-1.5">
               {docs.map(d => (
-                <div key={d.id} className="flex items-center gap-2">
-                  <input
-                    className="input text-xs flex-1"
-                    defaultValue={d.party || ''}
-                    placeholder="Which company is this contract with?"
-                    onBlur={e => { if (e.target.value !== (d.party || '')) setPartyOn(d, e.target.value); }}
-                  />
-                  <span className="text-[10px] text-gray-400 truncate" style={{ maxWidth: 120 }}>{d.file_name}</span>
+                <div key={d.id} className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <input
+                      className="input text-xs flex-1"
+                      defaultValue={d.party || ''}
+                      placeholder="Which company is this contract with?"
+                      onBlur={e => { if (e.target.value !== (d.party || '')) setPartyOn(d, e.target.value); }}
+                    />
+                    <ContractStatus doc={d} />
+                  </div>
+                  <p className="text-[10px] text-gray-400 truncate">{d.file_name}</p>
                 </div>
               ))}
               <p className="text-[11px] text-gray-400">
@@ -223,8 +240,12 @@ function ExtraContractsPanel({ projectId, onChange }) {
                 placeholder="Company this contract is with (read from the contract if left blank)"
               />
               <button type="button" className="btn-secondary w-full justify-center py-1.5 text-xs" onClick={add} disabled={busy}>
-                {busy ? 'Reading contract…' : 'Read contract terms'}
+                {busy ? 'Uploading…' : 'Add contract'}
               </button>
+              <p className="text-[11px] text-gray-400">
+                The file uploads straight away and is read afterwards, however long it is. You can
+                add the next one, or carry on, without waiting.
+              </p>
             </>
           )}
           {error && <p className="text-[11px]" style={{ color: '#b91c1c' }}>{error}</p>}
@@ -297,9 +318,46 @@ function ContractPanel({ projectId, contract, onChange }) {
         {error && <p className="text-[11px]" style={{ color: '#b91c1c' }}>{error}</p>}
         {file && (
           <button type="button" className="btn-secondary w-full justify-center py-1.5 text-xs" onClick={upload} disabled={busy}>
-            {busy ? 'Reading contract…' : 'Read contract terms'}
+            {busy ? 'Uploading…' : 'Add contract'}
           </button>
         )}
+      </div>
+    );
+  }
+
+  // Uploaded but not read yet. The terms are what every later review is checked against, so a
+  // half-read contract must not be shown as though its blank fields were findings — "no tax rules
+  // in this contract" and "we have not read it yet" are opposite statements.
+  const status = contract.terms_status || 'ready';
+  if (status === 'pending' || status === 'reading') {
+    return (
+      <div className="space-y-2">
+        <div className="rounded-xl px-3 py-3" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+          <p className="text-xs font-medium text-gray-900">Reading {contract.file_name}…</p>
+          <p className="text-[11px] text-gray-500 mt-0.5">
+            Long contracts take a few minutes and are read in the background — you can upload pay
+            applications meanwhile. Its terms will not be used until the reading finishes.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <div className="space-y-2">
+        <div className="rounded-xl px-3 py-3" style={{ background: '#fef2f2', border: '1px solid #fecaca' }}>
+          <p className="text-xs font-medium" style={{ color: '#b91c1c' }}>
+            {contract.file_name} could not be read
+          </p>
+          <p className="text-[11px] mt-0.5" style={{ color: '#b91c1c' }}>
+            {contract.terms_error || 'The contract could not be read.'} The file is still on file
+            and can be downloaded; its terms are not available to reviews. Remove it and upload
+            again to retry.
+          </p>
+          <button type="button" className="btn-secondary px-2.5 py-1 text-xs mt-2" onClick={remove} disabled={busy}>
+            Remove
+          </button>
+        </div>
       </div>
     );
   }
@@ -512,7 +570,8 @@ export default function PayAppReview() {
   };
 
   const [contract, setContract] = useState(null);
-  const [deliveryMethod, setDeliveryMethod] = useState('');
+  // Read from the project, never set here.
+  const deliveryMethod = budget?.project?.delivery_method || '';
 
   const loadContract = () => {
     if (!projectId) { setContract(null); return Promise.resolve(); }
@@ -538,9 +597,6 @@ export default function PayAppReview() {
       .then((d) => {
         if (cancelled) return;
         setBudget(d);
-        // Defaulting, not inheriting: the answer is still recorded against this application, and
-        // the picker says it came from last month so it can be corrected on sight.
-        if (d?.lastDeliveryMethod) setDeliveryMethod(d.lastDeliveryMethod);
       })
       .catch(() => { if (!cancelled) setBudget(null); });
     payAppReviewApi.getContract(projectId)
@@ -548,6 +604,15 @@ export default function PayAppReview() {
       .catch(() => { if (!cancelled) setContract(null); });
     return () => { cancelled = true; };
   }, [projectId]);
+
+  // The contract is read after upload, so its panel starts out saying "reading". Without this it
+  // would say that until the page was reloaded by hand, which would look like it had hung.
+  const contractReading = contract?.terms_status === 'pending' || contract?.terms_status === 'reading';
+  useEffect(() => {
+    if (!contractReading) return undefined;
+    const timer = setInterval(loadContract, 4000);
+    return () => clearInterval(timer);
+  }, [contractReading, projectId]);
 
   const runAnalysis = async (current, previous, currentFileForUpload, previousReviewId) => {
     const fd = new FormData();
@@ -733,11 +798,7 @@ export default function PayAppReview() {
             </div>
             )}
 
-            <DeliveryMethodPicker
-              value={deliveryMethod}
-              onChange={setDeliveryMethod}
-              defaultedFrom={budget?.lastDeliveryMethod}
-            />
+            <DeliveryMethodNote method={deliveryMethod} />
 
             <ContractPanel projectId={projectId} contract={contract} onChange={loadContract} />
 
