@@ -51,13 +51,35 @@ router.post('/', upload.fields([
     }
 
     const projectId = req.body.project_id ? Number(req.body.project_id) : null;
+    const contractId = req.body.contract_id ? Number(req.body.contract_id) : null;
+
+    // Which agreement this change order is measured against. A project carries several — the
+    // architect's, the general contractor's — and the markup ceiling and unallowable-item list
+    // differ between them, so the reviewer picks. Falls back to the project's primary contract,
+    // which is what a single-contract job wants.
+    //
+    // The old query took whichever row was newest and did not filter on doc_type, so a drawing
+    // set uploaded after the contract could be read as the contract.
     let contractTerms = null;
+    let contractRow = null;
     if (projectId) {
-      const contractRow = db.prepare(`
-        SELECT terms FROM project_contracts WHERE project_id = ?
-        ORDER BY created_at DESC LIMIT 1
-      `).get(projectId);
-      if (contractRow) contractTerms = JSON.parse(contractRow.terms);
+      contractRow = contractId
+        ? db.prepare(`
+            SELECT id, label, file_name, terms FROM project_contracts
+            WHERE id = ? AND project_id = ? AND doc_type = 'contract'
+          `).get(contractId, projectId)
+        : db.prepare(`
+            SELECT id, label, file_name, terms FROM project_contracts
+            WHERE project_id = ? AND doc_type = 'contract'
+            ORDER BY is_primary DESC, created_at ASC LIMIT 1
+          `).get(projectId);
+
+      // A contract id belonging to another project is a mistake worth surfacing, not something
+      // to silently swap for a different agreement.
+      if (contractId && !contractRow) {
+        return res.status(400).json({ error: 'That contract is not on this project.' });
+      }
+      if (contractRow) contractTerms = JSON.parse(contractRow.terms || '{}');
     }
 
     const { pco, reference, observations } = await analyzePco({
@@ -85,13 +107,18 @@ router.post('/', upload.fields([
 
     const insert = db.prepare(`
       INSERT INTO pco_reviews (
-        org_id, project_id, pco_number, title, contractor, total_amount, is_allowance,
+        org_id, project_id, contract_id, contract_label,
+        pco_number, title, contractor, total_amount, is_allowance,
         extracted_data, checks_result, ai_observations, report_markdown,
         pco_file_name, pco_file, pco_file_key, reference_file_name, reference_file, reference_file_key,
         critical_count, fail_count, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.orgId, projectId,
+      // Copied rather than joined, so a saved review still says whose terms it applied even
+      // after that contract is renamed or removed.
+      contractRow?.id ?? null,
+      contractRow ? (contractRow.label || contractRow.file_name) : null,
       pco.pcoNumber || null,
       pco.title || null,
       pco.contractor || null,

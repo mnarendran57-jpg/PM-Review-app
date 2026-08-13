@@ -1233,6 +1233,14 @@ if (!columnsOf('invoice_reviews').includes('contract_id')) {
 if (!columnsOf('invoice_reviews').includes('contract_label')) {
   db.exec(`ALTER TABLE invoice_reviews ADD COLUMN contract_label TEXT`);
 }
+// The same for change orders, which are now reviewed against a chosen contract rather than
+// whichever one happened to be uploaded most recently.
+if (!columnsOf('pco_reviews').includes('contract_id')) {
+  db.exec(`ALTER TABLE pco_reviews ADD COLUMN contract_id INTEGER`);
+}
+if (!columnsOf('pco_reviews').includes('contract_label')) {
+  db.exec(`ALTER TABLE pco_reviews ADD COLUMN contract_label TEXT`);
+}
 
 // First login: seed a platform administrator from the environment, and make them an Admin
 // of the first organization so there is a way in. Falls back to the old shared password

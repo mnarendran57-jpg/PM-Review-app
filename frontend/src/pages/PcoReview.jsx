@@ -137,7 +137,11 @@ export default function PcoReview() {
 
   const [projects, setProjects] = useState([]);
   const [projectId, setProjectId] = useState(routeProjectId ? String(routeProjectId) : '');
-  const [contract, setContract] = useState(null);
+  // Every contract on the project, and which one this change order is checked against. The
+  // markup ceiling and the unallowable-item list differ between an architect's agreement and a
+  // contractor's, so the reviewer chooses rather than the app guessing.
+  const [contracts, setContracts] = useState(null);
+  const [contractId, setContractId] = useState('');
 
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState('');
@@ -153,14 +157,26 @@ export default function PcoReview() {
     if (routeProjectId) setProjectId(String(routeProjectId));
   }, [routeProjectId]);
 
-  // The stored contract drives the tax / markup / unallowable checks, so surface
-  // whether one is on file before the user runs anything.
+  // The contracts in Shared Documents are what a change order is checked against for tax,
+  // markup limits and unallowable items. Keyed on the chosen project rather than the route,
+  // because this page can also be opened without one and the project picked on the form.
   useEffect(() => {
-    if (!projectId) { setContract(null); return; }
+    if (!projectId) { setContracts(null); setContractId(''); return undefined; }
     let cancelled = false;
-    payAppReviewApi.getContract(projectId)
-      .then(d => { if (!cancelled) setContract(d); })
-      .catch(() => { if (!cancelled) setContract(null); });
+    payAppReviewApi.listDocuments(projectId)
+      .then(docs => {
+        if (cancelled) return;
+        const onlyContracts = (docs || []).filter(d => d.doc_type === 'contract');
+        setContracts(onlyContracts);
+        // Pre-selected so a single-contract job needs no click, and so the choice is never
+        // left blank when there is an obvious answer.
+        setContractId(prev => {
+          if (prev && onlyContracts.some(c => String(c.id) === String(prev))) return prev;
+          const primary = onlyContracts.find(c => c.is_primary) || onlyContracts[0];
+          return primary ? String(primary.id) : '';
+        });
+      })
+      .catch(() => { if (!cancelled) setContracts([]); });
     return () => { cancelled = true; };
   }, [projectId]);
 
@@ -172,6 +188,7 @@ export default function PcoReview() {
       fd.append('pco_file', pcoFile);
       if (referenceFile) fd.append('reference_file', referenceFile);
       if (projectId) fd.append('project_id', projectId);
+      if (contractId) fd.append('contract_id', contractId);
       fd.append('is_allowance', String(isAllowance));
       const data = await pcoReviewApi.create(fd);
       setResult({ id: data.id, report: data.report });
@@ -224,26 +241,51 @@ export default function PcoReview() {
               )}
             </div>
 
-            <div>
-              {!routeProjectId && (
-                <>
-                  <label className="label">Project</label>
-                  <select className="input" value={projectId} onChange={e => setProjectId(e.target.value)}>
-                    <option value="">Which project is this PCO for?</option>
-                    {projects.map(p => (
-                      <option key={p.id} value={p.id}>{p.project_name}</option>
-                    ))}
-                  </select>
-                </>
-              )}
-              {projectId && (
-                <p className="text-xs mt-1" style={{ color: contract ? '#059669' : '#c2410c' }}>
-                  {contract
-                    ? `Contract on file (${contract.file_name}) — its tax and cost terms will be checked against this PCO.`
-                    : 'No contract on file for this project — tax and unallowable-item checks will be limited. Add one on the project Overview page.'}
-                </p>
-              )}
-            </div>
+            {!routeProjectId && (
+              <div>
+                <label className="label">Project</label>
+                <select className="input" value={projectId} onChange={e => setProjectId(e.target.value)}>
+                  <option value="">Which project is this PCO for?</option>
+                  {projects.map(p => (
+                    <option key={p.id} value={p.id}>{p.project_name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Which agreement this change order is measured against. Ahead of the files,
+                because picking the wrong one invalidates every contract-based finding. */}
+            {projectId && (
+              <div>
+                <label className="label mb-0">Review against which contract?</label>
+                {contracts === null ? (
+                  <p className="text-xs text-gray-400 mt-1.5">Loading contracts…</p>
+                ) : contracts.length === 0 ? (
+                  <p className="text-xs mt-1.5" style={{ color: '#c2410c' }}>
+                    No contract in this project's Shared Documents yet — add one there and it will
+                    appear here. You can still review the change order; the maths is checked either
+                    way, but tax, markup and unallowable-item findings need a contract.
+                  </p>
+                ) : (
+                  <>
+                    <select className="input mt-1.5" value={contractId}
+                      onChange={e => setContractId(e.target.value)}>
+                      {contracts.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.label || c.file_name}{c.is_primary ? ' — project default' : ''}
+                        </option>
+                      ))}
+                      <option value="">No contract — check the maths only</option>
+                    </select>
+                    <p className="text-[11px] text-gray-400 mt-1">
+                      {contractId
+                        ? "This contract's tax, markup and cost terms are what the change order is checked against."
+                        : 'Nothing to check tax, markup or unallowable items against — arithmetic findings only.'}
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
 
             <FileDrop file={pcoFile} onChange={setPcoFile} label="Potential Change Order (PDF) *" />
             <FileDrop file={referenceFile} onChange={setReferenceFile} label="RFI / ASI that generated it (PDF)" />
