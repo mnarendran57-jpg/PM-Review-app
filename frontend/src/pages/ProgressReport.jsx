@@ -383,9 +383,6 @@ export default function ProgressReport() {
                   <button className="btn-primary px-3 py-1.5" onClick={() => progressReportApi.downloadPdf(active.id)}>
                     <ArrowDownTrayIcon className="w-4 h-4" /> Download PDF
                   </button>
-                  <button className="btn-secondary px-3 py-1.5" onClick={() => progressReportApi.downloadMarkdown(active.id)}>
-                    <DocumentTextIcon className="w-4 h-4" /> .md
-                  </button>
                   <button className="btn-secondary px-3 py-1.5" onClick={() => { setResult(null); setViewing(null); }}>Close</button>
                 </div>
               </div>

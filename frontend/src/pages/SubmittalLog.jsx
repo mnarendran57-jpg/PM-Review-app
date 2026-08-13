@@ -600,11 +600,7 @@ function PredictedReviewPanel({ record, onRan }) {
             <span className="text-[11px] text-gray-400 pt-2">
               Confidence: {a.confidence}{a.confidenceReason ? ` — ${a.confidenceReason}` : ''}
             </span>
-            <a className="text-[11px] text-blue-600 hover:underline pt-2 ml-auto"
-              href={submittalsApi.analysisMarkdownUrl(record.id)} target="_blank" rel="noreferrer">
-              Download
-            </a>
-            <button className="text-[11px] text-gray-500 hover:text-gray-900 pt-2" onClick={() => setOpen(true)}>
+            <button className="text-[11px] text-gray-500 hover:text-gray-900 pt-2 ml-auto" onClick={() => setOpen(true)}>
               Run again
             </button>
           </div>
@@ -778,10 +774,6 @@ function ReviewComparisonPanel({ record, revision, onRan }) {
           )}
 
           <div className="flex items-center gap-3 pt-1" style={{ borderTop: '1px solid #eef1f4' }}>
-            <a className="text-[11px] text-blue-600 hover:underline pt-2"
-              href={submittalsApi.comparisonMarkdownUrl(record.id)} target="_blank" rel="noreferrer">
-              Download
-            </a>
             <button className="text-[11px] text-gray-500 hover:text-gray-900 pt-2 ml-auto"
               onClick={run} disabled={running}>
               {running ? 'Comparing…' : 'Run again'}

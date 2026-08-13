@@ -242,15 +242,11 @@ export default function PreconReview() {
                   <button className="btn-primary px-3 py-1.5" onClick={() => preconReviewApi.downloadPdf(result.id)}>
                     <ArrowDownTrayIcon className="w-4 h-4" /> PDF
                   </button>
-                  <button className="btn-secondary px-3 py-1.5" onClick={() => preconReviewApi.downloadMarkdown(result.id)}>
-                    <DocumentTextIcon className="w-4 h-4" /> .md
-                  </button>
                   <button className="btn-secondary px-3 py-1.5" onClick={reset}>New</button>
                 </div>
               </div>
               <PreconReviewView report={result.report} />
-              <ProposalComparisonView comparison={result.comparison} error={result.comparisonError}
-                downloadUrl={preconReviewApi.comparisonMarkdownUrl(result.id)} />
+              <ProposalComparisonView comparison={result.comparison} error={result.comparisonError} />
             </>
           )}
 
@@ -262,15 +258,11 @@ export default function PreconReview() {
                   <button className="btn-primary px-3 py-1.5" onClick={() => preconReviewApi.downloadPdf(viewing.id)}>
                     <ArrowDownTrayIcon className="w-4 h-4" /> PDF
                   </button>
-                  <button className="btn-secondary px-3 py-1.5" onClick={() => preconReviewApi.downloadMarkdown(viewing.id)}>
-                    <DocumentTextIcon className="w-4 h-4" /> .md
-                  </button>
                   <button className="btn-secondary px-3 py-1.5" onClick={() => setViewing(null)}>Close</button>
                 </div>
               </div>
               <PreconReviewView report={viewing.report} />
-              <ProposalComparisonView comparison={viewing.comparison}
-                downloadUrl={preconReviewApi.comparisonMarkdownUrl(viewing.id)} />
+              <ProposalComparisonView comparison={viewing.comparison} />
             </>
           )}
 

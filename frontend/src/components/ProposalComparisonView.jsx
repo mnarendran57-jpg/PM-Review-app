@@ -82,7 +82,7 @@ function Finding({ f, group }) {
   );
 }
 
-export default function ProposalComparisonView({ comparison, error, downloadUrl }) {
+export default function ProposalComparisonView({ comparison, error }) {
   if (error) {
     return (
       <div className="card p-5">
@@ -105,10 +105,6 @@ export default function ProposalComparisonView({ comparison, error, downloadUrl 
       <div className="flex items-center gap-2 flex-wrap">
         <ScaleIcon className="w-4 h-4 flex-shrink-0" style={{ color: '#6366f1' }} />
         <p className="text-[13px] font-bold text-gray-900">Proposal against the project documents</p>
-        {downloadUrl && (
-          <a className="text-[11px] text-blue-600 hover:underline ml-auto" href={downloadUrl}
-            target="_blank" rel="noreferrer">Download</a>
-        )}
       </div>
 
       {comparison.headline && (

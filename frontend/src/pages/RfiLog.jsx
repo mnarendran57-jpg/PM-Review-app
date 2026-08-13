@@ -624,10 +624,6 @@ function AnalysisPanel({ rfi, onRan }) {
             <button className="btn-secondary text-[12px] py-1" onClick={() => setEditing(true)}>
               Change what it reads
             </button>
-            <button className="btn-secondary text-[12px] py-1"
-              onClick={() => rfisApi.downloadAnalysis(rfi.id, `${rfi.rfi_number}_suggested_answer.md`)}>
-              <ArrowDownTrayIcon className="w-3.5 h-3.5" /> Export
-            </button>
           </div>
         </div>
       )}
@@ -773,10 +769,6 @@ function ResponseReviewPanel({ rfi, revision, onRan }) {
           <div className="flex gap-2 pt-1">
             <button className="btn-secondary text-[12px] py-1" onClick={run} disabled={running}>
               {running ? 'Comparing…' : 'Run it again'}
-            </button>
-            <button className="btn-secondary text-[12px] py-1"
-              onClick={() => rfisApi.downloadResponseReview(rfi.id, `${rfi.rfi_number}_response_review.md`)}>
-              <ArrowDownTrayIcon className="w-3.5 h-3.5" /> Export
             </button>
           </div>
         </div>
