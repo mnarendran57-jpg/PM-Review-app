@@ -8,6 +8,10 @@ import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import MultiFileDrop from '../components/MultiFileDrop';
 
+// A purchase order governs a job that never had a contract, so it belongs in this list too.
+// Mirrors GOVERNING_TYPES in backend/lib/docTypes.js.
+const GOVERNING_DOCS = ['contract', 'purchase-order'];
+
 function money(n) {
   return typeof n === 'number' ? `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'n/a';
 }
@@ -151,7 +155,7 @@ export default function InvoiceReview() {
     if (!routeProjectId) { setContracts(null); return Promise.resolve(); }
     return payAppReviewApi.listDocuments(routeProjectId)
       .then(docs => {
-        const onlyContracts = (docs || []).filter(d => d.doc_type === 'contract');
+        const onlyContracts = (docs || []).filter(d => GOVERNING_DOCS.includes(d.doc_type));
         setContracts(onlyContracts);
         // Pre-select so a one-contract project needs no click, and so the choice is never
         // left blank when there is an obvious answer.
@@ -291,9 +295,6 @@ export default function InvoiceReview() {
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">{result ? 'Review Result' : 'Stored Review'}</h2>
                 <div className="flex items-center gap-2">
-                  <button className="btn-secondary px-3 py-1.5" onClick={() => invoiceReviewApi.downloadMarkdown(active.id)}>
-                    <DocumentTextIcon className="w-4 h-4" /> .md
-                  </button>
                   <button className="btn-secondary px-3 py-1.5" onClick={() => { setResult(null); setViewing(null); }}>Close</button>
                 </div>
               </div>

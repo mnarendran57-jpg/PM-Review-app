@@ -6,6 +6,7 @@ const { analyzePco } = require('../lib/pcoExtract');
 const { runPcoChecks } = require('../lib/pcoChecks');
 const { buildPcoReport } = require('../lib/pcoReport');
 const { friendlyAiError } = require('../lib/aiErrors');
+const { GOVERNING_SQL } = require('../lib/docTypes');
 const storage = require('../lib/storage');
 
 
@@ -66,11 +67,11 @@ router.post('/', upload.fields([
       contractRow = contractId
         ? db.prepare(`
             SELECT id, label, file_name, terms FROM project_contracts
-            WHERE id = ? AND project_id = ? AND doc_type = 'contract'
+            WHERE id = ? AND project_id = ? AND doc_type IN (${GOVERNING_SQL})
           `).get(contractId, projectId)
         : db.prepare(`
             SELECT id, label, file_name, terms FROM project_contracts
-            WHERE project_id = ? AND doc_type = 'contract'
+            WHERE project_id = ? AND doc_type IN (${GOVERNING_SQL})
             ORDER BY is_primary DESC, created_at ASC LIMIT 1
           `).get(projectId);
 

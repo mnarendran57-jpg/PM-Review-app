@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const db = require('../database');
-const { analyzePayApps } = require('../lib/payAppExtract');
+const { analyzePayApps, analyzeBackup } = require('../lib/payAppExtract');
 const { buildReportDoc, annotationsFor } = require('../lib/payAppReportDoc');
 const { renderPayAppReportPdf } = require('../lib/payAppReportPdf');
 const { brandingFor } = require('../lib/orgBranding');
@@ -15,6 +15,7 @@ const { buildReportHtml } = require('../lib/payAppReportHtml');
 const { backfillPayApp } = require('../lib/payAppNormalize');
 const { parseCoLogCsv } = require('../lib/csv');
 const { friendlyAiError } = require('../lib/aiErrors');
+const { DOC_TYPE_KEYS, GOVERNING_SQL, isGoverning } = require('../lib/docTypes');
 const storage = require('../lib/storage');
 
 const access = require('../lib/access');
@@ -45,7 +46,11 @@ const upload = multer({
 
 // Extract structured data from one or two uploaded pay app PDFs — both files (if present)
 // are sent to Claude in a single request to minimize API calls against tight rate limits.
-router.post('/extract', upload.fields([{ name: 'current_file', maxCount: 1 }, { name: 'previous_file', maxCount: 1 }]), async (req, res) => {
+router.post('/extract', upload.fields([
+  { name: 'current_file', maxCount: 1 },
+  { name: 'previous_file', maxCount: 1 },
+  { name: 'backup_files', maxCount: 10 },
+]), async (req, res) => {
   try {
     const currentFile = req.files?.current_file?.[0];
     if (!currentFile) return res.status(400).json({ error: 'Current pay application PDF is required' });
@@ -57,7 +62,32 @@ router.post('/extract', upload.fields([{ name: 'current_file', maxCount: 1 }, { 
     }
 
     const { current, previous } = await analyzePayApps(currentFile.buffer, previousFile?.buffer);
-    res.json({ current: backfillPayApp(current), previous: backfillPayApp(previous) });
+
+    // Backup that arrived separately from the package. It is read HERE, with the pay app,
+    // rather than at review time, so the review itself stays free of AI calls and so the
+    // evidence lands inside the extraction the PM can see and correct on screen.
+    //
+    // These files used to be accepted by the review route and never referenced again — the
+    // form invited them, multer parsed them, and they were dropped. A reconciliation pass that
+    // stood down for want of invoices the contractor had actually supplied is the worst kind of
+    // silence: it reads as "nothing was submitted".
+    const backupFiles = (req.files?.backup_files || []).filter(f => f.mimetype === 'application/pdf');
+    let backupRead = null;
+    if (backupFiles.length && current) {
+      const extra = await analyzeBackup(backupFiles.map(f => f.buffer));
+      const join = key => [...(current[key] || []), ...(extra[key] || [])];
+      current.subBreakdowns = join('subBreakdowns');
+      current.waivers = join('waivers');
+      current.backupDocuments = join('backupDocuments');
+      backupRead = {
+        files: backupFiles.length,
+        documents: extra.backupDocuments.length,
+        waivers: extra.waivers.length,
+        breakdowns: extra.subBreakdowns.length,
+      };
+    }
+
+    res.json({ current: backfillPayApp(current), previous: backfillPayApp(previous), backupRead });
   } catch (err) {
     console.error('Pay app extract error:', err);
     res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });
@@ -167,10 +197,7 @@ router.get('/project/:id/history', (req, res) => {
 //
 // 'reference' predates the richer list and is kept so existing rows stay valid; the app
 // presents it as "Other".
-const DOC_TYPES = [
-  'contract', 'drawings', 'design', 'specifications', 'scope',
-  'proposal', 'estimate', 'schedule', 'permit', 'memo-cover', 'other', 'reference',
-];
+const DOC_TYPES = DOC_TYPE_KEYS;
 
 // The only category that is not a PDF. A memo cover is the organization's own Word letter,
 // filled in and handed back as a Word file, so it has to stay a .docx all the way through —
@@ -186,15 +213,22 @@ function listDocuments(projectId) {
   // been confirmed without a second request per row.
   return db.prepare(`
     SELECT id, project_id, file_name, label, doc_type, is_primary, terms, terms_edited,
-           party, party_role, terms_status, terms_error, created_at, updated_at
+           extract_json, party, party_role, terms_status, terms_error, created_at, updated_at
     FROM project_contracts WHERE project_id = ?
-    ORDER BY (doc_type = 'contract') DESC, is_primary DESC, doc_type ASC, created_at ASC
+    ORDER BY (doc_type IN (${GOVERNING_SQL})) DESC, is_primary DESC, doc_type ASC, created_at ASC
   `).all(projectId);
 }
 
 router.get('/project/:id/documents', (req, res) => {
   if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
-  res.json(listDocuments(req.params.id).map(d => ({ ...d, terms: JSON.parse(d.terms || '{}') })));
+  // The stored reading travels with the list — a size worth paying because the page shows what
+  // each document yielded, and a second request per row to find out would be worse.
+  res.json(listDocuments(req.params.id).map(d => ({
+    ...d,
+    terms: JSON.parse(d.terms || '{}'),
+    extract: d.extract_json ? JSON.parse(d.extract_json) : null,
+    extract_json: undefined,
+  })));
 });
 
 async function addDocument(req, res) {
@@ -218,8 +252,9 @@ async function addDocument(req, res) {
     const docType = DOC_TYPES.includes(req.body.doc_type) ? req.body.doc_type : 'other';
     const label = docLabel(req.body.label, file.originalname);
 
-    // Only an agreement is worth reading: extracting "terms" from a schedule or an estimate
-    // would spend tokens to produce nonsense.
+    // Every document is read, not only an agreement — see lib/documentExtract.js. The memo
+    // cover is the one read here rather than on the queue, because its placeholder mapping is
+    // the thing the very next screen asks the user to confirm.
     let storedTerms = {};
     if (docType === 'memo-cover') {
       // Stored on the document row alongside the file. The column is named `terms` because a
@@ -244,9 +279,9 @@ async function addDocument(req, res) {
     // The first contract on a project becomes its primary, which is what Pay App Review and
     // Change Order Review read. Existing projects keep the contract they already had.
     const hasPrimary = db.prepare(
-      `SELECT 1 FROM project_contracts WHERE project_id=? AND doc_type='contract' AND is_primary=1`
+      `SELECT 1 FROM project_contracts WHERE project_id=? AND doc_type IN (${GOVERNING_SQL}) AND is_primary=1`
     ).get(req.params.id);
-    const isPrimary = docType === 'contract' && !hasPrimary ? 1 : 0;
+    const isPrimary = isGoverning(docType) && !hasPrimary ? 1 : 0;
 
     const key = (await storage.storeFile('contract', file.buffer, file.mimetype, file.originalname)).key;
     // Who the contract is with, in its own column rather than only inside `terms`. The review
@@ -258,9 +293,10 @@ async function addDocument(req, res) {
     const partyRole = ['prime', 'subcontractor', 'supplier'].includes(req.body.party_role)
       ? req.body.party_role : (storedTerms.partyRole || null);
 
-    // Only a contract has terms to wait for. Anything else — a memo cover, a schedule — is
-    // complete the moment it is stored.
-    const status = docType === 'contract' ? contractQueue.STATUS.PENDING : 'ready';
+    // Everything but the memo cover has a reading to wait for now: a contract and a purchase
+    // order for their terms, every other document for its index and key facts. The memo cover was
+    // read above and is complete the moment it is stored.
+    const status = docType === 'memo-cover' ? 'ready' : contractQueue.STATUS.PENDING;
 
     const result = db.prepare(`
       INSERT INTO project_contracts
@@ -274,7 +310,7 @@ async function addDocument(req, res) {
     );
 
     // Handed over AFTER the row exists, so the queue always has something to read back.
-    if (docType === 'contract') contractQueue.enqueue(result.lastInsertRowid);
+    if (docType !== 'memo-cover') contractQueue.enqueue(result.lastInsertRowid);
 
     res.json({
       id: result.lastInsertRowid, file_name: file.originalname,
@@ -324,7 +360,7 @@ router.patch('/project/:id/documents/:docId', (req, res) => {
     db.prepare(`UPDATE project_contracts SET terms=?, terms_edited=1, updated_at=datetime('now') WHERE id=?`)
       .run(JSON.stringify(req.body.terms), row.id);
   }
-  if (req.body.is_primary && row.doc_type === 'contract') {
+  if (req.body.is_primary && isGoverning(row.doc_type)) {
     db.prepare(`UPDATE project_contracts SET is_primary=0 WHERE project_id=?`).run(req.params.id);
     db.prepare(`UPDATE project_contracts SET is_primary=1 WHERE id=?`).run(row.id);
   }
@@ -343,7 +379,7 @@ router.delete('/project/:id/documents/:docId', async (req, res) => {
   // Never leave a project with contracts but no primary — the other tabs read it.
   if (row.is_primary) {
     const next = db.prepare(
-      `SELECT id FROM project_contracts WHERE project_id=? AND doc_type='contract' ORDER BY created_at ASC LIMIT 1`
+      `SELECT id FROM project_contracts WHERE project_id=? AND doc_type IN (${GOVERNING_SQL}) ORDER BY created_at ASC LIMIT 1`
     ).get(req.params.id);
     if (next) db.prepare(`UPDATE project_contracts SET is_primary=1 WHERE id=?`).run(next.id);
   }
@@ -391,7 +427,7 @@ router.get('/project/:id/documents/:docId/template.docx', async (req, res) => {
 // than following whatever happened to be uploaded last.
 
 const primaryContract = projectId => db.prepare(`
-  SELECT * FROM project_contracts WHERE project_id = ? AND doc_type = 'contract'
+  SELECT * FROM project_contracts WHERE project_id = ? AND doc_type IN (${GOVERNING_SQL})
   ORDER BY is_primary DESC, created_at ASC LIMIT 1
 `).get(projectId);
 
@@ -416,7 +452,7 @@ router.delete('/project/:id/contract', async (req, res) => {
   db.prepare(`DELETE FROM project_contracts WHERE id=?`).run(row.id);
   if (row.file_key) await storage.remove([row.file_key]);
   const next = db.prepare(
-    `SELECT id FROM project_contracts WHERE project_id=? AND doc_type='contract' ORDER BY created_at ASC LIMIT 1`
+    `SELECT id FROM project_contracts WHERE project_id=? AND doc_type IN (${GOVERNING_SQL}) ORDER BY created_at ASC LIMIT 1`
   ).get(req.params.id);
   if (next) db.prepare(`UPDATE project_contracts SET is_primary=1 WHERE id=?`).run(next.id);
   res.json({ success: true });
@@ -470,14 +506,15 @@ router.get('/latest-for-project', (req, res) => {
   res.json({ id: row.id, applicationNumber: row.application_number, periodTo: row.period_to, current: extracted.current });
 });
 
+// Separately-sent backup is read at /extract, not here, so this route stays free of AI calls
+// and a recompute after editing the extracted figures costs nothing. The evidence travels in
+// req.body.current, where the PM can see it before it is used.
 router.post('/', upload.fields([
   { name: 'current_file', maxCount: 1 },
-  { name: 'backup_files', maxCount: 10 },
 ]), async (req, res) => {
   try {
     const currentFile = req.files?.current_file?.[0];
     if (!currentFile) return res.status(400).json({ error: 'Current pay application PDF is required' });
-    const backupFiles = (req.files?.backup_files || []).filter(f => f.mimetype === 'application/pdf');
 
     const normalizePayApp = pa => pa && backfillPayApp({
       ...pa,
@@ -527,15 +564,23 @@ router.post('/', upload.fields([
     // different retainage rates and different exclusions. The contracts engine matches each to the
     // party billing under it; the PRIMARY one still supplies the project-level defaults below,
     // because tax status and the owner's contract sum are properties of the head agreement.
+    //
+    // The reviewer can narrow that set. On a CMAR job with a subcontract that does not apply this
+    // period, unticking it has to actually stop it being applied — a control that changed nothing
+    // would be worse than no control, because the report would then contradict the form. Omitted
+    // entirely (an older client, or a CSP job) still means every contract on file.
+    const chosenIds = String(req.body.contract_ids || '')
+      .split(',').map(s => Number(s.trim())).filter(Number.isInteger);
+
     let contractTerms = null;
     let contracts = [];
     if (projectId) {
       contracts = db.prepare(`
         SELECT id, file_name, label, terms, is_primary, party, party_role, terms_status
         FROM project_contracts
-        WHERE project_id = ? AND doc_type = 'contract'
+        WHERE project_id = ? AND doc_type IN (${GOVERNING_SQL})
         ORDER BY is_primary DESC, created_at ASC
-      `).all(projectId).map((row) => {
+      `).all(projectId).filter(row => !chosenIds.length || chosenIds.includes(row.id)).map((row) => {
         const terms = JSON.parse(row.terms || '{}');
         return {
           id: row.id,

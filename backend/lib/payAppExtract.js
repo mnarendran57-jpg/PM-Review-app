@@ -1,4 +1,4 @@
-const { splitPdf, analyzeInPasses, partNotice } = require('./pdfChunk');
+const { splitPdf, analyzeInPasses, partNotice, mergeExtracted } = require('./pdfChunk');
 const { askForJson } = require('./aiJson');
 
 // One pay-application's worth of fields (used for both "current" and "previous" below).
@@ -428,6 +428,74 @@ function payAppTool(hasPrevious) {
   };
 }
 
+// Backup that arrived separately from the pay application — a subcontractor emails their
+// invoice packet on its own, or the GC sends the lien waivers in a second file. It is the same
+// evidence as the backup bound into the package, so it is read with the same three schemas
+// rather than a parallel set that could drift out of step with them.
+function backupTool() {
+  const full = payAppShape(true).properties;
+  return {
+    name: 'record_backup_package',
+    description: 'Transcribe backup a contractor sent alongside a pay application.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        subBreakdowns: full.subBreakdowns,
+        waivers: full.waivers,
+        backupDocuments: full.backupDocuments,
+      },
+      required: ['backupDocuments'],
+    },
+  };
+}
+
+const BACKUP_PROMPT = `These pages are BACKUP for a contractor pay application — invoices,
+receipts, statements, subcontractor cost breakdowns, lien waivers. They were sent separately
+from the pay application itself, so do not expect a G702 or a continuation sheet here and do
+not report either as missing.
+
+Transcribe what these pages show with the record_backup_package tool.
+
+- Every invoice, receipt and statement gets its own entry in "backupDocuments", with the number
+  and total exactly as printed. These are what the review reconciles against the amounts billed,
+  so a missed document reads as an unsupported charge.
+- Set "supportsItemNo" only where the page actually says which schedule line it belongs to.
+  A document tied to the wrong line produces a confident finding about a line that is fine.
+- Record subcontractor cost-breakdown sheets in "subBreakdowns" and any lien waiver, release or
+  affidavit in "waivers", reading each one from what it does rather than from its title.
+- Transcribe handwriting into "note" — an annotation saying a cost is not being billed this
+  month changes what the figure means.`;
+
+// Reads every separately-sent backup file and returns one merged set of evidence. Each file is
+// read in passes, so a fifty-page invoice packet is no different from a two-page one.
+async function analyzeBackup(buffers = []) {
+  const readOne = async (buffer, context) => {
+    const { data } = await askForJson({
+      content: [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
+        { type: 'text', text: BACKUP_PROMPT + partNotice(context) },
+      ],
+      tool: backupTool(),
+      maxTokens: 8000,
+      label: 'pay app backup extract',
+      truncatedMessage: 'One page of this backup carries more documents than can be read in a '
+        + 'single pass.',
+    });
+    return data;
+  };
+
+  const results = [];
+  for (const buffer of buffers) results.push(await analyzeInPasses(buffer, readOne));
+
+  const merged = mergeExtracted(results) || {};
+  const tag = list => (Array.isArray(list) ? list : []).map(x => ({ ...x, sentSeparately: true }));
+  return {
+    subBreakdowns: tag(merged.subBreakdowns),
+    waivers: tag(merged.waivers),
+    backupDocuments: tag(merged.backupDocuments),
+  };
+}
+
 function buildPrompt(hasPrevious) {
   return `You are reading contractor Application(s) and Certificate(s) for Payment (AIA G702-style summary sheet plus G703-style continuation sheet, or an equivalent format) for a construction project.
 
@@ -532,4 +600,4 @@ async function analyzePayApps(currentBuffer, previousBuffer) {
   return inPasses();
 }
 
-module.exports = { analyzePayApps };
+module.exports = { analyzePayApps, analyzeBackup };

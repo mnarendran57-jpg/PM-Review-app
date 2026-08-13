@@ -9,14 +9,19 @@ import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import FileDrop from '../components/FileDrop';
 
-// What kind of document this is. Only 'contract' behaves differently — its terms are read on
-// upload and it can be the one Pay App and Change Order Review check against. Everything else
-// is stored for the team and offered to the tools that read documents on request.
+// What kind of document this is. Every one of them is read on upload: a contract or purchase
+// order for its terms, everything else for its index and the statements reviews measure against.
+// The governing types are additionally the ones Pay App, Invoice and Change Order Review check
+// billing against, and only they can be marked primary.
 //
 // 'reference' predates this list and still exists on older uploads, so it is shown rather than
 // hidden; new uploads use 'other' instead.
 const CATEGORIES = [
   { key: 'contract', label: 'Contract', hint: 'Executed agreement — terms are read automatically', accent: '#2563eb' },
+  // Not every job has a contract. Below a client's threshold the vendor proposes, the design
+  // team and PM accept, and a purchase order is issued — the PO is what the work runs under, so
+  // it is read exactly as a contract is and stands in the same place on every review.
+  { key: 'purchase-order', label: 'Purchase Order', hint: 'For jobs run on a PO instead of a contract — read the same way', accent: '#1d4ed8' },
   { key: 'drawings', label: 'Drawings', hint: 'Plan sets, details, sections', accent: '#0891b2' },
   { key: 'design', label: 'Design Documents', hint: 'Narratives, basis of design, calculations', accent: '#7c3aed' },
   { key: 'specifications', label: 'Specifications', hint: 'Spec sections and divisions', accent: '#c026d3' },
@@ -29,6 +34,10 @@ const CATEGORIES = [
   { key: 'other', label: 'Other', hint: 'Anything else the team needs on file', accent: '#64748b' },
   { key: 'reference', label: 'Other', hint: 'Anything else the team needs on file', accent: '#64748b' },
 ];
+
+// A governing document is one a party's billing is measured against. Mirrors GOVERNING_TYPES in
+// backend/lib/docTypes.js, which is the authority — the backend validates against its own list.
+const GOVERNING = ['contract', 'purchase-order'];
 
 // Only these are offered on upload — 'reference' is legacy and folds into 'other'.
 const UPLOAD_CATEGORIES = CATEGORIES.filter(c => c.key !== 'reference');
@@ -126,12 +135,18 @@ function UploadForm({ projectId, onSaved, onCancel }) {
         </div>
       )}
 
-      {docType === 'contract' && (
+      {docType !== 'memo-cover' && (
         <div className="p-3 rounded-xl text-[11px] leading-relaxed"
           style={{ background: '#eff6ff', border: '1px solid #dbeafe', color: '#1e40af' }}>
           <SparklesIcon className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
-          Coaster reads the contract on upload — tax status, unallowable costs, retainage and the
-          contract sum — so the review tools never have to re-read it. This takes a minute or two.
+          {GOVERNING.includes(docType)
+            ? 'Coaster reads it on upload — tax status, unallowable costs, retainage and the '
+              + 'contract sum — so the review tools never have to read it again.'
+            : 'Coaster reads it on upload and keeps its index and the statements reviews measure '
+              + 'against — sheet and section numbers, scope, exclusions, work by others, required '
+              + 'submittals — so no review has to search it again.'}
+          {' '}Uploading takes a moment; the reading finishes in the background and this page shows
+          when it is done.
         </div>
       )}
 
@@ -140,7 +155,7 @@ function UploadForm({ projectId, onSaved, onCancel }) {
       <div className="flex justify-end gap-2">
         <button type="button" className="btn-secondary" onClick={onCancel}>Cancel</button>
         <button type="submit" className="btn-primary" disabled={busy || !file}>
-          {busy ? (docType === 'contract' ? 'Reading the contract…' : 'Uploading…') : `Add ${chosen.label}`}
+          {busy ? 'Uploading…' : `Add ${chosen.label}`}
         </button>
       </div>
     </form>
@@ -238,6 +253,113 @@ function MemoCoverReview({ doc, projectId, onDone, onCancel }) {
   );
 }
 
+// What Coaster got out of this document, and whether it has finished.
+//
+// This page showed no status at all: a contract still being read looked exactly like one that
+// had been read and said nothing about tax, and a contract whose reading had FAILED looked
+// identical to both. Now that every document is read on upload, saying nothing would leave the
+// whole feature invisible — a PM would have no way to tell a drawing set that has been indexed
+// from one that has not.
+function ReadingState({ doc }) {
+  const status = doc.terms_status || 'ready';
+  const terms = doc.terms || {};
+  const extract = doc.extract;
+
+  if (status === 'pending' || status === 'reading') {
+    return (
+      <p className="text-[11px] mt-1" style={{ color: '#c2410c' }}>
+        Reading it now — this takes a minute or two on a long document. Reviews can use it as
+        soon as it finishes.
+      </p>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <p className="text-[11px] mt-1" style={{ color: '#b91c1c' }}>
+        Could not be read{doc.terms_error ? ` — ${doc.terms_error}` : ''}. The file is still on
+        file and can be downloaded; only what Coaster reads from it is missing.
+      </p>
+    );
+  }
+
+  if (GOVERNING.includes(doc.doc_type)) {
+    return (
+      <p className="text-[11px] text-gray-500 mt-1">
+        {terms.taxExempt === true ? 'Tax exempt' : terms.taxExempt === false ? 'Not tax exempt' : 'Tax status not stated'}
+        {` · ${(terms.unallowableItems || []).length} unallowable item${(terms.unallowableItems || []).length === 1 ? '' : 's'} on file`}
+        {terms.retainageRate != null ? ` · ${(terms.retainageRate * 100).toFixed(1).replace(/\.0$/, '')}% retainage` : ''}
+      </p>
+    );
+  }
+
+  if (!extract) return null;
+  const indexed = extract.index?.length || 0;
+  const facts = extract.keyFacts?.length || 0;
+  return (
+    <>
+      {extract.summary && (
+        <p className="text-[11px] text-gray-500 mt-1">{extract.summary}</p>
+      )}
+      <p className="text-[11px] mt-0.5" style={{ color: indexed || facts ? '#047857' : '#6b7280' }}>
+        {indexed || facts
+          ? `Read · ${indexed} ${indexed === 1 ? 'sheet/section' : 'sheets/sections'} indexed`
+            + ` · ${facts} key ${facts === 1 ? 'item' : 'items'} on file`
+          : 'Read — nothing in it that the review tools search for.'}
+      </p>
+    </>
+  );
+}
+
+// Which company a contract or purchase order is with.
+//
+// The review matches each party's billing to their own agreement, so this field decides whether a
+// subcontractor is measured against their subcontract or against nothing. It is editable because
+// the model reads it off a signature block that also names the owner and often a surety, and
+// getting it wrong sends a subcontractor's figures to the wrong agreement.
+//
+// It used to be edited on the Pay App Review form. That form is a chooser now, so the field moved
+// to the document it belongs to.
+function PartyField({ doc, projectId, onChanged }) {
+  const [value, setValue] = useState(doc.party || '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const save = async () => {
+    if (value.trim() === (doc.party || '')) return;
+    setSaving(true); setError('');
+    try {
+      await projectDocumentsApi.update(projectId, doc.id, {
+        party: value.trim(), party_role: doc.party_role || 'prime',
+      });
+      onChanged();
+    } catch (err) {
+      setError(errorText(err, 'Could not save the company name.'));
+      setValue(doc.party || '');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="mt-1.5">
+      <input
+        className="input text-[11px] py-1"
+        value={value}
+        disabled={saving}
+        placeholder="Which company is this with?"
+        onChange={e => setValue(e.target.value)}
+        onBlur={save}
+        onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+      />
+      {error
+        ? <p className="text-[10px] mt-0.5" style={{ color: '#b91c1c' }}>{error}</p>
+        : !doc.party && (
+          <p className="text-[10px] mt-0.5" style={{ color: '#c2410c' }}>
+            With no company named, this is not applied to anybody's billing.
+          </p>
+        )}
+    </div>
+  );
+}
+
 function DocumentRow({ doc, projectId, onChanged, onReview }) {
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(docName(doc));
@@ -311,11 +433,9 @@ function DocumentRow({ doc, projectId, onChanged, onReview }) {
                     </span>}
               </p>
             )}
-            {terms && doc.doc_type === 'contract' && (
-              <p className="text-[11px] text-gray-500 mt-1">
-                {terms.taxExempt === true ? 'Tax exempt' : terms.taxExempt === false ? 'Not tax exempt' : 'Tax status not stated'}
-                {` · ${(terms.unallowableItems || []).length} unallowable item${(terms.unallowableItems || []).length === 1 ? '' : 's'} on file`}
-              </p>
+            {doc.doc_type !== 'memo-cover' && <ReadingState doc={doc} />}
+            {GOVERNING.includes(doc.doc_type) && (
+              <PartyField doc={doc} projectId={projectId} onChanged={onChanged} />
             )}
           </>
         )}
@@ -366,6 +486,15 @@ export default function SharedDocuments() {
   }, [projectId]);
   useEffect(() => { load(); }, [load]);
 
+  // Reading happens after the upload responds, so without this the page would sit on "reading it
+  // now" until someone reloaded it by hand — which reads as a hang.
+  const anyReading = (docs || []).some(d => d.terms_status === 'pending' || d.terms_status === 'reading');
+  useEffect(() => {
+    if (!anyReading) return undefined;
+    const timer = setInterval(load, 4000);
+    return () => clearInterval(timer);
+  }, [anyReading, load]);
+
   // Grouped in the order the categories are declared, so contracts lead and the rest follow a
   // stable sequence rather than shuffling as documents are added.
   const groups = useMemo(() => {
@@ -381,7 +510,7 @@ export default function SharedDocuments() {
       .filter(g => g.docs.length > 0);
   }, [docs]);
 
-  const hasPrimaryContract = (docs || []).some(d => d.doc_type === 'contract' && d.is_primary === 1);
+  const hasPrimaryContract = (docs || []).some(d => GOVERNING.includes(d.doc_type) && d.is_primary === 1);
 
   return (
     <div className="p-8">
@@ -410,8 +539,10 @@ export default function SharedDocuments() {
 
       {docs && docs.length > 0 && !hasPrimaryContract && (
         <div className="card p-4 mb-5 text-sm" style={{ background: '#fffbeb', borderColor: '#fde68a', color: '#92400e' }}>
-          No contract is marked for reviews yet. Pay App Review and Change Order Review need one —
-          add a contract, or mark an existing one with the star.
+          No contract or purchase order is marked for reviews yet. Pay App Review, Invoice Review
+          and Change Order Review still run without one — they just check the arithmetic and leave
+          the contract sum, retainage and tax rules unchecked. Add one, or mark an existing one
+          with the star, if you want those checked too.
         </div>
       )}
 
@@ -425,8 +556,10 @@ export default function SharedDocuments() {
           </div>
           <h3 className="text-[16px] font-bold text-gray-900 mb-1.5">Nothing on file yet</h3>
           <p className="text-sm text-gray-500 max-w-md mx-auto mb-5 leading-relaxed">
-            Start with the executed contract — Coaster reads its terms once, and every review from
-            then on checks against it. Then add drawings, specs and anything else the team needs.
+            Add the contract if the job has one, or the purchase order if it does not — Coaster
+            reads its terms once and every review from then on checks against it. Drawings, specs
+            and everything else are read too, for their sheets, sections and scope, so no review
+            has to search them again.
           </p>
           <button className="btn-primary mx-auto" onClick={() => setUploading(true)}>
             <PlusIcon className="w-4 h-4" /> Add Document

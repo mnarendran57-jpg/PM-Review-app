@@ -1233,6 +1233,15 @@ if (!columnsOf('invoice_reviews').includes('contract_id')) {
 if (!columnsOf('invoice_reviews').includes('contract_label')) {
   db.exec(`ALTER TABLE invoice_reviews ADD COLUMN contract_label TEXT`);
 }
+// What was read out of a project document that is not a governing agreement — the drawing set's
+// sheet index, the project manual's sections, the scope letter's exclusions. A contract's reading
+// goes in `terms` and keeps its own shape; everything else lands here, so the two never have to
+// pretend to be one schema. Both share terms_status, because "is this document ready to be used"
+// is one question whatever kind of document it is.
+if (!columnsOf('project_contracts').includes('extract_json')) {
+  db.exec(`ALTER TABLE project_contracts ADD COLUMN extract_json TEXT`);
+}
+
 // The same for change orders, which are now reviewed against a chosen contract rather than
 // whichever one happened to be uploaded most recently.
 if (!columnsOf('pco_reviews').includes('contract_id')) {

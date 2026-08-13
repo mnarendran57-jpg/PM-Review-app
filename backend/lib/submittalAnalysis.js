@@ -286,6 +286,44 @@ async function extractPages(buffer, pageNumbers) {
   return { buffer: Buffer.from(await out.save()), pages: wanted };
 }
 
+// Normalised for matching: specification sections are written "23 05 93", "230593" and
+// "23.05.93" by different hands, and all three mean the same section.
+const bareRef = ref => String(ref || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// The section, from the reading taken when the document was uploaded. Free, and exact where the
+// contractor's stated section number matches an indexed one — this is the whole reason the index
+// is stored, and it saves an AI call on every submittal run against the same project manual.
+function sectionFromIndex({ doc, submittal }) {
+  const index = doc.extract?.index;
+  if (!Array.isArray(index) || !index.length) return null;
+
+  const wanted = bareRef(submittal.spec_section);
+  if (!wanted) return null;
+
+  const hit = index.find(e => bareRef(e.ref) === wanted)
+    // A manual indexes "23 05 93" while the contractor writes "230593.13" for a subsection, or
+    // the other way about. A prefix match on one side or the other is still the right section.
+    || index.find(e => bareRef(e.ref).startsWith(wanted) || wanted.startsWith(bareRef(e.ref)));
+  if (!hit || !Number.isInteger(hit.page)) return null;
+
+  // How far the section runs, from where the next indexed entry begins. A section with nothing
+  // after it falls back to the same default a picked section gets.
+  const after = index.filter(e => Number.isInteger(e.page) && e.page > hit.page)
+    .sort((a, b) => a.page - b.page)[0];
+  const span = after ? Math.min(after.page - hit.page, 10) : 6;
+
+  return {
+    hasContents: true,
+    sectionFound: true,
+    sectionNumber: hit.ref,
+    sectionTitle: hit.title || null,
+    startPage: hit.page,
+    pageCountEstimate: span,
+    alsoRelevant: [],
+    fromStoredIndex: true,
+  };
+}
+
 // Pass one, for a long document only. Finds where the governing specification section lives.
 async function pickSection({ doc, submittal, totalPages }) {
   const front = await extractPages(doc.buffer, Array.from({ length: INDEX_PAGES }, (_, i) => i + 1));
@@ -346,9 +384,11 @@ async function selectFrom({ doc, submittal, budget }) {
     };
   }
 
-  let picked = null;
+  // The stored index first: it is free, exact, and the same answer the paid call would reach.
+  // Only a document whose index does not carry this section costs a request.
+  let picked = sectionFromIndex({ doc, submittal });
   try {
-    picked = await pickSection({ doc, submittal, totalPages });
+    if (!picked) picked = await pickSection({ doc, submittal, totalPages });
   } catch {
     // A failed section pick should not sink the whole review — fall back to the front of the
     // document, which at least carries the contents and the general requirements.

@@ -138,7 +138,7 @@ const CONTRACT_CHECKS = [
   // genuine hole: nothing states what they are entitled to, so nothing below can check it.
   {
     id: 'K1',
-    title: 'Every party billing on this application has a contract on file',
+    title: 'Every party billing on this application has a governing document on file',
     severity: SEVERITY.MATERIAL,
     run(app, rows) {
       const method = app.deliveryMethod;
@@ -153,30 +153,34 @@ const CONTRACT_CHECKS = [
       const pending = app.contractsPending || [];
       if (pending.length) {
         out.push({
-          status: 'FAIL',
+          status: 'SKIPPED',
           severity: SEVERITY.NOTE,
-          detail: `${pending.length} contract(s) on this project are still being read `
+          detail: `${pending.length} document(s) on this project are still being read `
             + `(${pending.map(c => c.party || c.label || c.fileName).join(', ')}), so their terms `
             + 'were not available to this review. Nothing is missing — review the application '
             + 'again once they finish and the checks below will cover them.',
         });
       }
 
+      // Nothing on file is NOT a failure, on either delivery method.
+      //
+      // Plenty of jobs never have a contract to upload. Below a client's threshold there is no
+      // executed agreement at all: the vendor proposes, the architect, engineer and PM accept, a
+      // purchase order is issued, and the work runs from there. Reporting that as a finding was
+      // an accusation about a document that was never going to exist, on a job being run exactly
+      // as intended — and the PM cannot fix it by uploading anything.
+      //
+      // It is still recorded, as a skip rather than in silence. A report that simply said nothing
+      // here would read as though the contract checks had run and passed, and a reader has no way
+      // to tell the difference between "measured and correct" and "never measured".
       if (!rows.length) {
-        out.push({
-          status: 'FAIL',
-          severity: method === CMAR ? SEVERITY.MATERIAL : SEVERITY.NOTE,
-          detail: (pending.length
-            ? 'No contract with readable terms is on file yet, so nothing on this application was '
-              + 'checked against an agreement — only against itself. '
-            : 'No contract is on file for this project, so nothing on this application was '
-              + 'checked against an agreement — only against itself. ')
-            + (method === CMAR
-              ? 'On a CMAR job that means neither the contractor\'s terms nor any subcontract were '
-                + 'available, and the tax, retainage and contract-sum checks all stood down.'
-              : 'Upload the contractor\'s agreement and the retainage rate, contract sum and tax '
-                + 'rules stop having to be taken on trust.'),
-        });
+        out.push(skip(pending.length
+          ? 'No governing document with readable terms is on file yet, so nothing on this '
+            + 'application was checked against an agreement — only against itself.'
+          : 'No contract or purchase order is on file, so nothing on this application was checked '
+            + 'against an agreement — only against itself. The arithmetic, retainage and '
+            + 'continuity checks all ran as normal. Upload one if you want the contract sum, '
+            + 'retainage rate and tax rules checked too.', { severity: SEVERITY.NOTE }));
         return out;
       }
 
