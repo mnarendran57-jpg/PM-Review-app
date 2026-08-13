@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   InboxArrowDownIcon, ArrowRightOnRectangleIcon, DocumentMagnifyingGlassIcon,
   ClipboardDocumentCheckIcon, Squares2X2Icon, ScaleIcon, ArrowLeftIcon,
   Cog6ToothIcon, EnvelopeIcon, FolderIcon, ReceiptPercentIcon, CameraIcon, UserGroupIcon,
   ClipboardDocumentListIcon, QuestionMarkCircleIcon, CheckCircleIcon, FolderOpenIcon,
+  ChevronUpDownIcon,
 } from '@heroicons/react/24/outline';
 import { authApi, selectedOrg, selectedProgram, orgsApi, programsApi, projectsApi } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -71,11 +72,26 @@ const projectTools = [
 
 const globalNav = [
   { to: '/projects', label: 'Projects', icon: FolderIcon, color: '#3b82f6', glow: 'rgba(37,99,235,0.2)' },
-  // Managing who can sign in is an administrator's job, so it is hidden from members.
-  { to: '/team', label: 'Team', icon: UserGroupIcon, color: '#fb923c', glow: 'rgba(249,115,22,0.18)', adminOnly: true },
-  { to: '/settings', label: 'Settings', icon: Cog6ToothIcon, color: '#94a3b8', glow: 'rgba(148,163,184,0.18)' },
-  { to: '/contact', label: 'Contact Us', icon: EnvelopeIcon, color: '#f472b6', glow: 'rgba(244,114,182,0.18)' },
 ];
+
+// Everything about the person rather than about the work, reached from their own initials at the
+// bottom. These three sat in the same list as Projects, which put "who am I" and "what am I doing"
+// on one footing — and on a project page they were competing with the nine tools for the eye.
+const accountNav = [
+  // Managing who can sign in is an administrator's job, so it is hidden from members.
+  { to: '/team', label: 'Team', icon: UserGroupIcon, adminOnly: true },
+  { to: '/settings', label: 'Settings', icon: Cog6ToothIcon },
+  { to: '/contact', label: 'Contact Us', icon: EnvelopeIcon },
+];
+
+// Two letters where there are two names to take them from, one otherwise. Falls back to the email,
+// which every account has even before anyone has typed a name.
+function initialsOf(user) {
+  const words = String(user?.name || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return String(user?.email || '?').slice(0, 2).toUpperCase();
+}
 
 function navItemStyle({ isActive }, glow) {
   return isActive
@@ -110,6 +126,100 @@ function NavRow({ to, end, label, Icon, color, glow }) {
   );
 }
 
+// The signed-in person, and everything that belongs to them. Opens upward, because it lives at the
+// bottom of a full-height rail and a downward panel would fall off the screen.
+function AccountMenu({ isAdmin }) {
+  const navigate = useNavigate();
+  const user = authApi.user();
+  const [open, setOpen] = useState(false);
+  const wrap = useRef(null);
+
+  // A menu that stays open behind the page it just navigated to is the usual way this goes wrong,
+  // so it closes on a click anywhere outside it and on Escape as well — the pointer is not the
+  // only way people leave a menu.
+  useEffect(() => {
+    if (!open) return undefined;
+    const away = e => { if (wrap.current && !wrap.current.contains(e.target)) setOpen(false); };
+    const key = e => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', key);
+    return () => {
+      document.removeEventListener('mousedown', away);
+      document.removeEventListener('keydown', key);
+    };
+  }, [open]);
+
+  const signOut = () => {
+    authApi.logout();
+    navigate('/login', { replace: true });
+  };
+
+  const items = accountNav.filter(n => !n.adminOnly || isAdmin);
+
+  return (
+    <div ref={wrap} className="relative px-3 py-3 flex-shrink-0"
+      style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+
+      {open && (
+        <div className="absolute left-3 right-3 bottom-full mb-2 rounded-xl overflow-hidden py-1"
+          style={{
+            background: '#161d29',
+            border: '1px solid rgba(255,255,255,0.08)',
+            boxShadow: '0 12px 32px rgba(0,0,0,0.45)',
+          }}>
+          <div className="px-3 py-2.5" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+            <p className="text-[13px] font-semibold text-white truncate">{user?.name || 'Your account'}</p>
+            <p className="text-[11px] truncate" style={{ color: 'rgba(255,255,255,0.4)' }}>{user?.email}</p>
+          </div>
+          <div className="py-1">
+            {items.map(n => (
+              <NavLink key={n.to} to={n.to} onClick={() => setOpen(false)}
+                className="flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors"
+                style={({ isActive }) => ({
+                  color: isActive ? '#fff' : 'rgba(255,255,255,0.6)',
+                  background: isActive ? 'rgba(255,255,255,0.07)' : 'transparent',
+                })}>
+                <n.icon className="w-4 h-4 flex-shrink-0" />
+                {n.label}
+              </NavLink>
+            ))}
+          </div>
+          <button onClick={signOut}
+            className="w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors"
+            style={{ color: 'rgba(255,255,255,0.6)', borderTop: '1px solid rgba(255,255,255,0.06)' }}
+            onMouseEnter={e => { e.currentTarget.style.color = '#fff'; }}
+            onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.6)'; }}>
+            <ArrowRightOnRectangleIcon className="w-4 h-4 flex-shrink-0" />
+            Sign out
+          </button>
+        </div>
+      )}
+
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-2.5 px-2 py-2 rounded-xl transition-colors text-left"
+        style={{ background: open ? 'rgba(255,255,255,0.07)' : 'transparent' }}
+        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}
+        onMouseLeave={e => { e.currentTarget.style.background = open ? 'rgba(255,255,255,0.07)' : 'transparent'; }}>
+        <span className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-[12px] font-bold"
+          style={{ background: 'linear-gradient(135deg, #f97316 0%, #fb923c 100%)', color: '#0d1117' }}>
+          {initialsOf(user)}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[12px] font-medium truncate" style={{ color: 'rgba(255,255,255,0.85)' }}>
+            {user?.name || user?.email || 'Account'}
+          </span>
+          {/* Not the list of what is inside: at this width it truncated to "Team · Settings · Con…",
+              which reads as a rendering fault rather than as a hint. */}
+          <span className="block text-[10px] truncate" style={{ color: 'rgba(255,255,255,0.35)' }}>
+            Account
+          </span>
+        </span>
+        <ChevronUpDownIcon className="w-4 h-4 flex-shrink-0" style={{ color: 'rgba(255,255,255,0.35)' }} />
+      </button>
+    </div>
+  );
+}
+
 export default function Sidebar() {
   const navigate = useNavigate();
   const ctx = useProject();
@@ -134,11 +244,6 @@ export default function Sidebar() {
   // Everyone else has exactly one organization in view here, so the heading still tells the truth.
   const { pathname } = useLocation();
   const orgScoped = !(pathname.startsWith('/team') && authApi.user()?.isPlatformAdmin);
-
-  const handleLogout = () => {
-    authApi.logout();
-    navigate('/login', { replace: true });
-  };
 
   return (
     <aside className="fixed inset-y-0 left-0 w-[220px] flex flex-col z-30"
@@ -226,11 +331,9 @@ export default function Sidebar() {
                 )}
               </div>
             )}
-            <div className="px-2 pt-2 pb-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.12em]"
-                style={{ color: 'rgba(255,255,255,0.25)' }}>Menu</span>
-            </div>
-            <div className="space-y-1">
+            {/* No heading: with Team, Settings and Contact moved to the account menu, a "Menu"
+                label sits over a single row. */}
+            <div className="space-y-1 pt-2">
               {globalNav.filter(n => !n.adminOnly || isAdmin).map(n => (
                 <NavRow key={n.to} to={n.to} end={n.to === '/projects'}
                   label={n.label} Icon={n.icon} color={n.color} glow={n.glow} />
@@ -240,28 +343,9 @@ export default function Sidebar() {
         )}
       </nav>
 
-      {/* Footer */}
-      <div className="px-5 py-4 flex-shrink-0" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <img src="/coaster-logo.svg" alt="Coaster" className="w-6 h-6 rounded-md flex-shrink-0" />
-            <div className="min-w-0">
-              <p className="text-[11px] font-medium truncate" style={{ color: 'rgba(255,255,255,0.6)' }}>Coaster</p>
-              <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.25)' }}>Internal · v1.0</p>
-            </div>
-          </div>
-          <button
-            onClick={handleLogout}
-            title="Log out"
-            className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors"
-            style={{ color: 'rgba(255,255,255,0.4)' }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = '#fff'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(255,255,255,0.4)'; }}
-          >
-            <ArrowRightOnRectangleIcon className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
+      {/* The Coaster mark and version sat here and said nothing the wordmark above does not
+          already say. The space belongs to the person signed in. */}
+      <AccountMenu isAdmin={isAdmin} />
     </aside>
   );
 }

@@ -6,6 +6,17 @@
 
 @layer base {
   * { box-sizing: border-box; }
+
+  /* The browser draws its own focus ring in the operating system's accent colour — orange on this
+     machine — so a clicked button lit up in a colour the app never chose, and one that reads as
+     the app's own accent. Replaced rather than deleted: a keyboard user has no other way to see
+     where they are, so the ring stays, in a neutral grey, and only for keyboard focus. A mouse
+     click leaves nothing behind. */
+  :focus { outline: none; }
+  :focus-visible {
+    outline: 2px solid rgba(100,116,139,0.55);
+    outline-offset: 2px;
+  }
   body {
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
     @apply text-gray-900 antialiased;
