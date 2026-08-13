@@ -207,11 +207,17 @@ router.get('/:id/report.pdf', async (req, res) => {
     const row = visibleRow(req);
     if (!row) return res.status(404).json({ error: 'Not found' });
 
+    // The comparison is stored beside the analysis and belongs in the same document. Without it
+    // the PDF sent to an owner was missing the half of the review that names money.
+    let comparison = null;
+    try { comparison = row.comparison_json ? JSON.parse(row.comparison_json) : null; } catch { comparison = null; }
+
     const pdf = await renderPreconReportPdf({
       projectName: row.project_name,
       reviewFocus: row.review_focus,
       fileNames: JSON.parse(row.file_names || '[]'),
       analysis: JSON.parse(row.report_json),
+      comparison,
     });
 
     const stem = (row.project_name || 'Precon').replace(/[^a-z0-9]+/gi, '_');
