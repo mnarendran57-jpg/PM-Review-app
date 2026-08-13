@@ -2,9 +2,9 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   PlusIcon, ArrowDownTrayIcon, TrashIcon, PaperClipIcon, SparklesIcon,
   PaperAirplaneIcon, ArrowUturnLeftIcon, InboxArrowDownIcon, ClockIcon,
-  CheckCircleIcon, ExclamationTriangleIcon,
+  CheckCircleIcon, ExclamationTriangleIcon, ScaleIcon, DocumentMagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
-import { submittalsApi } from '../api';
+import { submittalsApi, payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
@@ -408,7 +408,392 @@ function ResubmittalForm({ submittal, onSaved, onCancel }) {
 
 // --- One submittal, opened -----------------------------------------------------------------
 
-function RevisionCard({ submittal, revision, isCurrent }) {
+// --- The predicted review, and how it compared -------------------------------------------------
+//
+// The same pair of panels as the RFI log, in the same order and worded the same way, because it
+// is the same question asked at a different moment: what do the documents require, and did the
+// A/E apply them?
+//
+// The difference is when it pays. An RFI prediction helps the PM understand an answer that is
+// already on its way. A submittal prediction runs while the package is still on their desk —
+// so a missing certificate costs an email today instead of a resubmittal and three weeks.
+
+const SEVERITY_STYLE = {
+  critical: { bg: '#fef2f2', color: '#b91c1c', border: '#fecaca' },
+  material: { bg: '#fff7ed', color: '#c2410c', border: '#fed7aa' },
+  minor: { bg: '#fefce8', color: '#a16207', border: '#fde68a' },
+};
+
+const ACTION_STYLE = {
+  Approved: { bg: '#f0fdf4', color: '#15803d' },
+  'Approved as Noted': { bg: '#fefce8', color: '#a16207' },
+  'Revise and Resubmit': { bg: '#fff7ed', color: '#c2410c' },
+  Rejected: { bg: '#fef2f2', color: '#b91c1c' },
+  'For Record Only': { bg: '#f1f5f9', color: '#475569' },
+};
+
+function PredictedReviewPanel({ record, onRan }) {
+  const { projectId } = useProject();
+  const [docs, setDocs] = useState([]);
+  const [chosen, setChosen] = useState(null);      // null until the user or the record decides
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
+
+  const stored = record.analysis;
+  const a = stored?.analysis;
+
+  // The project's Shared Documents — the specification is normally among them, and it is what a
+  // submittal is actually judged against.
+  useEffect(() => {
+    if (!projectId) return;
+    payAppReviewApi.listDocuments(projectId)
+      .then(all => setDocs(all.filter(d => d.doc_type !== 'memo-cover')))
+      .catch(() => setDocs([]));
+  }, [projectId]);
+
+  const selected = chosen ?? (record.documents || []).map(d => d.id);
+  const toggle = id => setChosen(
+    selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id]);
+
+  const run = async () => {
+    setRunning(true); setError('');
+    try {
+      const fd = new FormData();
+      fd.append('document_ids', selected.join(','));
+      const res = await submittalsApi.analyze(record.id, fd);
+      onRan(res.submittal);
+      setOpen(false);
+    } catch (err) {
+      setError(errorText(err, 'Could not predict the review.'));
+    } finally { setRunning(false); }
+  };
+
+  const actionStyle = ACTION_STYLE[a?.likelyAction] || ACTION_STYLE['For Record Only'];
+
+  return (
+    <div className="p-4 rounded-xl" style={{ background: '#fff', border: '1px solid #eef1f4' }}>
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <DocumentMagnifyingGlassIcon className="w-4 h-4 flex-shrink-0" style={{ color: '#6366f1' }} />
+        <p className="text-[13px] font-bold text-gray-900">What the A/E is likely to say</p>
+        {a && (
+          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold ml-auto flex-shrink-0"
+            style={{ background: actionStyle.bg, color: actionStyle.color }}>
+            {a.likelyAction}
+          </span>
+        )}
+      </div>
+
+      {!a && !open && (
+        <div className="space-y-2">
+          <p className="text-[12px] text-gray-600">
+            Read this submittal against the specification before it goes out — the deviations and
+            missing items it finds are the ones that would otherwise come back as a resubmittal.
+          </p>
+          <button className="btn-primary" onClick={() => setOpen(true)}>
+            <SparklesIcon className="w-4 h-4" /> Check it against the spec
+          </button>
+        </div>
+      )}
+
+      {(open || (!a && docs.length === 0)) && (
+        <div className="space-y-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+            Read it against
+          </p>
+          {docs.length === 0 && (
+            <p className="text-[12px]" style={{ color: '#b45309' }}>
+              This project has no shared documents yet. Upload the specification on the project's
+              Shared Documents page, then come back.
+            </p>
+          )}
+          {docs.map(d => (
+            <label key={d.id} className="flex items-start gap-2 cursor-pointer">
+              <input type="checkbox" className="mt-0.5" checked={selected.includes(d.id)}
+                onChange={() => toggle(d.id)} />
+              <span className="text-[12px] text-gray-700">
+                {d.label || d.file_name}
+                <span className="text-gray-400"> · {d.doc_type}</span>
+              </span>
+            </label>
+          ))}
+          <div className="flex gap-2 pt-1">
+            <button className="btn-primary" onClick={run} disabled={running || !selected.length}>
+              <SparklesIcon className="w-4 h-4" />
+              {running ? 'Reading the spec…' : a ? 'Run it again' : 'Predict the review'}
+            </button>
+            <button className="btn-secondary" onClick={() => setOpen(false)} disabled={running}>Cancel</button>
+          </div>
+          <p className="text-[11px] text-gray-400">
+            A project manual is searched for the section first, then only that section is read —
+            so this takes a minute or two on a long book.
+          </p>
+        </div>
+      )}
+
+      {error && <p className="text-xs mt-2" style={{ color: '#b91c1c' }}>{error}</p>}
+
+      {a && !open && (
+        <div className="space-y-3">
+          <p className="text-[14px] font-semibold text-gray-900 leading-snug">{a.headline}</p>
+
+          {a.deviations?.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                Departs from the specification
+              </p>
+              {a.deviations.map((d, i) => {
+                const st = SEVERITY_STYLE[d.severity] || SEVERITY_STYLE.minor;
+                return (
+                  <div key={i} className="p-2.5 rounded-lg" style={{ background: st.bg, border: `1px solid ${st.border}` }}>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <p className="text-[12px] font-semibold text-gray-800">{d.item}</p>
+                      <span className="text-[10px] font-semibold uppercase tracking-wider ml-auto"
+                        style={{ color: st.color }}>{d.severity}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-gray-400">Spec requires</p>
+                        <p className="text-[12px] text-gray-700">{d.required}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider" style={{ color: st.color }}>Submitted</p>
+                        <p className="text-[12px] text-gray-700">{d.submitted}</p>
+                      </div>
+                    </div>
+                    {d.whyItMatters && (
+                      <p className="text-[11px] text-gray-600 mt-1.5 pt-1.5" style={{ borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+                        {d.whyItMatters}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {a.missingSubmittalItems?.length > 0 && (
+            <div className="p-2.5 rounded-lg" style={{ background: '#fff7ed', border: '1px solid #fed7aa' }}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#c2410c' }}>
+                Required by the spec, not in this package
+              </p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {a.missingSubmittalItems.map((m, i) => <li key={i} className="text-[12px] text-gray-700">{m}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {a.fixBeforeSending?.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Fix before sending</p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {a.fixBeforeSending.map((f, i) => <li key={i} className="text-[12px] text-gray-700">{f}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {a.coordinationNotes && (
+            <p className="text-[12px] text-gray-600">{a.coordinationNotes}</p>
+          )}
+
+          <div className="flex items-center gap-3 flex-wrap pt-1" style={{ borderTop: '1px solid #eef1f4' }}>
+            <span className="text-[11px] text-gray-400 pt-2">
+              Confidence: {a.confidence}{a.confidenceReason ? ` — ${a.confidenceReason}` : ''}
+            </span>
+            <a className="text-[11px] text-blue-600 hover:underline pt-2 ml-auto"
+              href={submittalsApi.analysisMarkdownUrl(record.id)} target="_blank" rel="noreferrer">
+              Download
+            </a>
+            <button className="text-[11px] text-gray-500 hover:text-gray-900 pt-2" onClick={() => setOpen(true)}>
+              Run again
+            </button>
+          </div>
+          {a.missingInformation && (
+            <p className="text-[11px] text-gray-500">Not read: {a.missingInformation}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Coloured by what the PM has to do about it: green needs nothing, amber is worth reading, red
+// is work the specification did not require — which is where the money usually is.
+const COMPARISON_VERDICTS = {
+  as_expected: {
+    label: 'As the spec suggested',
+    bg: '#f0fdf4', color: '#15803d', border: '#bbf7d0',
+    blurb: 'The A/E reviewed it the way the specification indicated.',
+  },
+  stricter: {
+    label: 'Stricter than the spec',
+    bg: '#fef2f2', color: '#b91c1c', border: '#fecaca',
+    blurb: 'The A/E has asked for something the specification does not appear to require.',
+  },
+  more_lenient: {
+    label: 'More lenient than the spec',
+    bg: '#fefce8', color: '#a16207', border: '#fde68a',
+    blurb: 'The A/E accepted a departure from the specification. Approval is not a waiver.',
+  },
+  different_grounds: {
+    label: 'Same outcome, different grounds',
+    bg: '#eff6ff', color: '#1d4ed8', border: '#bfdbfe',
+    blurb: 'The A/E landed in the same place, for reasons the prediction did not find.',
+  },
+  not_comparable: {
+    label: 'Not reviewed on the merits',
+    bg: '#f9fafb', color: '#6b7280', border: '#e5e7eb',
+    blurb: 'The A/E returned it without reviewing it against the specification.',
+  },
+};
+
+function ReviewComparisonPanel({ record, revision, onRan }) {
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState('');
+  const stored = revision.reviewComparison;
+  const review = stored?.review;
+
+  const run = async () => {
+    setRunning(true); setError('');
+    try {
+      onRan(await submittalsApi.compareReview(record.id, revision.id));
+    } catch (err) {
+      setError(errorText(err, "Could not compare the A/E's review with the prediction."));
+    } finally { setRunning(false); }
+  };
+
+  const v = COMPARISON_VERDICTS[review?.verdict] || COMPARISON_VERDICTS.not_comparable;
+
+  return (
+    <div className="p-4 rounded-xl mt-3" style={{ background: '#fff', border: `1px solid ${review ? v.border : '#eef1f4'}` }}>
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <ScaleIcon className="w-4 h-4 flex-shrink-0" style={{ color: '#6366f1' }} />
+        <p className="text-[13px] font-bold text-gray-900">The A/E's review vs the spec</p>
+        {review && (
+          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold ml-auto flex-shrink-0"
+            style={{ background: v.bg, color: v.color }}>{v.label}</span>
+        )}
+      </div>
+
+      {!review && (
+        <div className="space-y-2">
+          <p className="text-[12px] text-gray-600">
+            {record.analysis
+              ? "Compare what the A/E returned with the reading Coaster made of the specification before it went out."
+              : 'No predicted review was produced for this submittal, so there is nothing to compare the A/E\'s stamp against. Run one above first.'}
+          </p>
+          <button className="btn-primary" onClick={run} disabled={running || !record.analysis}>
+            <ScaleIcon className="w-4 h-4" />
+            {running ? 'Comparing…' : 'Compare with the prediction'}
+          </button>
+        </div>
+      )}
+
+      {error && <p className="text-xs mt-2" style={{ color: '#b91c1c' }}>{error}</p>}
+
+      {review && (
+        <div className="space-y-3">
+          <p className="text-[14px] font-semibold text-gray-900 leading-snug">{review.headline}</p>
+          <p className="text-[11px] text-gray-500">
+            {v.blurb}
+            {review.predictedAction && review.actualAction && review.predictedAction !== review.actualAction && (
+              <> Predicted <b>{review.predictedAction}</b>, returned as <b>{review.actualAction}</b>.</>
+            )}
+          </p>
+
+          {review.notInTheContract?.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#b91c1c' }}>
+                Asked for, but not in the specification
+              </p>
+              {review.notInTheContract.map((n, i) => (
+                <div key={i} className="p-2.5 rounded-lg" style={{ background: '#fef2f2', border: '1px solid #fecaca' }}>
+                  <p className="text-[12px] font-semibold text-gray-800 mb-1.5">{n.point}</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-gray-400">Spec said</p>
+                      <p className="text-[12px] text-gray-700">{n.specificationSaid || '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider" style={{ color: '#b91c1c' }}>A/E directed</p>
+                      <p className="text-[12px] text-gray-700">{n.aeDirected}</p>
+                    </div>
+                  </div>
+                  {n.whyItMatters && (
+                    <p className="text-[11px] text-gray-600 mt-1.5 pt-1.5" style={{ borderTop: '1px solid #fecaca' }}>
+                      {n.whyItMatters}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {review.approvedDespite?.length > 0 && (
+            <div className="p-2.5 rounded-lg" style={{ background: '#fefce8', border: '1px solid #fde68a' }}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#a16207' }}>
+                Approved despite a departure
+              </p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {review.approvedDespite.map((x, i) => <li key={i} className="text-[12px] text-gray-700">{x}</li>)}
+              </ul>
+              <p className="text-[11px] text-gray-500 mt-1">Approval is not a waiver of the specification.</p>
+            </div>
+          )}
+
+          {review.missedByPrediction?.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">
+                Raised by the A/E, not by the prediction
+              </p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {review.missedByPrediction.map((m, i) => (
+                  <li key={i} className="text-[12px] text-gray-700">
+                    <b>{m.point}</b> — {m.aeComment}
+                    {m.inTheSpecification && <span className="text-gray-400"> ({m.inTheSpecification})</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {review.confirmed?.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">
+                Predicted, and the A/E agreed
+              </p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {review.confirmed.map((c, i) => <li key={i} className="text-[12px] text-gray-700">{c}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {review.actionsForPm?.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Do now</p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {review.actionsForPm.map((x, i) => <li key={i} className="text-[12px] text-gray-700">{x}</li>)}
+              </ul>
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 pt-1" style={{ borderTop: '1px solid #eef1f4' }}>
+            <a className="text-[11px] text-blue-600 hover:underline pt-2"
+              href={submittalsApi.comparisonMarkdownUrl(record.id)} target="_blank" rel="noreferrer">
+              Download
+            </a>
+            <button className="text-[11px] text-gray-500 hover:text-gray-900 pt-2 ml-auto"
+              onClick={run} disabled={running}>
+              {running ? 'Comparing…' : 'Run again'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RevisionCard({ submittal, revision, isCurrent, onChanged }) {
   const files = revision.files || [];
   return (
     <div className="p-4 rounded-xl" style={{
@@ -456,6 +841,12 @@ function RevisionCard({ submittal, revision, isCurrent }) {
           <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">A/E comments</p>
           <p className="text-[12px] text-gray-700 whitespace-pre-wrap leading-relaxed">{revision.response_notes}</p>
         </div>
+      )}
+
+      {/* Only where there is a stamp to compare against. A revision still with the A/E has
+          nothing to say here, and an empty panel on every open revision would be noise. */}
+      {revision.review_action && onChanged && (
+        <ReviewComparisonPanel record={submittal} revision={revision} onRan={onChanged} />
       )}
 
       {files.length > 0 && (
@@ -563,13 +954,16 @@ function SubmittalDetail({ id, onChanged, onDeleted, onClose }) {
 
       {error && <p className="text-xs" style={{ color: '#b91c1c' }}>{error}</p>}
 
+      <PredictedReviewPanel record={record} onRan={applyUpdate} />
+
       <div>
         <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-2">
           History — {record.revisionCount} revision{record.revisionCount === 1 ? '' : 's'}
         </p>
         <div className="space-y-3">
           {[...record.revisions].reverse().map(rev => (
-            <RevisionCard key={rev.id} submittal={record} revision={rev} isCurrent={rev.id === current.id} />
+            <RevisionCard key={rev.id} submittal={record} revision={rev}
+              isCurrent={rev.id === current.id} onChanged={applyUpdate} />
           ))}
         </div>
       </div>

@@ -4,6 +4,8 @@ const multer = require('multer');
 const db = require('../database');
 const access = require('../lib/access');
 const storage = require('../lib/storage');
+const { analyzeSubmittal } = require('../lib/submittalAnalysis');
+const { compareToReview } = require('../lib/submittalComparison');
 const { requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../lib/plans');
 const { friendlyAiError } = require('../lib/aiErrors');
@@ -61,12 +63,22 @@ const filesOf = submittalId => db.prepare(
 function detail(row, options) {
   const log = buildLogRow(row, revisionsOf(row.id), options);
   const files = filesOf(row.id);
+  // The newest revision's id. The submittal log row carries the revision NUMBER but not its
+  // id — unlike the RFI log — so it is taken from the revisions themselves rather than assumed
+  // to be there. Getting this wrong silently returned no comparison at all: the row was stored
+  // correctly and simply never looked up.
+  const currentRevisionId = log.revisions[log.revisions.length - 1]?.id || null;
   return {
     ...log,
     files,
+    currentRevisionId,
+    documents: documentsOf(row.id),
+    analysis: latestAnalysis(row.id),
+    reviewComparison: reviewForRevision(currentRevisionId),
     revisions: log.revisions.map(rev => ({
       ...rev,
       files: files.filter(f => f.revision_id === rev.id),
+      reviewComparison: reviewForRevision(rev.id),
     })),
   };
 }
@@ -97,6 +109,134 @@ function arrivalDates(body) {
   let received = nullable(body.date_received) || toIsoDay(todayUtc());
   if (forwarded && received > forwarded) received = forwarded;
   return { received, forwarded };
+}
+
+// --- The predicted review, and how it compared -----------------------------------------
+//
+// Mirrors the RFI log deliberately, down to the shape of the stored rows. The PM's question is
+// the same on both: "is this what the documents said, and if not, what does that change?" —
+// and answering it the same way in both places means one thing to learn rather than two.
+
+const parseIdList = (raw) => {
+  if (raw == null) return [];
+  const list = Array.isArray(raw) ? raw : String(raw).split(',');
+  return list.map(v => Number(String(v).trim())).filter(n => Number.isInteger(n) && n > 0);
+};
+
+// The Shared Documents this submittal is read against — usually the specification. Joined
+// rather than stored as a list of ids, so a document removed from the project drops out.
+const documentsOf = submittalId => db.prepare(`
+  SELECT pc.id, pc.file_name, pc.label, pc.doc_type
+  FROM submittal_documents sd JOIN project_contracts pc ON pc.id = sd.contract_id
+  WHERE sd.submittal_id = ? ORDER BY pc.doc_type ASC, pc.created_at ASC
+`).all(submittalId);
+
+function setDocuments(submittalId, projectId, rawIds) {
+  if (rawIds == null) return;
+  db.prepare(`DELETE FROM submittal_documents WHERE submittal_id=?`).run(submittalId);
+  const valid = db.prepare(`SELECT id FROM project_contracts WHERE id=? AND project_id=?`);
+  const insert = db.prepare(`INSERT OR IGNORE INTO submittal_documents (submittal_id, contract_id) VALUES (?, ?)`);
+  for (const id of parseIdList(rawIds)) {
+    if (valid.get(id, projectId)) insert.run(submittalId, id);
+  }
+}
+
+// Pulls the bytes of the chosen Shared Documents. Scoped by project inside the query, so an id
+// from another project reads as missing rather than as a permission error.
+async function loadDocumentBuffers(projectId, ids) {
+  const find = db.prepare(
+    `SELECT file_name, label, doc_type, file_key, file_blob
+     FROM project_contracts WHERE id=? AND project_id=?`
+  );
+  const out = [];
+  for (const id of ids) {
+    const doc = find.get(id, projectId);
+    if (!doc) continue;
+    const buffer = await storage.readFile({ key: doc.file_key, blob: doc.file_blob });
+    if (buffer) {
+      out.push({ label: (doc.label || '').trim() || doc.file_name, doc_type: doc.doc_type, buffer });
+    }
+  }
+  return out;
+}
+
+const latestAnalysis = (submittalId) => {
+  const row = db.prepare(
+    `SELECT * FROM submittal_analyses WHERE submittal_id=? ORDER BY created_at DESC, id DESC LIMIT 1`
+  ).get(submittalId);
+  if (!row) return null;
+  return {
+    ...row,
+    analysis: JSON.parse(row.analysis_json),
+    sources: JSON.parse(row.sources_json || '[]'),
+    analysis_json: undefined,
+    sources_json: undefined,
+  };
+};
+
+// How the A/E's review compared with the prediction, for one round trip. Looked up per
+// revision rather than per submittal: one that went round twice has two reviews, and showing
+// the first one's comparison against the second one's stamp would be worse than showing none.
+const reviewForRevision = (revisionId) => {
+  if (!revisionId) return null;
+  const row = db.prepare(
+    `SELECT * FROM submittal_response_reviews WHERE revision_id=? ORDER BY created_at DESC, id DESC LIMIT 1`
+  ).get(revisionId);
+  if (!row) return null;
+  return {
+    id: row.id,
+    created_at: row.created_at,
+    created_by: row.created_by,
+    review: JSON.parse(row.review_json),
+    markdown: row.review_markdown,
+  };
+};
+
+// The contractor's own package, for the revision being predicted. It is half of the
+// comparison: a review that read the specification and not the submittal has nothing to say.
+async function submittalFilesFor(submittalId, revisionId) {
+  const rows = db.prepare(`
+    SELECT file_name, file_key, file_blob FROM submittal_files
+    WHERE submittal_id=? AND kind='submittal'${revisionId ? ' AND revision_id=?' : ''}
+    ORDER BY id DESC LIMIT 2
+  `).all(...(revisionId ? [submittalId, revisionId] : [submittalId]));
+  const out = [];
+  for (const r of rows) {
+    const buffer = await storage.readFile({ key: r.file_key, blob: r.file_blob });
+    if (buffer) out.push({ label: r.file_name, buffer });
+  }
+  return out;
+}
+
+// Runs the prediction-versus-review comparison for one revision and stores it. Returns null
+// when there is nothing to compare — no prediction was ever run, or the revision has no A/E
+// action yet — which is a normal state rather than an error.
+async function runReviewComparison(req, submittal, revision) {
+  const stored = latestAnalysis(submittal.id);
+  if (!stored || !revision?.review_action) return null;
+
+  const { review, markdown } = await compareToReview({
+    submittal,
+    analysis: stored.analysis,
+    sources: stored.sources,
+    response: {
+      action: revision.review_action,
+      notes: revision.response_notes,
+      reviewedBy: revision.reviewed_by,
+      dateReturned: revision.date_returned,
+    },
+  });
+
+  // One comparison per revision: a re-run replaces the previous rather than stacking, so the
+  // detail view cannot show two contradictory readings of the same stamp.
+  db.prepare(`DELETE FROM submittal_response_reviews WHERE revision_id=?`).run(revision.id);
+  db.prepare(`
+    INSERT INTO submittal_response_reviews (submittal_id, revision_id, analysis_id, review_json,
+      review_markdown, created_by)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(submittal.id, revision.id, stored.id, JSON.stringify(review), markdown,
+    req.user.name || req.user.email);
+  return review;
 }
 
 // --- Reading the log --------------------------------------------------------------------
@@ -436,9 +576,23 @@ router.post('/:id/revisions/:revId/response', upload.single('file'), async (req,
     }
     touch(submittal.id);
 
+    // The A/E's review is now safely on the record, so the comparison against Coaster's
+    // prediction runs afterwards and on a best-effort basis. It is worth having, but it is an
+    // AI call on a rate-limited account, and losing the A/E's review because a comparison
+    // failed would be a bad trade. If it does not run, the detail view offers a button.
+    let comparisonError = null;
+    try {
+      const updated = db.prepare(`SELECT * FROM submittal_revisions WHERE id=?`).get(revision.id);
+      await runReviewComparison(req, submittal, updated);
+    } catch (err) {
+      console.error('Submittal review comparison error:', err);
+      comparisonError = friendlyAiError(err);
+    }
+
     const record = detail(submittal, { reviewDays: reviewDays(), today: todayUtc() });
     res.json({
       ...record,
+      comparisonError,
       // The log's next step follows from the answer, so it is stated here rather than left
       // for the page to re-derive from the action.
       nextStep: isReopening(action)
@@ -449,6 +603,124 @@ router.post('/:id/revisions/:revId/response', upload.single('file'), async (req,
     console.error('Submittal response error:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// --- The predicted review ------------------------------------------------------------------
+//
+// Run before the submittal goes to the A/E, which is the whole point: a missing certificate
+// found today costs an email, and found after the stamp costs a resubmittal and three weeks.
+
+router.post('/:id/analysis', upload.array('files', 4), async (req, res) => {
+  try {
+    const submittal = visibleSubmittal(req);
+    if (!submittal) return res.status(404).json({ error: 'Not found' });
+
+    // A spec section sent with the request is treated as a correction and saved, so re-running
+    // after fixing it does not silently revert next time.
+    const requested = nullable(req.body.spec_section);
+    if (requested && requested !== submittal.spec_section) {
+      db.prepare(`UPDATE submittals SET spec_section=?, updated_at=datetime('now') WHERE id=?`)
+        .run(requested, submittal.id);
+      submittal.spec_section = requested;
+    }
+    if ('document_ids' in req.body) setDocuments(submittal.id, submittal.project_id, req.body.document_ids);
+
+    const chosenIds = db.prepare(`SELECT contract_id FROM submittal_documents WHERE submittal_id=?`)
+      .all(submittal.id).map(r => r.contract_id);
+    const documents = await loadDocumentBuffers(submittal.project_id, chosenIds);
+
+    // The contractor's package: whatever was uploaded with this request, else what is already
+    // stored against the open revision.
+    const revisions = revisionsOf(submittal.id);
+    const current = revisions[revisions.length - 1];
+    let submittalFiles = (req.files || []).map(f => ({ label: f.originalname, buffer: f.buffer }));
+    if (!submittalFiles.length) submittalFiles = await submittalFilesFor(submittal.id, current?.id);
+    if (!submittalFiles.length) submittalFiles = await submittalFilesFor(submittal.id, null);
+
+    if (documents.length === 0 && submittalFiles.length === 0) {
+      return res.status(400).json({
+        error: 'There is nothing to read yet. Attach the contractor\'s submittal, or choose the '
+          + 'specification for it to be read against.',
+      });
+    }
+    if (documents.length === 0) {
+      return res.status(400).json({
+        error: 'Choose the specification for this submittal to be read against — without it '
+          + 'there is nothing to check the package for compliance with.',
+      });
+    }
+
+    const { analysis, sources, markdown } = await analyzeSubmittal({ submittal, documents, submittalFiles });
+
+    const saved = db.prepare(`
+      INSERT INTO submittal_analyses (submittal_id, revision_id, spec_section, sources_json,
+        analysis_json, analysis_markdown, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      submittal.id, current?.id || null, submittal.spec_section || null, JSON.stringify(sources),
+      JSON.stringify(analysis), markdown, req.user.name || req.user.email
+    );
+
+    res.json({
+      id: saved.lastInsertRowid, analysis, sources, analysis_markdown: markdown,
+      submittal: detail(submittal, { reviewDays: reviewDays(), today: todayUtc() }),
+    });
+  } catch (err) {
+    console.error('Submittal analysis error:', err);
+    res.status(err.status === 429 ? 429 : err.status || 500).json({ error: friendlyAiError(err) });
+  }
+});
+
+// Runs the comparison on demand — after a failure when the review was recorded, or to redo it
+// once the prediction has been re-run against a better specification.
+router.post('/:id/revisions/:revId/comparison', async (req, res) => {
+  try {
+    const { submittal, revision } = visibleRevision(req);
+    if (!submittal || !revision) return res.status(404).json({ error: 'Not found' });
+
+    if (!revision.review_action) {
+      return res.status(400).json({
+        error: 'There is nothing to compare yet — record what the A/E returned on this revision first.',
+      });
+    }
+    if (!latestAnalysis(submittal.id)) {
+      return res.status(400).json({
+        error: 'There is no predicted review to compare against. Run one from this submittal '
+          + 'first, and it will be read against the A/E\'s stamp.',
+      });
+    }
+
+    await runReviewComparison(req, submittal, revision);
+    res.json(detail(submittal, { reviewDays: reviewDays(), today: todayUtc() }));
+  } catch (err) {
+    console.error('Submittal review comparison error:', err);
+    res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });
+  }
+});
+
+const asMarkdown = (res, name, body) => {
+  res.setHeader('Content-Type', 'text/markdown');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+  res.send(body || '');
+};
+
+router.get('/:id/analysis.md', (req, res) => {
+  const submittal = visibleSubmittal(req);
+  if (!submittal) return res.status(404).json({ error: 'Not found' });
+  const found = latestAnalysis(submittal.id);
+  if (!found) return res.status(404).json({ error: 'No predicted review has been run for this submittal yet.' });
+  const safe = String(submittal.submittal_number).replace(/[^a-z0-9-]+/gi, '_');
+  asMarkdown(res, `${safe}_predicted_review.md`, found.analysis_markdown);
+});
+
+router.get('/:id/comparison.md', (req, res) => {
+  const submittal = visibleSubmittal(req);
+  if (!submittal) return res.status(404).json({ error: 'Not found' });
+  const revisions = revisionsOf(submittal.id);
+  const found = reviewForRevision(revisions[revisions.length - 1]?.id);
+  if (!found) return res.status(404).json({ error: 'No review comparison has been produced for this submittal yet.' });
+  const safe = String(submittal.submittal_number).replace(/[^a-z0-9-]+/gi, '_');
+  asMarkdown(res, `${safe}_review_comparison.md`, found.markdown);
 });
 
 // --- Attachments --------------------------------------------------------------------------

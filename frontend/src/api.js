@@ -309,6 +309,19 @@ export const submittalsApi = {
       headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
     }).then(r => r.data),
 
+  // Reads the submittal against the chosen specification and predicts how the A/E will
+  // review it. LONG_AI_TIMEOUT because a project manual is searched before it is read, and the
+  // account's per-minute allowance puts a wait between the two calls.
+  analyze: (id, formData) => api.post(`/submittals/${id}/analysis`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: LONG_AI_TIMEOUT,
+  }).then(r => r.data),
+  // Compares the A/E's actual review with that prediction. Runs automatically when a review is
+  // recorded; this is the retry, for when it did not.
+  compareReview: (id, revId) =>
+    api.post(`/submittals/${id}/revisions/${revId}/comparison`, {}, { timeout: AI_TIMEOUT }).then(r => r.data),
+  analysisMarkdownUrl: id => `${apiBaseUrl}/submittals/${id}/analysis.md`,
+  comparisonMarkdownUrl: id => `${apiBaseUrl}/submittals/${id}/comparison.md`,
+
   fileUrl: (id, fileId) => `${apiBaseUrl}/submittals/${id}/files/${fileId}`,
   downloadCsv: async projectId => {
     const res = await api.get('/submittals/export.csv', {
@@ -597,6 +610,7 @@ export const preconReviewApi = {
   create: formData => api.post('/precon-review', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }, timeout: LONG_AI_TIMEOUT
   }).then(r => r.data),
+  comparisonMarkdownUrl: id => `${apiBaseUrl}/precon-review/${id}/comparison.md`,
   downloadMarkdown: async (id, fileName) => {
     const res = await api.get(`/precon-review/${id}/report.md`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `precon_review_${id}.md`);

@@ -477,6 +477,25 @@ if (!db.prepare(`PRAGMA table_info(pay_app_reviews)`).all().map(c => c.name).inc
   db.exec(`ALTER TABLE pay_app_reviews ADD COLUMN delivery_method TEXT`);
 }
 
+// The proposal read against the documents it is meant to price.
+//
+// Kept beside the review rather than inside its report_json: the review is what the proposal
+// says on its own terms, and this is how it compares with the drawings and the contract. They
+// answer different questions, are produced by different passes, and either can exist without
+// the other — a comparison can be re-run against a better set of documents without disturbing
+// the review that was already delivered.
+//
+// project_id, because the documents being compared against are the project's Shared Documents.
+// The table has only ever carried a project NAME, which cannot look anything up.
+{
+  const cols = db.prepare(`PRAGMA table_info(preconstruction_reviews)`).all().map(c => c.name);
+  if (!cols.includes('project_id')) {
+    db.exec(`ALTER TABLE preconstruction_reviews ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL`);
+  }
+  if (!cols.includes('comparison_json')) db.exec(`ALTER TABLE preconstruction_reviews ADD COLUMN comparison_json TEXT`);
+  if (!cols.includes('comparison_markdown')) db.exec(`ALTER TABLE preconstruction_reviews ADD COLUMN comparison_markdown TEXT`);
+}
+
 // How a project is procured, recorded on the PROJECT.
 //
 // It started life on the pay application upload form, which was the wrong place: a job does not
@@ -928,9 +947,56 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- Which of the project's Shared Documents this submittal should be read against. The
+  -- specification is the thing a submittal is actually judged by, so this is usually the spec
+  -- book — a join table rather than a list of ids, so removing a shared document cannot leave
+  -- a submittal pointing at one that no longer exists.
+  CREATE TABLE IF NOT EXISTS submittal_documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    submittal_id INTEGER NOT NULL REFERENCES submittals(id) ON DELETE CASCADE,
+    contract_id INTEGER NOT NULL REFERENCES project_contracts(id) ON DELETE CASCADE,
+    UNIQUE (submittal_id, contract_id)
+  );
+
+  -- The predicted review. Advisory only and deliberately kept out of the log's status: it
+  -- exists so the PM knows what the A/E is likely to say — and what to fix first — while the
+  -- submittal is still on their desk, and it must never be mistaken for the A/E's actual
+  -- stamp. Stored so it is not re-run (and re-charged) every time the submittal is opened, and
+  -- so the prediction can be read back against what the A/E eventually returned.
+  CREATE TABLE IF NOT EXISTS submittal_analyses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    submittal_id INTEGER NOT NULL REFERENCES submittals(id) ON DELETE CASCADE,
+    revision_id INTEGER REFERENCES submittal_revisions(id) ON DELETE SET NULL,
+    spec_section TEXT,
+    -- What was actually read: which documents, which sheets, which pages. Recorded so the PM
+    -- can judge the prediction, and correct the selection if it read the wrong spec section.
+    sources_json TEXT,
+    analysis_json TEXT NOT NULL,
+    analysis_markdown TEXT,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  -- How the A/E's actual review compared with the one Coaster predicted. Kept separate from
+  -- the prediction rather than folded into it: the prediction records what the specification
+  -- said before the stamp came back, and overwriting it with hindsight would destroy the only
+  -- evidence of what the PM was working from at the time.
+  CREATE TABLE IF NOT EXISTS submittal_response_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    submittal_id INTEGER NOT NULL REFERENCES submittals(id) ON DELETE CASCADE,
+    revision_id INTEGER REFERENCES submittal_revisions(id) ON DELETE CASCADE,
+    analysis_id INTEGER REFERENCES submittal_analyses(id) ON DELETE SET NULL,
+    review_json TEXT NOT NULL,
+    review_markdown TEXT,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_submittals_project ON submittals(project_id);
   CREATE INDEX IF NOT EXISTS idx_submittal_revisions_submittal ON submittal_revisions(submittal_id);
   CREATE INDEX IF NOT EXISTS idx_submittal_files_submittal ON submittal_files(submittal_id);
+  CREATE INDEX IF NOT EXISTS idx_submittal_analyses_submittal ON submittal_analyses(submittal_id);
+  CREATE INDEX IF NOT EXISTS idx_submittal_reviews_submittal ON submittal_response_reviews(submittal_id);
 `);
 
 // --- RFI log ---------------------------------------------------------------------------
