@@ -1,74 +1,12 @@
 import { useState, useEffect } from 'react';
 import {
   ReceiptPercentIcon, SparklesIcon, ArrowDownTrayIcon, TrashIcon, ClockIcon, DocumentTextIcon,
-  ExclamationTriangleIcon, CheckCircleIcon, LightBulbIcon, PlusIcon,
+  ExclamationTriangleIcon, CheckCircleIcon, LightBulbIcon,
 } from '@heroicons/react/24/outline';
 import { invoiceReviewApi, payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import MultiFileDrop from '../components/MultiFileDrop';
-import Modal from '../components/Modal';
-import FileDrop from '../components/FileDrop';
-
-// Adding a contract without leaving the review. It lands in the project's Shared Documents
-// like any other, so it is available to every later review too.
-function AddContractModal({ projectId, onClose, onAdded }) {
-  const [file, setFile] = useState(null);
-  const [label, setLabel] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  // The filename is usually most of the answer, so pre-fill from it and let the PM shorten
-  // it to something that reads well in a dropdown.
-  const pickFile = f => {
-    setFile(f);
-    if (f && !label.trim()) setLabel(f.name.replace(/\.pdf$/i, '').slice(0, 60));
-  };
-
-  const save = async () => {
-    if (!file) { setError('Choose the contract PDF first.'); return; }
-    setError(''); setSaving(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      fd.append('doc_type', 'contract');
-      fd.append('label', label.trim());
-      const added = await payAppReviewApi.addDocument(projectId, fd);
-      onAdded(added);
-      onClose();
-    } catch (e) {
-      setError(e?.response?.data?.error || 'Could not add this contract.');
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Modal title="Add a contract" onClose={saving ? () => {} : onClose}>
-      <div className="space-y-4">
-        <p className="text-sm text-gray-500">
-          Its terms are read once and stored, so later reviews never re-send the PDF.
-        </p>
-        <FileDrop file={file} onChange={pickFile} accept=".pdf" label="Contract (PDF) *"
-          hint="The executed agreement — architect, general contractor, engineer · PDF" />
-        <div>
-          <label className="label">Name it</label>
-          <input className="input" value={label} onChange={e => setLabel(e.target.value)}
-            placeholder="e.g. General Contractor" />
-          <p className="text-[11px] text-gray-400 mt-1">
-            This is what you'll pick from when reviewing an invoice — short is better.
-          </p>
-        </div>
-        {error && <p className="text-sm" style={{ color: '#dc2626' }}>{error}</p>}
-        <div className="flex justify-end gap-2 pt-1">
-          <button className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
-          <button className="btn-primary" onClick={save} disabled={saving || !file}>
-            {saving ? 'Reading the contract…' : 'Add contract'}
-          </button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
 
 function money(n) {
   return typeof n === 'number' ? `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'n/a';
@@ -198,7 +136,6 @@ export default function InvoiceReview() {
   // contractor's, so the reviewer chooses rather than the app guessing.
   const [contracts, setContracts] = useState(null);
   const [contractId, setContractId] = useState('');
-  const [addingContract, setAddingContract] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);   // { id, report }
@@ -290,20 +227,18 @@ export default function InvoiceReview() {
             {/* Which agreement this invoice is measured against. First thing on the form,
                 because picking the wrong one invalidates every contract-based finding. */}
             <div className="pt-1">
-              <div className="flex items-end justify-between gap-3">
-                <label className="label mb-0">Review against which contract?</label>
-                <button type="button" className="btn-secondary px-2.5 py-1 text-xs"
-                  onClick={() => setAddingContract(true)} disabled={!routeProjectId}>
-                  <PlusIcon className="w-3.5 h-3.5" /> Add a contract
-                </button>
-              </div>
+              {/* No "add a contract" button here. Contracts are uploaded once in Shared
+                  Documents and every tool reads them from there; a second way in made it look
+                  as though this review kept its own. */}
+              <label className="label mb-0">Review against which contract?</label>
 
               {contracts === null ? (
                 <p className="text-xs text-gray-400 mt-1.5">Loading contracts…</p>
               ) : contracts.length === 0 ? (
                 <p className="text-xs mt-1.5" style={{ color: '#c2410c' }}>
-                  No contract in this project's Shared Documents yet. You can still review the invoice —
-                  the maths is checked either way — but tax and unallowable-cost findings need a contract.
+                  No contract in this project's Shared Documents yet — add one there and it will
+                  appear here. You can still review the invoice; the maths is checked either way,
+                  but tax and unallowable-cost findings need a contract.
                 </p>
               ) : (
                 <>
@@ -384,15 +319,6 @@ export default function InvoiceReview() {
           )}
         </div>
       </div>
-
-      {addingContract && (
-        <AddContractModal
-          projectId={routeProjectId}
-          onClose={() => setAddingContract(false)}
-          // Select the contract just added — it is almost certainly the one being reviewed.
-          onAdded={added => loadContracts().then(() => setContractId(String(added.id)))}
-        />
-      )}
     </div>
   );
 }
