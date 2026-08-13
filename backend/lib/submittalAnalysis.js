@@ -32,9 +32,28 @@ const INDEX_PAGES = 8;
 // The ceiling on what reaches the reviewing call, across every document together. Set by the
 // per-minute token allowance rather than the model's page limit.
 const MAX_ANALYSIS_PAGES = 18;
-// The submittal itself is the other half of the comparison and is never truncated away to
-// nothing: a product data sheet with its schedule page missing cannot be reviewed at all.
-const MIN_SUBMITTAL_PAGES = 6;
+// The contractor's package is the thing being reviewed, so ALL of it is read.
+//
+// It used to be cut to its first 6 pages, under a constant named as a minimum but used as a
+// maximum. On a real 28-page water-line package — cover sheet, four pages of the specification
+// reprinted, then thirteen product data sheets for pipe, fittings, restraints, valves and a
+// hydrant — the cut landed exactly at the end of the spec reprint. Every data sheet in the
+// package was invisible, and the review reported them "not provided" with complete confidence
+// and a Rejected stamp. A wrong answer delivered confidently is worse than no answer.
+//
+// A package short enough to send whole is sent whole. A longer one is read in chunks, each
+// chunk producing a compact inventory of what is actually in it, and the reviewing call is
+// given every chunk's inventory alongside the specification. Length changes how the package is
+// read; it never changes whether a page is read at all.
+//
+// No page is dropped on a guess about its content, either. A near-empty page looks like a tab
+// divider and looks identical to a scanned page with no text layer — and dropping the second
+// kind is the very mistake being fixed here.
+const PACKAGE_DIRECT_PAGES = 12;
+const PACKAGE_CHUNK_PAGES = 12;
+// A ceiling exists because the per-minute allowance is real, but it is stated in the report
+// rather than applied quietly. Silent truncation is what produced the wrong answer above.
+const MAX_PACKAGE_CHUNKS = 40;
 // Sections are found by name and extracted by page number, and that mapping is inferred.
 const PAGE_WINDOW = 1;
 
@@ -80,6 +99,57 @@ const SECTION_PICKER_TOOL = {
       },
     },
     required: ['hasContents', 'sectionFound'],
+  },
+};
+
+// What a slice of the contractor's package actually contains. Deliberately a plain listing and
+// not a judgement: this call is not asked whether anything complies, only what is on the pages,
+// so that the one call that does judge can see the whole package at once instead of a twelfth
+// of it. The page numbers make the answer checkable — a PM can turn to the page and look.
+const PACKAGE_INVENTORY_TOOL = {
+  name: 'report_package_contents',
+  description: 'List what these pages of a contractor submittal package actually contain.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      items: {
+        type: 'array',
+        description: 'Every product, material or component these pages carry data for, one '
+          + 'entry each. Include a product even when its data sheet is partial.',
+        items: {
+          type: 'object',
+          properties: {
+            item: { type: 'string', description: 'What it is — "4in PVC water pipe", "gate valve".' },
+            manufacturer: { type: 'string' },
+            model: { type: 'string', description: 'Model, series or catalogue number as printed.' },
+            standards: {
+              type: 'array',
+              description: 'Standards and specifications the page cites — "AWWA C900", "ASTM D2241", "SDR 21".',
+              items: { type: 'string' },
+            },
+            ratingsAndSizes: {
+              type: 'string',
+              description: 'Pressure ratings, sizes, classes, dimensions and materials as printed. '
+                + 'Copy the figures; they are what the specification gets compared against.',
+            },
+            page: { type: 'integer', description: 'Page of this document where it appears.' },
+          },
+          required: ['item'],
+        },
+      },
+      certificates: {
+        type: 'array',
+        description: 'Certificates, manufacturer letters, test reports, warranties and approval '
+          + 'stamps present on these pages, named as printed. Empty if there are none.',
+        items: { type: 'string' },
+      },
+      otherContent: {
+        type: 'string',
+        description: 'Anything on these pages that is not product data — a cover or transmittal '
+          + 'sheet, a reprint of the specification, a tab divider, a drawing. One line.',
+      },
+    },
+    required: ['items'],
   },
 };
 
@@ -328,7 +398,130 @@ async function selectFrom({ doc, submittal, budget }) {
   };
 }
 
-function buildReviewPrompt({ submittal, selections, submittalPages }) {
+// Reads one file of the contractor's package end to end, a chunk at a time, and returns what is
+// in it. Every page reaches a call; only how many calls it takes varies with length.
+// A data-sheet-dense chunk can list more than fits in one answer. Twelve pages of Westlake and
+// Star Pipe tables ran out of room at 2,000 tokens and the whole chunk was thrown away — the
+// same blindness this file exists to remove, arriving by a different door. So a truncated answer
+// halves the slice and reads both halves rather than giving up on either.
+const INVENTORY_MAX_TOKENS = 4000;
+const truncated = err => !!err?.truncated || /cut off before it finished/i.test(err?.message || '');
+
+async function inventoryPackage({ file, submittal, totalPages, startChunk }) {
+  const inventory = { items: [], certificates: [], notes: [] };
+  let chunks = 0;
+
+  const readSlice = async (first, last) => {
+    if (first > last) return;
+    const slice = await extractPages(
+      file.buffer, Array.from({ length: last - first + 1 }, (_, i) => first + i));
+    if (!slice) return;
+    chunks += 1;
+
+    const prompt = `You are cataloguing part of a contractor's submittal package so that it can be
+reviewed against the specification.
+
+These are pages ${first} to ${last} of "${file.label}" — a package of ${totalPages} pages for
+submittal ${submittal.submittal_number}: ${submittal.description}.
+
+List what is on THESE pages with the report_package_contents tool.
+
+Rules:
+- You are not judging compliance and not comparing anything to a specification. Only report
+  what is here. Something else reads the whole package at once and does the judging.
+- Copy figures as printed — pressure ratings, classes, SDR and DR numbers, sizes, standards.
+  Those exact values are what the specification is measured against later, so a paraphrase
+  loses the answer.
+- Number the pages you were given 1, 2, 3 ... in the order they appear here. They are
+  renumbered against the whole package afterwards, so count from 1 every time.
+- A cover sheet, a transmittal, a tab divider or a reprint of the specification is not a
+  product: put it in "otherContent" and leave "items" for actual products.
+- An empty "items" list is the right answer for pages that carry no product data.`;
+
+    try {
+      const { data } = await askForJson({
+        content: [asDocument(slice.buffer), { type: 'text', text: prompt }],
+        tool: PACKAGE_INVENTORY_TOOL,
+        maxTokens: INVENTORY_MAX_TOKENS,
+        label: `submittal package pages ${first}-${last}`,
+      });
+      for (const it of (data.items || [])) {
+        if (!it || !it.item) continue;
+        // The model counts from 1 within its own slice; the PM counts from 1 within the package.
+        // Left unconverted, a hydrant on page 26 was reported as being on page 2.
+        const within = Number(it.page);
+        const page = Number.isInteger(within) && within >= 1 && within <= (last - first + 1)
+          ? first + within - 1
+          : first;
+        inventory.items.push({ ...it, page });
+      }
+      for (const c of (data.certificates || [])) if (c) inventory.certificates.push(c);
+      if (data.otherContent) inventory.notes.push(`pp. ${first}-${last}: ${data.otherContent}`);
+    } catch (err) {
+      if (truncated(err) && last > first) {
+        const mid = Math.floor((first + last) / 2);
+        await readSlice(first, mid);
+        await readSlice(mid + 1, last);
+        return;
+      }
+      // One unreadable page must not cost the rest of the package. It is recorded so the review
+      // can say what it did not see, rather than assuming it saw everything.
+      console.warn(`[submittal analysis] pages ${first}-${last} of ${file.label} could not be read: ${err.message}`);
+      inventory.notes.push(`pp. ${first}-${last}: could not be read (${err.message}).`);
+    }
+  };
+
+  for (let first = 1; first <= totalPages; first += PACKAGE_CHUNK_PAGES) {
+    if (startChunk + chunks >= MAX_PACKAGE_CHUNKS) {
+      inventory.stoppedAt = first - 1;
+      break;
+    }
+    await readSlice(first, Math.min(first + PACKAGE_CHUNK_PAGES - 1, totalPages));
+  }
+
+  inventory.items.sort((a, b) => a.page - b.page);
+  return { inventory, chunks };
+}
+
+// The inventory as the reviewing call sees it. Plain text, because it is evidence handed to the
+// model rather than a schema it fills in.
+// A page that does not print a manufacturer draws "not specified" or "<UNKNOWN>" out of the
+// model, and passing that on reads as though the package named a product called Not Specified.
+// Saying nothing is the honest rendering of nothing.
+const BLANKS = /^(<?\s*unknown\s*>?|not\s+(specified|listed|given|provided|stated)|unspecified|none|n\/?a|-+)$/i;
+const said = v => (typeof v === 'string' && v.trim() && !BLANKS.test(v.trim()) ? v.trim() : null);
+
+function renderInventory(entries) {
+  const L = [];
+  for (const { label, totalPages, inventory } of entries) {
+    L.push(`"${label}" — ${totalPages} pages, all of them read.`);
+    if (inventory.items.length) {
+      L.push('  Products with data in the package:');
+      for (const it of inventory.items) {
+        const bits = [said(it.manufacturer), said(it.model)].filter(Boolean).join(' ');
+        const std = (it.standards || []).map(said).filter(Boolean).join(', ');
+        const ratings = said(it.ratingsAndSizes);
+        L.push(`    - p.${it.page} ${it.item}${bits ? ` — ${bits}` : ''}`
+          + `${std ? ` [${std}]` : ''}${ratings ? ` — ${ratings}` : ''}`);
+      }
+    } else {
+      L.push('  No product data was found anywhere in this file.');
+    }
+    if (inventory.certificates.length) {
+      L.push(`  Certificates and letters present: ${inventory.certificates.join('; ')}`);
+    } else {
+      L.push('  No certificates, manufacturer letters or test reports were found.');
+    }
+    for (const n of inventory.notes) L.push(`  ${n}`);
+    if (inventory.stoppedAt) {
+      L.push(`  NOT READ: pages after ${inventory.stoppedAt} — the package exceeded what one `
+        + 'review can read in a single pass.');
+    }
+  }
+  return L.join('\n');
+}
+
+function buildReviewPrompt({ submittal, selections, submittalPages, inventoryText }) {
   const read = selections.map((s) => {
     const what = s.wholeDocument ? 'read in full'
       : s.sections?.length ? `section${s.sections.length === 1 ? '' : 's'} ${s.sections.map(x => x.sectionNumber).filter(Boolean).join(', ')}`
@@ -336,11 +529,24 @@ function buildReviewPrompt({ submittal, selections, submittalPages }) {
     return `  - ${s.label} (${what})${s.note ? ` — ${s.note}` : ''}`;
   }).join('\n') || '  (none)';
 
+  // Two ways the package reaches this call: attached as pages when it is short enough, or as a
+  // catalogue of its whole contents when it is not. The prompt has to say which, because
+  // "not in the attachments" and "not in the package" are different statements and only the
+  // second one belongs in a report.
+  const packageSection = inventoryText
+    ? `WHAT IS IN THE CONTRACTOR'S PACKAGE
+The package was too long to attach whole, so every page of it was read and catalogued first.
+This is the complete catalogue — treat it as the package itself:
+
+${inventoryText}
+
+Only the specification pages are attached below.`
+    : `The contractor's package is the first ${submittalPages || 'few'} page(s) attached, in full.`;
+
   return `You are advising the owner's project manager on a construction submittal that is about
 to go to the architect/engineer (A/E) for review.
 
-The contractor's submittal is attached first, followed by the specification pages that govern
-it. Read the submittal against the specification and predict how the A/E will review it.
+Read the submittal against the specification and predict how the A/E will review it.
 
 THE SUBMITTAL
 Number: ${submittal.submittal_number}
@@ -349,7 +555,7 @@ Specification section: ${submittal.spec_section || 'not recorded'}
 Type: ${submittal.submittal_type || 'not recorded'}
 Supplier / manufacturer: ${submittal.vendor || 'not recorded'}
 ${submittal.notes ? `PM's notes: ${submittal.notes}\n` : ''}
-The contractor's package is the first ${submittalPages || 'few'} page(s) attached.
+${packageSection}
 
 SPECIFICATION READ AGAINST IT
 ${read}
@@ -357,6 +563,11 @@ ${read}
 Record your prediction with the report_predicted_review tool.
 
 Rules:
+- What you were given IS the package, all of it. Do not report a product data sheet, a cut
+  sheet or a certificate as missing when it is listed above — that is the single most damaging
+  mistake this review can make, because it sends the PM back to a contractor who already
+  supplied the thing. If something genuinely is absent, say so; if you are unsure whether it
+  is absent or merely unclear, say that instead.
 - The value of this is the DEVIATIONS, and they are worth more the earlier they are found. A
   missing certificate found today costs an email; found after the A/E stamps it, it costs a
   resubmittal and three weeks. List every real departure, with the requirement and what was
@@ -481,34 +692,45 @@ async function analyzeSubmittal({ submittal, documents = [], submittalFiles = []
   const selections = [];
   let budget = MAX_ANALYSIS_PAGES;
 
-  // The contractor's own package comes first and gets its pages before the specification does.
-  // A review that read the whole spec and none of the submittal has nothing to compare.
+  // The contractor's own package comes first and is read end to end. A short one is attached
+  // whole; a long one is catalogued chunk by chunk and the catalogue stands in for it. Either
+  // way every page is read — what changes with length is the route, not the coverage.
   const packageBlocks = [];
+  const inventories = [];
   let submittalPages = 0;
+  let chunksSpent = 0;
+
   for (const f of submittalFiles.slice(0, 2)) {
     const total = await pageCount(f.buffer);
-    if (total != null && total > MIN_SUBMITTAL_PAGES) {
-      const cut = await extractPages(f.buffer, Array.from({ length: MIN_SUBMITTAL_PAGES }, (_, i) => i + 1));
-      if (cut) {
-        packageBlocks.push(asDocument(cut.buffer));
-        submittalPages += cut.pages.length;
-        budget -= cut.pages.length;
-        selections.push({
-          label: `${f.label} (the contractor's package)`, docType: 'submittal',
-          pagesUsed: cut.pages.length, wholeDocument: false, sections: [],
-          note: `only the first ${MIN_SUBMITTAL_PAGES} pages were read`,
-        });
-        continue;
-      }
+
+    if (total == null || total <= PACKAGE_DIRECT_PAGES) {
+      packageBlocks.push(asDocument(f.buffer));
+      submittalPages += total || 0;
+      budget -= total || 1;
+      selections.push({
+        label: `${f.label} (the contractor's package)`, docType: 'submittal',
+        pagesUsed: total, wholeDocument: true, sections: [], note: null,
+      });
+      continue;
     }
-    packageBlocks.push(asDocument(f.buffer));
-    submittalPages += total || 0;
-    budget -= total || 1;
+
+    const { inventory, chunks } = await inventoryPackage({
+      file: f, submittal, totalPages: total, startChunk: chunksSpent,
+    });
+    chunksSpent += chunks;
+    inventories.push({ label: f.label, totalPages: total, inventory });
     selections.push({
       label: `${f.label} (the contractor's package)`, docType: 'submittal',
-      pagesUsed: total, wholeDocument: true, sections: [], note: null,
+      pagesUsed: inventory.stoppedAt || total, wholeDocument: !inventory.stoppedAt, sections: [],
+      note: inventory.stoppedAt
+        ? `pages 1-${inventory.stoppedAt} of ${total} were read and catalogued; the rest could `
+          + 'not be reached in one pass'
+        : `all ${total} pages were read and catalogued (${chunks} passes), and the catalogue was `
+          + 'read against the specification',
     });
   }
+
+  const inventoryText = inventories.length ? renderInventory(inventories) : null;
 
   const specBlocks = [];
   for (const doc of documents) {
@@ -526,14 +748,14 @@ async function analyzeSubmittal({ submittal, documents = [], submittalFiles = []
     selections.push(rest);
   }
 
-  if (!packageBlocks.length && !specBlocks.length) {
+  if (!packageBlocks.length && !inventories.length && !specBlocks.length) {
     const err = new Error('There was nothing to read — attach the submittal, or choose a '
       + 'specification for it to be read against.');
     err.status = 400;
     throw err;
   }
 
-  const prompt = buildReviewPrompt({ submittal, selections, submittalPages });
+  const prompt = buildReviewPrompt({ submittal, selections, submittalPages, inventoryText });
   const ask = blocks => askForJson({
     content: blocks,
     tool: REVIEW_TOOL,
