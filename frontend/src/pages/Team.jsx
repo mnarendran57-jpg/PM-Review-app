@@ -511,13 +511,13 @@ function FirmModal({ onClose, onSaved }) {
   );
 }
 
-// One customer, as the platform owner needs to see them: who runs it, what they are paying for,
+// One customer, as the platform owner needs to see them: who is in it, what they are paying for,
 // and how much of the product they can reach.
 //
-// Administrators only, deliberately. The owner's question is who is accountable for each customer
-// and whether that list is right; the roll of everyone inside a customer is their own admin's
-// business, and putting a hundred names here would bury the six that matter. The member count is
-// shown so the owner can see a customer is populated without reading its staff list.
+// Everyone, not only the administrators. The card once listed admins and reduced the rest to a
+// count, which read as though a populated organization were empty — Olivier showed "0 other
+// members" beside three people. Administrators sort first, because they are still the ones the
+// owner is accountable to.
 function OrganizationCard({ org, onChanged, onPlan, confirm, setError }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(undefined);   // undefined closed, null new
@@ -525,10 +525,11 @@ function OrganizationCard({ org, onChanged, onPlan, confirm, setError }) {
   const [inviting, setInviting] = useState(false);
 
   const admins = org.admins || [];
+  const people = org.members || admins;
 
-  const removeAdmin = async (person) => {
+  const removePerson = async (person) => {
     const ok = await confirm({
-      title: 'Remove administrator',
+      title: 'Remove person',
       message: `Remove ${person.name || person.email} from ${org.name}? They keep their account and `
         + 'any access to other organizations.',
       confirmLabel: 'Remove',
@@ -536,7 +537,7 @@ function OrganizationCard({ org, onChanged, onPlan, confirm, setError }) {
     if (!ok) return;
     setError('');
     try { await adminApi.removeMember(person.user_id, org.id); onChanged(); }
-    catch (e) { setError(e?.response?.data?.error || 'Could not remove this administrator.'); }
+    catch (e) { setError(e?.response?.data?.error || 'Could not remove this person.'); }
   };
 
   return (
@@ -553,7 +554,7 @@ function OrganizationCard({ org, onChanged, onPlan, confirm, setError }) {
             </span>
           </div>
           <p className="text-[11px] text-gray-400 mt-1">
-            {org.member_count_non_admin} other member{org.member_count_non_admin === 1 ? '' : 's'} ·
+            {people.length} {people.length === 1 ? 'person' : 'people'} ·
             {' '}{org.program_count} program{org.program_count === 1 ? '' : 's'} ·
             {' '}{org.project_count} project{org.project_count === 1 ? '' : 's'}
           </p>
@@ -577,16 +578,17 @@ function OrganizationCard({ org, onChanged, onPlan, confirm, setError }) {
               Nobody administers this organization. Its people cannot be managed until someone does.
             </p>
           )}
-          {admins.map(a => (
+          {people.map(a => (
             <div key={a.user_id} className="flex items-center justify-between gap-3 py-1.5">
               <div className="min-w-0">
-                <p className="text-sm text-gray-900 truncate">
-                  {a.name || '—'}
+                <p className="text-sm text-gray-900 truncate flex items-center gap-2">
+                  <span className="truncate">{a.name || '—'}</span>
+                  <RoleBadge role={a.role} />
                   {a.status !== 'Active' && (
-                    <span className="ml-2 text-[11px] font-semibold" style={{ color: '#b91c1c' }}>disabled</span>
+                    <span className="text-[11px] font-semibold" style={{ color: '#b91c1c' }}>disabled</span>
                   )}
                   {a.is_platform_admin ? (
-                    <span className="ml-2 text-[11px] text-gray-400">Coaster</span>
+                    <span className="text-[11px] text-gray-400">Coaster</span>
                   ) : null}
                 </p>
                 <p className="text-xs text-gray-400 truncate">{a.email}</p>
@@ -601,7 +603,7 @@ function OrganizationCard({ org, onChanged, onPlan, confirm, setError }) {
                   <PencilIcon className="w-4 h-4" />
                 </button>
                 <button className="btn-danger" title="Remove from this organization"
-                  onClick={() => removeAdmin(a)}>
+                  onClick={() => removePerson(a)}>
                   <TrashIcon className="w-4 h-4" />
                 </button>
               </div>
@@ -610,7 +612,7 @@ function OrganizationCard({ org, onChanged, onPlan, confirm, setError }) {
 
           <div className="flex gap-2 pt-2">
             <button className="btn-secondary px-2.5 py-1 text-xs" onClick={() => setEditing(null)}>
-              <PlusIcon className="w-4 h-4" /> Add administrator
+              <PlusIcon className="w-4 h-4" /> Add member
             </button>
             <button className="btn-secondary px-2.5 py-1 text-xs" onClick={() => setInviting(true)}>
               <EnvelopeIcon className="w-4 h-4" /> Invite one
@@ -623,7 +625,6 @@ function OrganizationCard({ org, onChanged, onPlan, confirm, setError }) {
         <PersonModal
           person={editing}
           orgId={org.id}
-          fixedRole={editing ? undefined : 'Admin'}
           onClose={() => setEditing(undefined)}
           onSaved={() => { setEditing(undefined); onChanged(); }}
         />
@@ -633,7 +634,7 @@ function OrganizationCard({ org, onChanged, onPlan, confirm, setError }) {
           onClose={() => setAccessFor(null)} onSaved={onChanged} />
       )}
       {inviting && (
-        <InviteModal orgId={org.id} fixedRole="Admin"
+        <InviteModal orgId={org.id}
           onClose={() => setInviting(false)} onSent={onChanged} />
       )}
     </div>
@@ -661,6 +662,7 @@ function OwnerTeam() {
   useEffect(() => { load(); }, []);
 
   const totalAdmins = (orgs || []).reduce((a, o) => a + (o.admins?.length || 0), 0);
+  const totalPeople = (orgs || []).reduce((a, o) => a + (o.members?.length || 0), 0);
   const unmanned = (orgs || []).filter(o => !(o.admins?.length));
 
   return (
@@ -668,8 +670,8 @@ function OwnerTeam() {
       <PageHeader
         icon={BuildingOffice2Icon}
         accent="blue"
-        title="Organizations"
-        subtitle="Every customer on Coaster, who administers them, and what they can reach"
+        title="Teams"
+        subtitle="Every customer on Coaster, who is in them, and what they can reach"
         actions={(
           <button className="btn-primary" onClick={() => setAddingOrg(true)}>
             <PlusIcon className="w-4 h-4" /> Add organization
@@ -718,19 +720,20 @@ function OwnerTeam() {
             <h3 className="text-sm font-semibold text-gray-900 mb-2">At a glance</h3>
             <div className="space-y-1.5 text-xs text-gray-500">
               <p>{orgs?.length ?? '·'} organization{orgs?.length === 1 ? '' : 's'} on Coaster</p>
-              <p>{totalAdmins} administrator{totalAdmins === 1 ? '' : 's'} between them</p>
+              <p>{totalPeople} {totalPeople === 1 ? 'person' : 'people'} between them</p>
+              <p>{totalAdmins} of them administrator{totalAdmins === 1 ? '' : 's'}</p>
             </div>
           </div>
           <div className="card p-5">
             <h3 className="text-sm font-semibold text-gray-900 mb-2">Who manages whom</h3>
             <p className="text-xs text-gray-500 leading-relaxed">
-              You add and remove the <span className="font-medium text-gray-700">administrators</span> of
-              each organization, and set what their plan includes.
+              You can add and remove <span className="font-medium text-gray-700">anyone</span> in
+              any organization, and set what their plan includes. This page is not tied to whichever
+              organization you have selected elsewhere.
             </p>
             <p className="text-xs text-gray-500 leading-relaxed mt-2">
-              Each administrator then manages the people inside their own organization — adding
-              members, promoting them, and setting which projects they see. They cannot see any
-              other customer.
+              Day to day, each organization's own administrator manages its people — adding members,
+              promoting them, and setting which projects they see. They cannot see any other customer.
             </p>
           </div>
         </div>

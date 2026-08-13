@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   InboxArrowDownIcon, ArrowRightOnRectangleIcon, DocumentMagnifyingGlassIcon,
   ClipboardDocumentCheckIcon, Squares2X2Icon, ScaleIcon, ArrowLeftIcon,
@@ -128,6 +128,13 @@ export default function Sidebar() {
   // offering underneath it. When the link above already says "Switch program", it is not.
   const canChangeProgram = switchTarget?.level === 'org' && switchTarget.counts.programs > 1;
 
+  // Team spans every organization for the platform owner, so naming one of them in the sidebar
+  // while that page lists them all says the page is scoped when it isn't — and invites the
+  // reasonable but wrong conclusion that "add member" would land in whichever one is shown.
+  // Everyone else has exactly one organization in view here, so the heading still tells the truth.
+  const { pathname } = useLocation();
+  const orgScoped = !(pathname.startsWith('/team') && authApi.user()?.isPlatformAdmin);
+
   const handleLogout = () => {
     authApi.logout();
     navigate('/login', { replace: true });
@@ -190,7 +197,7 @@ export default function Sidebar() {
         ) : (
           <>
             {/* Where the user currently is in the hierarchy, and a way back up it. */}
-            {org && (
+            {org && orgScoped && (
               <div className="px-2 pt-4 pb-3">
                 {switchTarget && (
                   <button onClick={() => navigate(switchTarget.to)}
