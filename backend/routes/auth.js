@@ -26,6 +26,7 @@ function issueToken(user) {
 function publicUser(user) {
   return {
     id: user.id, email: user.email, name: user.name,
+    address: user.address ?? null, company: user.company ?? null, phone: user.phone ?? null,
     role: user.role, isPlatformAdmin: user.role === 'superadmin',
   };
 }
@@ -70,6 +71,67 @@ router.get('/me', (req, res) => {
   const user = userFromToken(req);
   if (!user) return res.status(401).json({ error: 'Login required' });
   res.json({ user: publicUser(user), organizations: access.orgsForUser(user) });
+});
+
+// A person's own details. Everything here belongs to the ACCOUNT rather than to an
+// organization, which is why it is edited from a personal settings page and not from the Team
+// tab: a consultant working with two customers has one name, one address and one login, and
+// neither customer's admin should be reaching into it.
+router.patch('/profile', async (req, res) => {
+  const user = userFromToken(req);
+  if (!user) return res.status(401).json({ error: 'Login required' });
+
+  const text = v => (v === undefined ? undefined : (String(v).trim() || null));
+  const name = text(req.body.name);
+  const address = text(req.body.address);
+  const company = text(req.body.company);
+  const phone = text(req.body.phone);
+
+  // The email is the sign-in credential, so it is treated as one. Changing it needs the current
+  // password — the same protection changing the password itself gets — because an unattended
+  // session would otherwise be enough to move somebody's account to an address they control.
+  let email;
+  if (req.body.email !== undefined) {
+    const wanted = String(req.body.email).trim().toLowerCase();
+    if (wanted && wanted !== user.email) {
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(wanted)) {
+        return res.status(400).json({ error: 'That does not look like an email address.' });
+      }
+      if (!(await bcrypt.compare(req.body.current_password || '', user.password_hash || ''))) {
+        return res.status(401).json({
+          error: 'Enter your current password to change the email you sign in with.',
+        });
+      }
+      const taken = db.prepare(`SELECT 1 FROM users WHERE lower(email)=? AND id<>?`).get(wanted, user.id);
+      if (taken) return res.status(409).json({ error: 'Another account already uses that email.' });
+      email = wanted;
+    }
+  }
+
+  db.prepare(`
+    UPDATE users SET
+      name = COALESCE(?, name), address = COALESCE(?, address),
+      company = COALESCE(?, company), phone = COALESCE(?, phone),
+      email = COALESCE(?, email)
+    WHERE id = ?
+  `).run(
+    name === undefined ? null : name, address === undefined ? null : address,
+    company === undefined ? null : company, phone === undefined ? null : phone,
+    email ?? null, user.id
+  );
+
+  // COALESCE keeps a field that was not sent, but it also keeps one deliberately CLEARED. So a
+  // field the caller explicitly set to empty is nulled in a second pass — "" and "not mentioned"
+  // are different instructions and the first one has to survive.
+  const clear = [];
+  if (name === null) clear.push('name');
+  if (address === null) clear.push('address');
+  if (company === null) clear.push('company');
+  if (phone === null) clear.push('phone');
+  for (const col of clear) db.prepare(`UPDATE users SET ${col}=NULL WHERE id=?`).run(user.id);
+
+  const fresh = db.prepare(`SELECT * FROM users WHERE id=?`).get(user.id);
+  res.json({ user: publicUser(fresh), emailChanged: !!email });
 });
 
 // Changing your own password requires proving you know the current one.

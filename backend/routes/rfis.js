@@ -24,13 +24,25 @@ const upload = multer({
   limits: { fileSize: 200 * 1024 * 1024, files: 6 },
 });
 
-// How long the A/E gets before an RFI counts as overdue. Ten days by convention, and it comes
-// from the specifications, so it is a project-wide setting rather than a per-RFI field.
-function reviewDays() {
+// How long the A/E gets before this counts as overdue.
+//
+// It comes from the PROJECT's specification, so it is a project field first. Two specifications
+// on two jobs routinely disagree, and a single organization-wide number quietly applied the wrong
+// deadline to one of them. Falling back in order: the project, the organization's default, then
+// the convention — never to zero, which would mark everything overdue the day it was logged.
+function reviewDays(projectId) {
+  if (projectId) {
+    const project = db.prepare(`SELECT rfi_response_days AS days FROM projects WHERE id=?`).get(projectId);
+    const own = parseInt(project?.days ?? '', 10);
+    if (Number.isFinite(own) && own > 0) return own;
+  }
   const row = db.prepare(`SELECT value FROM settings WHERE key='rfi_response_days'`).get();
   const days = parseInt(row?.value ?? '', 10);
   return Number.isFinite(days) && days > 0 ? days : 10;
 }
+
+// The options every log row is built with, resolved from the row's own project.
+const optionsFor = row => ({ reviewDays: reviewDays(row?.project_id), today: todayUtc() });
 
 function projectInScope(req, projectId) {
   if (!projectId) return null;
@@ -250,9 +262,10 @@ router.get('/', (req, res) => {
   const params = [...scope.params];
   if (req.query.project_id) { sql += ' AND project_id = ?'; params.push(req.query.project_id); }
 
-  const options = { reviewDays: reviewDays(), today: todayUtc() };
+  // Per row, not per page. A log filtered to one project could use one number, but an
+  // unfiltered one spans jobs whose specifications set different deadlines.
   const rows = db.prepare(sql).all(...params).map(row => ({
-    ...buildLogRow(row, revisionsOf(row.id), options),
+    ...buildLogRow(row, revisionsOf(row.id), optionsFor(row)),
     // Only whether a prediction exists — the analysis itself is far too big for a log row.
     hasAnalysis: !!db.prepare(`SELECT 1 FROM rfi_analyses WHERE rfi_id=? LIMIT 1`).get(row.id),
   }));
@@ -260,7 +273,11 @@ router.get('/', (req, res) => {
   rows.sort((a, b) => String(a.rfi_number || '')
     .localeCompare(String(b.rfi_number || ''), undefined, { numeric: true, sensitivity: 'base' }));
 
-  res.json({ rfis: rows, summary: summarize(rows), reviewDays: options.reviewDays, disciplines: DISCIPLINES });
+  res.json({
+    rfis: rows, summary: summarize(rows),
+    reviewDays: reviewDays(req.query.project_id || null),
+    disciplines: DISCIPLINES,
+  });
 });
 
 const CSV_COLUMNS = [
@@ -296,9 +313,10 @@ router.get('/export.csv', (req, res) => {
   const params = [...scope.params];
   if (req.query.project_id) { sql += ' AND project_id = ?'; params.push(req.query.project_id); }
 
-  const options = { reviewDays: reviewDays(), today: todayUtc() };
+  // Per row, not per page. A log filtered to one project could use one number, but an
+  // unfiltered one spans jobs whose specifications set different deadlines.
   const rows = db.prepare(sql).all(...params)
-    .map(row => buildLogRow(row, revisionsOf(row.id), options))
+    .map(row => buildLogRow(row, revisionsOf(row.id), optionsFor(row)))
     .sort((a, b) => String(a.rfi_number || '')
       .localeCompare(String(b.rfi_number || ''), undefined, { numeric: true, sensitivity: 'base' }));
 
@@ -314,7 +332,7 @@ router.get('/export.csv', (req, res) => {
 router.get('/:id', (req, res) => {
   const row = visibleRfi(req);
   if (!row) return res.status(404).json({ error: 'Not found' });
-  res.json(detail(row, { reviewDays: reviewDays(), today: todayUtc() }));
+  res.json(detail(row, optionsFor(row)));
 });
 
 // --- Entering an RFI ----------------------------------------------------------------------
@@ -416,7 +434,8 @@ router.post('/', upload.array('files', 6), async (req, res) => {
       VALUES (?, 0, ?, ?, ?)
     `).run(
       rfiId, dateReceived, dateForwarded,
-      nullable(req.body.date_response_due) || dueDateFor({ date_forwarded: dateForwarded }, reviewDays())
+      nullable(req.body.date_response_due)
+        || dueDateFor({ date_forwarded: dateForwarded }, reviewDays(project.id))
     );
 
     setDocuments(rfiId, project.id, req.body.document_ids);
@@ -450,7 +469,7 @@ router.post('/', upload.array('files', 6), async (req, res) => {
     }
 
     res.json(detail(db.prepare(`SELECT * FROM rfis WHERE id=?`).get(rfiId),
-      { reviewDays: reviewDays(), today: todayUtc() }));
+      optionsFor({ project_id: project.id })));
   } catch (err) {
     console.error('RFI create error:', err);
     res.status(500).json({ error: err.message });
@@ -482,8 +501,7 @@ router.patch('/:id', (req, res) => {
 
   if ('document_ids' in req.body) setDocuments(row.id, row.project_id, req.body.document_ids);
 
-  res.json(detail(db.prepare(`SELECT * FROM rfis WHERE id=?`).get(row.id),
-    { reviewDays: reviewDays(), today: todayUtc() }));
+  res.json(detail(db.prepare(`SELECT * FROM rfis WHERE id=?`).get(row.id), optionsFor(row)));
 });
 
 router.delete('/:id', async (req, res) => {
@@ -527,7 +545,8 @@ router.post('/:id/revisions', upload.array('files', 6), async (req, res) => {
       VALUES (?, ?, ?, ?, ?)
     `).run(
       rfi.id, (current?.revision_number ?? -1) + 1, dateReceived, dateForwarded,
-      nullable(req.body.date_response_due) || dueDateFor({ date_forwarded: dateForwarded }, reviewDays())
+      nullable(req.body.date_response_due)
+        || dueDateFor({ date_forwarded: dateForwarded }, reviewDays(rfi.project_id))
     );
 
     for (const [index, file] of (req.files || []).entries()) {
@@ -538,7 +557,7 @@ router.post('/:id/revisions', upload.array('files', 6), async (req, res) => {
     }
     touch(rfi.id);
 
-    res.json(detail(rfi, { reviewDays: reviewDays(), today: todayUtc() }));
+    res.json(detail(rfi, optionsFor(rfi)));
   } catch (err) {
     console.error('RFI revision error:', err);
     res.status(500).json({ error: err.message });
@@ -553,7 +572,8 @@ router.patch('/:id/revisions/:revId', (req, res) => {
   const dateForwarded = pick('date_forwarded', revision.date_forwarded);
   const due = 'date_response_due' in req.body && nullable(req.body.date_response_due)
     ? nullable(req.body.date_response_due)
-    : dueDateFor({ date_forwarded: dateForwarded }, reviewDays()) || revision.date_response_due;
+    : dueDateFor({ date_forwarded: dateForwarded }, reviewDays(rfi.project_id))
+      || revision.date_response_due;
 
   db.prepare(`
     UPDATE rfi_revisions SET date_received=?, date_forwarded=?, date_response_due=?,
@@ -562,7 +582,7 @@ router.patch('/:id/revisions/:revId', (req, res) => {
   `).run(pick('date_received', revision.date_received), dateForwarded, due, revision.id);
 
   touch(rfi.id);
-  res.json(detail(rfi, { reviewDays: reviewDays(), today: todayUtc() }));
+  res.json(detail(rfi, optionsFor(rfi)));
 });
 
 // Reads the A/E's written response so the form opens pre-filled. Saves nothing.
@@ -604,7 +624,8 @@ router.post('/:id/revisions/:revId/response', upload.single('file'), async (req,
     `).run(
       action, nullable(req.body.responded_by), nullable(req.body.response_notes), dateReturned,
       dateForwarded,
-      revision.date_response_due || dueDateFor({ date_forwarded: dateForwarded }, reviewDays()),
+      revision.date_response_due
+        || dueDateFor({ date_forwarded: dateForwarded }, reviewDays(rfi.project_id)),
       revision.id
     );
 
@@ -626,7 +647,7 @@ router.post('/:id/revisions/:revId/response', upload.single('file'), async (req,
       reviewError = friendlyAiError(err);
     }
 
-    const record = detail(rfi, { reviewDays: reviewDays(), today: todayUtc() });
+    const record = detail(rfi, optionsFor(rfi));
     res.json({
       ...record,
       reviewError,
@@ -734,7 +755,7 @@ router.post('/:id/revisions/:revId/review', async (req, res) => {
     }
 
     await runResponseReview(req, rfi, revision);
-    res.json(detail(rfi, { reviewDays: reviewDays(), today: todayUtc() }));
+    res.json(detail(rfi, optionsFor(rfi)));
   } catch (err) {
     console.error('RFI response review error:', err);
     res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });

@@ -62,6 +62,15 @@ router.get('/:id', (req, res) => {
 // subcontract behind each of them — so a review told the wrong one reports paperwork missing that
 // was never going to exist. Anything unrecognised is stored as null rather than guessed at, which
 // makes the review say it does not know instead of assuming.
+// How long the A/E gets before an RFI or submittal counts as overdue on THIS job. It comes from
+// the project's specification, so it is a project field; blank means fall back to the
+// organization's default rather than to zero, which would mark everything overdue on day one.
+const reviewWindow = (v) => {
+  if (v === undefined || v === null || String(v).trim() === '') return null;
+  const days = parseInt(String(v), 10);
+  return Number.isFinite(days) && days > 0 && days <= 365 ? days : null;
+};
+
 const DELIVERY_METHODS = ['CSP', 'CMAR'];
 const deliveryMethod = (v) => {
   const up = String(v || '').trim().toUpperCase();
@@ -114,7 +123,24 @@ router.post('/', requireOrgAdmin, (req, res) => {
   res.json({ id: result.lastInsertRowid, program_id: program.id });
 });
 
-router.put('/:id', requireOrgAdmin, (req, res) => {
+// Editing a project is open to anyone working on it, not only to an organization admin.
+//
+// A project's basic details could not be changed at all after it was created, which meant a typo
+// in a project number outlived the job. They are edited from Settings now, by whoever is on the
+// project — deliberately, because the person who notices the client name is wrong is the person
+// using it every day, and making them find an admin is how it stays wrong.
+//
+// Two fields carry more than their own weight and are marked as such in the form: delivery
+// method and contract value both change what a pay app review checks. Nothing stops a member
+// editing them; they are simply not editable by accident.
+router.put('/:id', (req, res) => {
+  // Reachable by this user, in this organization. `projectForUser` is the same check every tool
+  // uses to decide what a member can open, so edit rights follow visibility rather than being a
+  // second, separately-drifting rule.
+  const reachable = access.projectForUser(req.user, Number(req.params.id));
+  if (!reachable || reachable.org_id !== req.orgId) {
+    return res.status(404).json({ error: 'Not found' });
+  }
   const {
     project_name, project_number, client_name, project_type, project_type_other,
     contract_value, start_date, projected_end_date, status,
@@ -134,7 +160,7 @@ router.put('/:id', requireOrgAdmin, (req, res) => {
   db.prepare(`
     UPDATE projects SET program_id=?, project_name=?, project_number=?, client_name=?, project_type=?, project_type_other=?,
       contract_value=?, start_date=?, projected_end_date=?, status=?, project_manager=?, notes=?,
-      delivery_method=?
+      delivery_method=?, rfi_response_days=?, submittal_review_days=?
     WHERE id=? AND org_id=?
   `).run(
     programId,
@@ -150,6 +176,8 @@ router.put('/:id', requireOrgAdmin, (req, res) => {
     project_manager ?? null,
     notes ?? null,
     deliveryMethod(req.body.delivery_method),
+    reviewWindow(req.body.rfi_response_days),
+    reviewWindow(req.body.submittal_review_days),
     req.params.id,
     req.orgId
   );

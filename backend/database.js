@@ -477,6 +477,30 @@ if (!db.prepare(`PRAGMA table_info(pay_app_reviews)`).all().map(c => c.name).inc
   db.exec(`ALTER TABLE pay_app_reviews ADD COLUMN delivery_method TEXT`);
 }
 
+// A person's own details, kept on the account rather than on any organization.
+//
+// One account can work with several customers, so a name and an address belong to the person and
+// travel with them. `company` is prefilled from whichever organization they are in but stored
+// separately: a consultant working across two clients has their own firm, which is neither.
+{
+  const cols = db.prepare(`PRAGMA table_info(users)`).all().map(c => c.name);
+  if (!cols.includes('address')) db.exec(`ALTER TABLE users ADD COLUMN address TEXT`);
+  if (!cols.includes('company')) db.exec(`ALTER TABLE users ADD COLUMN company TEXT`);
+  if (!cols.includes('phone')) db.exec(`ALTER TABLE users ADD COLUMN phone TEXT`);
+}
+
+// How long the A/E gets before an RFI or a submittal counts as overdue, per PROJECT.
+//
+// These were one pair of numbers applied to every job in the organization, which is wrong the
+// moment two specifications disagree — and they do. They come from each project's own
+// specification, so they live on the project. Null means fall back to the organization default,
+// which is what every existing project does until somebody sets one.
+{
+  const cols = db.prepare(`PRAGMA table_info(projects)`).all().map(c => c.name);
+  if (!cols.includes('rfi_response_days')) db.exec(`ALTER TABLE projects ADD COLUMN rfi_response_days INTEGER`);
+  if (!cols.includes('submittal_review_days')) db.exec(`ALTER TABLE projects ADD COLUMN submittal_review_days INTEGER`);
+}
+
 // The proposal read against the documents it is meant to price.
 //
 // Kept beside the review rather than inside its report_json: the review is what the proposal

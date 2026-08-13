@@ -24,14 +24,25 @@ const upload = multer({
   limits: { fileSize: 200 * 1024 * 1024, files: 1 },
 });
 
-// How long the A/E gets before a submittal counts as overdue. A project-wide setting rather
-// than a per-submittal field, because it comes from the specifications and is the same for
-// every submittal on the job.
-function reviewDays() {
+// How long the A/E gets before this counts as overdue.
+//
+// It comes from the PROJECT's specification, so it is a project field first. Two specifications
+// on two jobs routinely disagree, and a single organization-wide number quietly applied the wrong
+// deadline to one of them. Falling back in order: the project, the organization's default, then
+// the convention — never to zero, which would mark everything overdue the day it was logged.
+function reviewDays(projectId) {
+  if (projectId) {
+    const project = db.prepare(`SELECT submittal_review_days AS days FROM projects WHERE id=?`).get(projectId);
+    const own = parseInt(project?.days ?? '', 10);
+    if (Number.isFinite(own) && own > 0) return own;
+  }
   const row = db.prepare(`SELECT value FROM settings WHERE key='submittal_review_days'`).get();
   const days = parseInt(row?.value ?? '', 10);
   return Number.isFinite(days) && days > 0 ? days : 14;
 }
+
+// The options every log row is built with, resolved from the row's own project.
+const optionsFor = row => ({ reviewDays: reviewDays(row?.project_id), today: todayUtc() });
 
 // Confirms the project is one the caller may write to, rather than trusting the id in the
 // request — otherwise a submittal could be filed into another organization's project.
@@ -249,16 +260,20 @@ router.get('/', (req, res) => {
   const params = [...scope.params];
   if (req.query.project_id) { sql += ' AND project_id = ?'; params.push(req.query.project_id); }
 
-  const options = { reviewDays: reviewDays(), today: todayUtc() };
+  // Per row, not per page: a log filtered to one project could use one number, but an
+  // unfiltered one spans jobs whose specifications set different deadlines.
   const rows = db.prepare(sql).all(...params)
-    .map(row => buildLogRow(row, revisionsOf(row.id), options));
+    .map(row => buildLogRow(row, revisionsOf(row.id), optionsFor(row)));
 
   // Natural-ish ordering: "S-2" before "S-10", which a plain string sort gets wrong and a
   // submittal register is always read in.
   rows.sort((a, b) => String(a.submittal_number || '')
     .localeCompare(String(b.submittal_number || ''), undefined, { numeric: true, sensitivity: 'base' }));
 
-  res.json({ submittals: rows, summary: summarize(rows), reviewDays: options.reviewDays });
+  res.json({
+    submittals: rows, summary: summarize(rows),
+    reviewDays: reviewDays(req.query.project_id || null),
+  });
 });
 
 const CSV_COLUMNS = [
@@ -297,9 +312,10 @@ router.get('/export.csv', (req, res) => {
   const params = [...scope.params];
   if (req.query.project_id) { sql += ' AND project_id = ?'; params.push(req.query.project_id); }
 
-  const options = { reviewDays: reviewDays(), today: todayUtc() };
+  // Per row, not per page. A log filtered to one project could use one number, but an
+  // unfiltered one spans jobs whose specifications set different deadlines.
   const rows = db.prepare(sql).all(...params)
-    .map(row => buildLogRow(row, revisionsOf(row.id), options))
+    .map(row => buildLogRow(row, revisionsOf(row.id), optionsFor(row)))
     .sort((a, b) => String(a.submittal_number || '')
       .localeCompare(String(b.submittal_number || ''), undefined, { numeric: true, sensitivity: 'base' }));
 
@@ -317,7 +333,7 @@ router.get('/export.csv', (req, res) => {
 router.get('/:id', (req, res) => {
   const row = visibleSubmittal(req);
   if (!row) return res.status(404).json({ error: 'Not found' });
-  res.json(detail(row, { reviewDays: reviewDays(), today: todayUtc() }));
+  res.json(detail(row, optionsFor(row)));
 });
 
 // --- Entering a new submittal -----------------------------------------------------------
@@ -385,7 +401,8 @@ router.post('/', upload.single('file'), async (req, res) => {
       submittalId,
       Number.isFinite(revisionNumber) && revisionNumber >= 0 ? revisionNumber : 0,
       dateReceived, dateForwarded,
-      nullable(req.body.date_response_due) || dueDateFor({ date_forwarded: dateForwarded }, reviewDays())
+      nullable(req.body.date_response_due)
+        || dueDateFor({ date_forwarded: dateForwarded }, reviewDays(projectId))
     );
 
     if (req.file) {
@@ -396,7 +413,7 @@ router.post('/', upload.single('file'), async (req, res) => {
 
     res.json(detail(
       db.prepare(`SELECT * FROM submittals WHERE id=?`).get(submittalId),
-      { reviewDays: reviewDays(), today: todayUtc() }
+      optionsFor({ project_id: projectId })
     ));
   } catch (err) {
     console.error('Submittal create error:', err);
@@ -429,7 +446,7 @@ router.patch('/:id', (req, res) => {
   );
 
   res.json(detail(db.prepare(`SELECT * FROM submittals WHERE id=?`).get(row.id),
-    { reviewDays: reviewDays(), today: todayUtc() }));
+    optionsFor(row)));
 });
 
 router.delete('/:id', async (req, res) => {
@@ -480,7 +497,8 @@ router.post('/:id/revisions', upload.single('file'), async (req, res) => {
       submittal.id,
       (current?.revision_number ?? -1) + 1,
       dateReceived, dateForwarded,
-      nullable(req.body.date_response_due) || dueDateFor({ date_forwarded: dateForwarded }, reviewDays())
+      nullable(req.body.date_response_due)
+        || dueDateFor({ date_forwarded: dateForwarded }, reviewDays(submittal.project_id))
     );
 
     if (req.file) {
@@ -490,7 +508,7 @@ router.post('/:id/revisions', upload.single('file'), async (req, res) => {
     }
     touch(submittal.id);
 
-    res.json(detail(submittal, { reviewDays: reviewDays(), today: todayUtc() }));
+    res.json(detail(submittal, optionsFor(submittal)));
   } catch (err) {
     console.error('Submittal revision error:', err);
     res.status(500).json({ error: err.message });
@@ -510,7 +528,8 @@ router.patch('/:id/revisions/:revId', (req, res) => {
   // unless one was typed in explicitly.
   const due = 'date_response_due' in req.body && nullable(req.body.date_response_due)
     ? nullable(req.body.date_response_due)
-    : dueDateFor({ date_forwarded: dateForwarded }, reviewDays()) || revision.date_response_due;
+    : dueDateFor({ date_forwarded: dateForwarded }, reviewDays(submittal.project_id))
+      || revision.date_response_due;
 
   db.prepare(`
     UPDATE submittal_revisions SET date_received=?, date_forwarded=?, date_response_due=?,
@@ -519,7 +538,7 @@ router.patch('/:id/revisions/:revId', (req, res) => {
   `).run(pick('date_received', revision.date_received), dateForwarded, due, revision.id);
 
   touch(submittal.id);
-  res.json(detail(submittal, { reviewDays: reviewDays(), today: todayUtc() }));
+  res.json(detail(submittal, optionsFor(submittal)));
 });
 
 // Reads the A/E's stamp off a returned document so the response form opens pre-filled.
@@ -567,7 +586,8 @@ router.post('/:id/revisions/:revId/response', upload.single('file'), async (req,
     `).run(
       action, nullable(req.body.reviewed_by), nullable(req.body.response_notes), dateReturned,
       dateForwarded,
-      revision.date_response_due || dueDateFor({ date_forwarded: dateForwarded }, reviewDays()),
+      revision.date_response_due
+        || dueDateFor({ date_forwarded: dateForwarded }, reviewDays(submittal.project_id)),
       revision.id
     );
 
@@ -589,7 +609,7 @@ router.post('/:id/revisions/:revId/response', upload.single('file'), async (req,
       comparisonError = friendlyAiError(err);
     }
 
-    const record = detail(submittal, { reviewDays: reviewDays(), today: todayUtc() });
+    const record = detail(submittal, optionsFor(submittal));
     res.json({
       ...record,
       comparisonError,
@@ -663,7 +683,7 @@ router.post('/:id/analysis', upload.array('files', 4), async (req, res) => {
 
     res.json({
       id: saved.lastInsertRowid, analysis, sources, analysis_markdown: markdown,
-      submittal: detail(submittal, { reviewDays: reviewDays(), today: todayUtc() }),
+      submittal: detail(submittal, optionsFor(submittal)),
     });
   } catch (err) {
     console.error('Submittal analysis error:', err);
@@ -691,7 +711,7 @@ router.post('/:id/revisions/:revId/comparison', async (req, res) => {
     }
 
     await runReviewComparison(req, submittal, revision);
-    res.json(detail(submittal, { reviewDays: reviewDays(), today: todayUtc() }));
+    res.json(detail(submittal, optionsFor(submittal)));
   } catch (err) {
     console.error('Submittal review comparison error:', err);
     res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });

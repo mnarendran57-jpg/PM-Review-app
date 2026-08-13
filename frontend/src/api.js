@@ -96,6 +96,12 @@ export const authApi = {
     return r.data;
   }),
   changePassword: data => api.post('/auth/change-password', data).then(r => r.data),
+  // A person's own details. The stored session is refreshed with the answer, so the app stops
+  // showing the name they had before they changed it.
+  updateProfile: data => api.patch('/auth/profile', data).then(r => {
+    localStorage.setItem(USER_KEY, JSON.stringify(r.data.user));
+    return r.data;
+  }),
   // Public: no session yet. The link itself is only ever emailed, never returned here.
   forgotPassword: email => api.post('/auth/forgot-password', { email }).then(r => r.data),
   getReset: token => api.get(`/auth/reset-password/${token}`).then(r => r.data),
