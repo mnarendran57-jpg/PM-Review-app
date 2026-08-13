@@ -5,6 +5,8 @@ const db = require('../database');
 const { analyzePreconDocuments } = require('../lib/preconReview');
 const { renderMarkdown } = require('../lib/preconReport');
 const { renderPreconReportPdf } = require('../lib/preconReportPdf');
+const { compareProposal } = require('../lib/preconCompare');
+const { proposalLinesFrom } = require('../lib/scopeLocator');
 const { friendlyAiError } = require('../lib/aiErrors');
 const storage = require('../lib/storage');
 
@@ -42,6 +44,14 @@ router.post('/', upload.array('documents', 100), async (req, res) => {
     const projectName = req.body.project_name || null;
     const reviewFocus = req.body.review_focus || null;
 
+    // Which project's Shared Documents to compare the proposal against. Verified rather than
+    // trusted: an id from another organization reads as no project at all.
+    const project = req.body.project_id
+      ? access.projectForUser(req.user, Number(req.body.project_id)) : null;
+    const projectId = project && project.org_id === req.orgId ? project.id : null;
+    const documentIds = String(req.body.document_ids || '')
+      .split(',').map(v => Number(v.trim())).filter(n => Number.isInteger(n) && n > 0);
+
     let analysis;
     try {
       analysis = await analyzePreconDocuments(files, { projectName, reviewFocus });
@@ -53,16 +63,71 @@ router.post('/', upload.array('documents', 100), async (req, res) => {
     const fileNames = files.map(f => f.originalname);
     const markdown = renderMarkdown({ projectName, reviewFocus, fileNames, analysis });
 
+    // --- the proposal against the documents it is meant to price -------------------------------
+    //
+    // Two passes. The first is free: the chosen documents' text is searched for scope language,
+    // and the proposal's own priced lines are matched against any exclusion found. The second
+    // spends ONE call, on the dozen-odd pages the first pass located — not on the drawing set,
+    // which would cost twenty times the whole review and take an hour against the rate limit.
+    //
+    // Best-effort throughout. The review itself is the product; a comparison that fails must not
+    // take it down with it, so a failure is recorded and the review is returned regardless.
+    let comparison = null;
+    let comparisonMarkdown = null;
+    let comparisonError = null;
+    if (projectId && documentIds.length) {
+      try {
+        const find = db.prepare(
+          `SELECT file_name, label, doc_type, file_key, file_blob
+           FROM project_contracts WHERE id=? AND project_id=?`
+        );
+        const documents = [];
+        for (const id of documentIds) {
+          const row = find.get(id, projectId);
+          if (!row) continue;
+          const buffer = await storage.readFile({ key: row.file_key, blob: row.file_blob });
+          if (buffer) {
+            documents.push({ label: (row.label || '').trim() || row.file_name, buffer });
+          }
+        }
+
+        if (documents.length) {
+          const pdfs = files.filter(f => f.mimetype === 'application/pdf');
+          // The proposal's priced lines, read off its own text layer. No API call: the free
+          // cross-check needs them, and a regular expression can find a description followed by
+          // money as well as a model can.
+          let proposalLines = [];
+          for (const f of pdfs.slice(0, 2)) {
+            proposalLines = proposalLines.concat(await proposalLinesFrom(f.buffer));
+          }
+          const result = await compareProposal({
+            projectName,
+            proposalFiles: pdfs.map(f => ({ label: f.originalname, buffer: f.buffer })),
+            documents,
+            proposalLines,
+          });
+          comparison = { ...result.comparison, located: result.located };
+          comparisonMarkdown = result.markdown;
+        }
+      } catch (err) {
+        console.error('Proposal comparison error:', err);
+        comparisonError = friendlyAiError(err);
+      }
+    }
+
     const insertReview = db.prepare(`
       INSERT INTO preconstruction_reviews (
-        org_id, project_name, review_focus, file_names, report_json, report_markdown, insufficient_info, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        org_id, project_id, project_name, review_focus, file_names, report_json, report_markdown,
+        insufficient_info, created_by, comparison_json, comparison_markdown
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      req.orgId,
+      req.orgId, projectId,
       projectName, reviewFocus, JSON.stringify(fileNames),
       JSON.stringify(analysis), markdown,
       analysis.insufficientInfo ? 1 : 0,
-      req.body.created_by || null
+      req.body.created_by || null,
+      comparison ? JSON.stringify(comparison) : null,
+      comparisonMarkdown
     );
     const reviewId = insertReview.lastInsertRowid;
 
@@ -74,7 +139,12 @@ router.post('/', upload.array('documents', 100), async (req, res) => {
       insertFile.run(reviewId, file.originalname, file.mimetype, key, key ? Buffer.alloc(0) : file.buffer);
     }
 
-    res.json({ id: reviewId, report: { projectName, reviewFocus, fileNames, ...analysis } });
+    res.json({
+      id: reviewId,
+      report: { projectName, reviewFocus, fileNames, ...analysis },
+      comparison,
+      comparisonError,
+    });
   } catch (err) {
     console.error('Precon review error:', err);
     res.status(500).json({ error: err.message });
@@ -102,8 +172,23 @@ router.get('/:id', (req, res) => {
     ...row,
     file_names: JSON.parse(row.file_names || '[]'),
     report_json: JSON.parse(row.report_json),
+    // Reviews produced before the comparison existed simply have null here, and the page shows
+    // the review alone rather than an empty panel.
+    comparison: row.comparison_json ? JSON.parse(row.comparison_json) : null,
     files,
   });
+});
+
+router.get('/:id/comparison.md', (req, res) => {
+  const row = visibleRow(req);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  if (!row.comparison_markdown) {
+    return res.status(404).json({ error: 'This review was not compared against any project documents.' });
+  }
+  res.setHeader('Content-Type', 'text/markdown');
+  res.setHeader('Content-Disposition',
+    `attachment; filename="Proposal_vs_Documents_${(row.project_name || 'report').replace(/[^a-z0-9]+/gi, '_')}.md"`);
+  res.send(row.comparison_markdown);
 });
 
 router.get('/:id/report.md', (req, res) => {

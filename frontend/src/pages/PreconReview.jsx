@@ -3,12 +3,13 @@ import {
   CloudArrowUpIcon, SparklesIcon, ArrowDownTrayIcon, TrashIcon, ClockIcon,
   DocumentTextIcon, DocumentMagnifyingGlassIcon, ClipboardDocumentCheckIcon,
 } from '@heroicons/react/24/outline';
-import { preconReviewApi } from '../api';
+import { preconReviewApi, payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import { useConfirm } from '../components/ConfirmDialog';
 import MultiFileDrop from '../components/MultiFileDrop';
 import PreconReviewView from '../components/PreconReviewView';
+import ProposalComparisonView from '../components/ProposalComparisonView';
 
 function HistoryItem({ item, onView, onDelete }) {
   const date = new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -48,12 +49,25 @@ export default function PreconReview() {
   const [result, setResult] = useState(null); // { id, report }
   const [history, setHistory] = useState([]);
   const [viewing, setViewing] = useState(null); // { id, report }
+  // Which of the project's Shared Documents the proposal is checked against. Empty means the
+  // review runs exactly as it always has — the comparison is an addition, not a requirement.
+  const [projectDocs, setProjectDocs] = useState([]);
+  const [checkAgainst, setCheckAgainst] = useState([]);
 
   const loadHistory = () => preconReviewApi.list(routeProjectName ? { project_name: routeProjectName } : undefined).then(setHistory);
   useEffect(() => { loadHistory(); }, [routeProjectName]);
 
+  // The project's shared documents — the drawings and the contract are normally among them, and
+  // they are what a proposal is supposed to be pricing.
+  useEffect(() => {
+    if (!ctx?.projectId) { setProjectDocs([]); return; }
+    payAppReviewApi.listDocuments(ctx.projectId)
+      .then(all => setProjectDocs(all.filter(d => d.doc_type !== 'memo-cover')))
+      .catch(() => setProjectDocs([]));
+  }, [ctx?.projectId]);
+
   const reset = () => {
-    setFiles([]); setProjectName(''); setReviewFocus('');
+    setFiles([]); setProjectName(''); setReviewFocus(''); setCheckAgainst([]);
     setResult(null); setViewing(null); setError('');
   };
 
@@ -65,6 +79,10 @@ export default function PreconReview() {
       files.forEach(f => fd.append('documents', f));
       if (routeProjectName || projectName) fd.append('project_name', routeProjectName || projectName);
       if (reviewFocus) fd.append('review_focus', reviewFocus);
+      if (ctx?.projectId && checkAgainst.length) {
+        fd.append('project_id', ctx.projectId);
+        fd.append('document_ids', checkAgainst.join(','));
+      }
       const data = await preconReviewApi.create(fd);
       setResult(data);
       loadHistory();
@@ -85,6 +103,7 @@ export default function PreconReview() {
         fileNames: record.file_names,
         ...record.report_json,
       },
+      comparison: record.comparison,
     });
     setResult(null);
   };
@@ -132,6 +151,50 @@ export default function PreconReview() {
                 <input className="input" value={projectName} onChange={e => setProjectName(e.target.value)} placeholder="e.g. HCC Building Mechanical Upgrade" />
               </div>
             )}
+            {/* Checking the proposal against the documents it is meant to price. The design set
+                is NOT read — its text is searched for scope language for free, and only the
+                dozen-odd pages carrying it are sent on. That is the difference between adding a
+                tenth to the cost of a review and multiplying it by twenty. */}
+            {ctx?.projectId && (
+              <div>
+                <label className="label">Check it against (optional)</label>
+                {projectDocs.length === 0 ? (
+                  <p className="text-[11px] text-gray-400">
+                    No shared documents on this project yet. Upload the drawings or the contract on
+                    the project's Shared Documents page and they can be compared against here.
+                  </p>
+                ) : (
+                  <>
+                    <div className="space-y-1">
+                      {projectDocs.map(d => (
+                        <label key={d.id} className="flex items-start gap-2 cursor-pointer">
+                          <input
+                            type="checkbox" className="mt-0.5"
+                            checked={checkAgainst.includes(d.id)}
+                            onChange={() => setCheckAgainst(
+                              checkAgainst.includes(d.id)
+                                ? checkAgainst.filter(x => x !== d.id)
+                                : [...checkAgainst, d.id])}
+                          />
+                          <span className="text-[12px] text-gray-700">
+                            {d.label || d.file_name}
+                            <span className="text-gray-400"> · {d.doc_type}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-gray-400 mt-1.5">
+                      {checkAgainst.length
+                        ? 'The proposal will be checked for work outside the contract, work that '
+                          + 'differs from the drawings, and work the documents require but nobody priced.'
+                        : 'Tick the drawings and the contract to have the proposal checked against '
+                          + 'them. Only the pages carrying scope language are read.'}
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
+
             <div>
               <label className="label">Review Focus (optional)</label>
               <textarea className="input" rows={2} value={reviewFocus} onChange={e => setReviewFocus(e.target.value)} placeholder="e.g. Pay attention to electrical capacity and phasing risk" />
@@ -186,6 +249,8 @@ export default function PreconReview() {
                 </div>
               </div>
               <PreconReviewView report={result.report} />
+              <ProposalComparisonView comparison={result.comparison} error={result.comparisonError}
+                downloadUrl={preconReviewApi.comparisonMarkdownUrl(result.id)} />
             </>
           )}
 
@@ -204,6 +269,8 @@ export default function PreconReview() {
                 </div>
               </div>
               <PreconReviewView report={viewing.report} />
+              <ProposalComparisonView comparison={viewing.comparison}
+                downloadUrl={preconReviewApi.comparisonMarkdownUrl(viewing.id)} />
             </>
           )}
 
