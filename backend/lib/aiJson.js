@@ -115,8 +115,13 @@ async function askForJson({
   // Checked before reading the tool call: a run that hit the ceiling has a half-filled answer,
   // and silently returning it would drop line items the caller believes it received.
   if (response.stop_reason === 'max_tokens') {
-    throw new Error(truncatedMessage
+    const err = new Error(truncatedMessage
       || 'The response was cut off before it finished. Try again with a smaller document.');
+    // Flagged, not just worded. Callers that can recover — by reading the document in smaller
+    // pieces — need to recognise this without matching on prose, and every caller writes its
+    // own message. Telling the user to split the PDF themselves is the answer of last resort.
+    err.truncated = true;
+    throw err;
   }
 
   const call = response.content.find(block => block.type === 'tool_use');

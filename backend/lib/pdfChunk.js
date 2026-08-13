@@ -11,6 +11,15 @@ const { PDFDocument } = require('pdf-lib');
 // whole document.
 const MAX_PAGES_PER_PASS = 40;
 
+// The other ceiling, which pages alone do not catch. A request carries the PDF base64-encoded,
+// which inflates it by a third, and the API refuses an oversized request outright. A scanned
+// pay app of twenty pages can be sixty megabytes while a hundred-page text pay app is two — so
+// a splitter that counts only pages sends the first one whole and it is rejected.
+//
+// Four megabytes of raw PDF is about five and a half encoded, comfortably inside the request
+// limit, and it also keeps a single pass inside the account's per-minute token allowance.
+const MAX_BYTES_PER_PASS = 4 * 1024 * 1024;
+
 const isPdf = file => file?.mimetype === 'application/pdf';
 
 // pdf-lib throws on an encrypted or malformed file. Returning null lets callers treat it as
@@ -23,31 +32,49 @@ async function pageCount(buffer) {
   }
 }
 
-// Splits into page-range documents, each a valid PDF in its own right. A file that already
-// fits comes back as one part, so callers need only one code path.
-async function splitPdf(buffer, maxPages = MAX_PAGES_PER_PASS) {
+// Builds one page-range document, a valid PDF in its own right.
+async function slice(source, startPage, endPage) {
+  const part = await PDFDocument.create();
+  const pages = await part.copyPages(
+    source, Array.from({ length: endPage - startPage + 1 }, (_, i) => startPage - 1 + i));
+  pages.forEach(p => part.addPage(p));
+  return { buffer: Buffer.from(await part.save()), startPage, endPage };
+}
+
+// Splits into documents that fit BOTH ceilings — page count and request size. A file that
+// already fits comes back as one part, so callers need only one code path.
+//
+// Size is checked after the split rather than predicted before it, because a PDF's weight is
+// not spread evenly across its pages: one scanned photograph in an otherwise text document
+// carries most of the file. So an oversized part is halved and each half measured again, down
+// to a single page, which is as far as splitting can go.
+async function splitPdf(buffer, maxPages = MAX_PAGES_PER_PASS, maxBytes = MAX_BYTES_PER_PASS) {
   const total = await pageCount(buffer);
-  if (total == null || total <= maxPages) {
+  if (total == null) return [{ buffer, startPage: 1, endPage: total, partCount: 1 }];
+  if (total <= maxPages && buffer.length <= maxBytes) {
     return [{ buffer, startPage: 1, endPage: total, partCount: 1 }];
   }
 
   const source = await PDFDocument.load(buffer, { ignoreEncryption: true });
-  const partCount = Math.ceil(total / maxPages);
   const parts = [];
 
-  for (let start = 0; start < total; start += maxPages) {
-    const end = Math.min(start + maxPages, total);
-    const part = await PDFDocument.create();
-    const pages = await part.copyPages(source, Array.from({ length: end - start }, (_, i) => start + i));
-    pages.forEach(p => part.addPage(p));
-    parts.push({
-      buffer: Buffer.from(await part.save()),
-      startPage: start + 1,
-      endPage: end,
-      partCount,
-    });
-  }
-  return parts;
+  const add = async (startPage, endPage) => {
+    const part = await slice(source, startPage, endPage);
+    const pages = endPage - startPage + 1;
+    // A single page over the ceiling cannot be divided further. It is sent as it is: one page
+    // is small enough to be accepted in practice, and refusing it here would be the upload
+    // rejected for its size that this splitter exists to prevent.
+    if (pages > 1 && (pages > maxPages || part.buffer.length > maxBytes)) {
+      const mid = startPage + Math.floor((endPage - startPage) / 2);
+      await add(startPage, mid);
+      await add(mid + 1, endPage);
+      return;
+    }
+    parts.push(part);
+  };
+
+  await add(1, total);
+  return parts.map(p => ({ ...p, partCount: parts.length }));
 }
 
 // Groups uploaded files into the passes needed to read all of them: everything that fits
@@ -110,9 +137,34 @@ function mergeExtracted(results) {
 // because the account's per-minute token allowance would rate-limit parallel passes.
 async function analyzeInPasses(buffer, analyze, maxPages = MAX_PAGES_PER_PASS) {
   const parts = await splitPdf(buffer, maxPages);
+  const source = await PDFDocument.load(buffer, { ignoreEncryption: true }).catch(() => null);
   const results = [];
+
+  // A pass can fit the request and still overflow the ANSWER: forty pages of a continuation
+  // sheet carrying three hundred line items produce more JSON than one reply holds. That used
+  // to end the whole extraction with a message telling the PM to split the PDF by hand — the
+  // document's size deciding whether the feature worked at all. A cut-off answer now halves
+  // its own pages and reads both halves, as far down as a single page.
+  const run = async (part, context) => {
+    try {
+      return await analyze(part.buffer, context);
+    } catch (err) {
+      const pages = (part.endPage ?? 0) - (part.startPage ?? 0) + 1;
+      if (!err?.truncated || pages <= 1 || !source) throw err;
+      const mid = part.startPage + Math.floor((part.endPage - part.startPage) / 2);
+      console.warn(`[pdfChunk] pages ${part.startPage}-${part.endPage} overflowed one answer; `
+        + 'reading them in two halves');
+      const halves = [await slice(source, part.startPage, mid), await slice(source, mid + 1, part.endPage)];
+      const out = [];
+      for (const half of halves) {
+        out.push(await run(half, { ...context, startPage: half.startPage, endPage: half.endPage, isPart: true }));
+      }
+      return mergeExtracted(out);
+    }
+  };
+
   for (const [index, part] of parts.entries()) {
-    results.push(await analyze(part.buffer, {
+    results.push(await run(part, {
       isPart: parts.length > 1,
       partNumber: index + 1,
       partCount: parts.length,
@@ -134,6 +186,6 @@ function partNotice({ isPart, partNumber, partCount, startPage, endPage }) {
 }
 
 module.exports = {
-  MAX_PAGES_PER_PASS, pageCount, splitPdf, planPasses, passLabel, isPdf,
+  MAX_PAGES_PER_PASS, MAX_BYTES_PER_PASS, pageCount, splitPdf, planPasses, passLabel, isPdf,
   mergeExtracted, analyzeInPasses, partNotice,
 };

@@ -459,9 +459,12 @@ Rules:
 - "backupPageCount": roughly how many pages of the package are backup rather than the application itself. This is how the review tells "no backup was submitted" apart from "backup was submitted and could not be read", which are very different things to tell a contractor.`;
 }
 
-const TOO_MANY_LINE_ITEMS = 'These pay applications have too many line items to extract in one '
-  + 'pass (the AI response was cut off). Try again, or split the continuation sheet into a '
-  + 'smaller PDF.';
+// Only reached once a single page has overflowed one answer, which the passes below cannot
+// divide any further. It no longer asks the PM to split the PDF: that is the app's job, and it
+// now does it — see analyzePayApps.
+const TOO_MANY_LINE_ITEMS = 'One page of this pay application carries more line items than can '
+  + 'be read in a single pass. Splitting that page\'s continuation sheet across two pages will '
+  + 'let it through.';
 
 // Extracts the current (and optionally previous) pay application in a SINGLE Claude call —
 // sending both PDFs as separate document blocks in one message uses one API request and one
@@ -484,21 +487,6 @@ async function analyzePayApps(currentBuffer, previousBuffer) {
   const currentParts = await splitPdf(currentBuffer);
   const previousParts = previousBuffer ? await splitPdf(previousBuffer) : [];
 
-  // Both fit: keep the single two-document call. It costs one request instead of two, which
-  // matters given how narrow this account's per-minute limit is.
-  if (currentParts.length === 1 && previousParts.length <= 1) {
-    const content = [
-      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: currentBuffer.toString('base64') } },
-    ];
-    if (previousBuffer) {
-      content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: previousBuffer.toString('base64') } });
-    }
-    content.push({ type: 'text', text: buildPrompt(!!previousBuffer) });
-
-    const parsed = await callClaudeWithRetry(content, !!previousBuffer);
-    return { current: parsed.current, previous: parsed.previous || null };
-  }
-
   // A pay app long enough to need splitting (usually a big continuation sheet or attached
   // backup) is read one document at a time, in page-range passes. Header values come from
   // whichever pass shows them; continuation-sheet line items concatenate in page order.
@@ -510,10 +498,38 @@ async function analyzePayApps(currentBuffer, previousBuffer) {
     return (await callClaudeWithRetry(content, false)).current;
   };
 
-  return {
+  const inPasses = async () => ({
     current: await analyzeInPasses(currentBuffer, readOne),
     previous: previousBuffer ? await analyzeInPasses(previousBuffer, readOne) : null,
-  };
+  });
+
+  // Both fit: keep the single two-document call. It costs one request instead of two, which
+  // matters given how narrow this account's per-minute limit is.
+  if (currentParts.length === 1 && previousParts.length <= 1) {
+    const content = [
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: currentBuffer.toString('base64') } },
+    ];
+    if (previousBuffer) {
+      content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: previousBuffer.toString('base64') } });
+    }
+    content.push({ type: 'text', text: buildPrompt(!!previousBuffer) });
+
+    try {
+      const parsed = await callClaudeWithRetry(content, !!previousBuffer);
+      return { current: parsed.current, previous: parsed.previous || null };
+    } catch (err) {
+      if (!err?.truncated) throw err;
+      // Fitting in one REQUEST does not mean fitting in one ANSWER. A CMAR pay app carrying a
+      // dozen subcontractor breakdowns runs past the reply ceiling on a document of thirty
+      // pages, and this used to end the upload with "split the continuation sheet into a
+      // smaller PDF" — asking the PM to do by hand what the app is for. Read it in passes
+      // instead, which is the same route a longer document already takes.
+      console.warn('[pay app extract] one answer could not hold this pay app; reading it in passes');
+      return inPasses();
+    }
+  }
+
+  return inPasses();
 }
 
 module.exports = { analyzePayApps };
