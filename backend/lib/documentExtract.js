@@ -139,9 +139,13 @@ async function extractDocumentFacts(buffer, { label = 'document' } = {}) {
     const { data, usage: u } = await askForJson({
       content: [
         { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: partBuffer.toString('base64') } },
-        { type: 'text', text: `${PROMPT}\n\nThe document is "${label}".${partNotice(context)}` },
+        { type: 'text', text: `The document is "${label}".${partNotice(context)}` },
       ],
+      // The instructions are identical on every pass, so they travel in the cached prefix with
+      // the schema. On their own neither clears the caching minimum; together they do.
+      system: PROMPT,
       tool: KEY_FACTS_TOOL,
+      cacheTool: true,
       maxTokens: 8000,
       label: 'document key facts',
     });

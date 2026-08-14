@@ -476,6 +476,7 @@ async function analyzeBackup(buffers = []) {
         { type: 'text', text: BACKUP_PROMPT + partNotice(context) },
       ],
       tool: backupTool(),
+      cacheTool: true,
       maxTokens: 8000,
       label: 'pay app backup extract',
       truncatedMessage: 'One page of this backup carries more documents than can be read in a '
@@ -544,6 +545,8 @@ async function callClaudeWithRetry(content, hasPrevious) {
   const { data } = await askForJson({
     content,
     tool: payAppTool(hasPrevious),
+    // 5,356 tokens of schema, re-sent on every pass of a document read in passes.
+    cacheTool: true,
     maxTokens: 20000,
     label: 'pay app extract',
     truncatedMessage: TOO_MANY_LINE_ITEMS,

@@ -200,6 +200,8 @@ async function readOnePass(buffer, context, usages) {
       { type: 'text', text: PROMPT + partNotice(context) },
     ],
     tool: CONTRACT_TOOL,
+    // A long agreement is read in passes, every one carrying this same schema.
+    cacheTool: true,
     // Raised from 8000 when schedule-of-values extraction was added — a long SOV
     // exhibit is the largest thing this call can now be asked to transcribe.
     maxTokens: 16000,

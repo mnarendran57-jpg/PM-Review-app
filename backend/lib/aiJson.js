@@ -64,6 +64,15 @@ function fillDeclaredNulls(value, schema) {
 //   content          message content blocks (documents, images, text), as before
 //   tool             { name, description, input_schema } — the shape wanted back
 //   system           optional system blocks, including any cache_control
+//   cacheTool        keep the tool schema — and the system prompt with it — in the prompt cache
+//                    between calls. Worth it wherever
+//                    the SAME tool is used more than once inside five minutes — a document read
+//                    in passes, a package catalogued in chunks. These schemas are not small:
+//                    the pay app's is 5,356 tokens, more than half a minute's whole allowance,
+//                    and it was being re-sent on every pass of the same document. A cache write
+//                    costs a quarter more than the tokens it stores and a read costs a tenth, so
+//                    it pays for itself on the second call and loses a little on a lone one —
+//                    hence opt-in rather than always.
 //   attempts         total tries including the first; 2 means one retry
 //   truncatedMessage thrown when the model runs out of room mid-answer. Worth setting
 //                    wherever the output can be long, since "it was cut off" and "it failed"
@@ -72,6 +81,7 @@ async function askForJson({
   content,
   tool,
   system = null,
+  cacheTool = false,
   maxTokens = 3000,
   attempts = 2,
   label = 'ai',
@@ -80,13 +90,28 @@ async function askForJson({
   const request = {
     model: MODEL,
     max_tokens: maxTokens,
-    tools: [tool],
+    // The cache breakpoint goes as late as possible in the invariant part of the request,
+    // because everything BEFORE it is cached with it. The API orders a prompt tools -> system ->
+    // messages, so a breakpoint on the system block covers the tool too; with no system block it
+    // has to sit on the tool itself. The documents and the per-pass text come after, and differ
+    // every call, so they are never cached.
+    tools: [cacheTool && !system ? { ...tool, cache_control: { type: 'ephemeral' } } : tool],
     // Forces the model to answer through the tool rather than in prose, so there is always
     // something structured to read back.
     tool_choice: { type: 'tool', name: tool.name },
     messages: [{ role: 'user', content }],
   };
-  if (system) request.system = system;
+  if (system) {
+    // A caller may pass a plain string; the cache marker needs a block to sit on.
+    const blocks = typeof system === 'string' ? [{ type: 'text', text: system }] : system;
+    request.system = cacheTool
+      ? blocks.map((b, i) => (i === blocks.length - 1 ? { ...b, cache_control: { type: 'ephemeral' } } : b))
+      : blocks;
+  }
+
+  // Below about a thousand tokens the API declines to cache and simply ignores the marker — no
+  // error, no cost, and no saving. Nothing here depends on the exact figure; a schema that grows
+  // past it starts being cached on its own.
 
   let response;
   for (let attempt = 1; ; attempt++) {
@@ -107,9 +132,10 @@ async function askForJson({
   }
 
   if (response.usage) {
-    const cached = response.usage.cache_read_input_tokens;
+    const read = response.usage.cache_read_input_tokens;
+    const written = response.usage.cache_creation_input_tokens;
     console.log(`[${label}] in=${response.usage.input_tokens} out=${response.usage.output_tokens}`
-      + (cached ? ` cached=${cached}` : '') + ' tokens');
+      + (read ? ` cache-hit=${read}` : '') + (written ? ` cache-write=${written}` : '') + ' tokens');
   }
 
   // Checked before reading the tool call: a run that hit the ceiling has a half-filled answer,

@@ -440,6 +440,21 @@ async function selectFrom({ doc, submittal, budget }) {
 
 // Reads one file of the contractor's package end to end, a chunk at a time, and returns what is
 // in it. Every page reaches a call; only how many calls it takes varies with length.
+const INVENTORY_RULES = `You are cataloguing part of a contractor's submittal package so that it
+can be reviewed against the specification.
+
+Rules:
+- You are not judging compliance and not comparing anything to a specification. Only report
+  what is here. Something else reads the whole package at once and does the judging.
+- Copy figures as printed — pressure ratings, classes, SDR and DR numbers, sizes, standards.
+  Those exact values are what the specification is measured against later, so a paraphrase
+  loses the answer.
+- Number the pages you were given 1, 2, 3 ... in the order they appear here. They are
+  renumbered against the whole package afterwards, so count from 1 every time.
+- A cover sheet, a transmittal, a tab divider or a reprint of the specification is not a
+  product: put it in "otherContent" and leave "items" for actual products.
+- An empty "items" list is the right answer for pages that carry no product data.`;
+
 // A data-sheet-dense chunk can list more than fits in one answer. Twelve pages of Westlake and
 // Star Pipe tables ran out of room at 2,000 tokens and the whole chunk was thrown away — the
 // same blindness this file exists to remove, arriving by a different door. So a truncated answer
@@ -458,30 +473,20 @@ async function inventoryPackage({ file, submittal, totalPages, startChunk }) {
     if (!slice) return;
     chunks += 1;
 
-    const prompt = `You are cataloguing part of a contractor's submittal package so that it can be
-reviewed against the specification.
+    const prompt = `These are pages ${first} to ${last} of "${file.label}" — a package of
+${totalPages} pages for submittal ${submittal.submittal_number}: ${submittal.description}.
 
-These are pages ${first} to ${last} of "${file.label}" — a package of ${totalPages} pages for
-submittal ${submittal.submittal_number}: ${submittal.description}.
-
-List what is on THESE pages with the report_package_contents tool.
-
-Rules:
-- You are not judging compliance and not comparing anything to a specification. Only report
-  what is here. Something else reads the whole package at once and does the judging.
-- Copy figures as printed — pressure ratings, classes, SDR and DR numbers, sizes, standards.
-  Those exact values are what the specification is measured against later, so a paraphrase
-  loses the answer.
-- Number the pages you were given 1, 2, 3 ... in the order they appear here. They are
-  renumbered against the whole package afterwards, so count from 1 every time.
-- A cover sheet, a transmittal, a tab divider or a reprint of the specification is not a
-  product: put it in "otherContent" and leave "items" for actual products.
-- An empty "items" list is the right answer for pages that carry no product data.`;
+List what is on THESE pages with the report_package_contents tool.`;
 
     try {
       const { data } = await askForJson({
         content: [asDocument(slice.buffer), { type: 'text', text: prompt }],
+        // The rules are the same on every chunk of every package, so they sit in the cached
+        // prefix alongside the schema; only the page range differs per call. The schema alone is
+        // just under the caching minimum — with the rules it clears it.
+        system: INVENTORY_RULES,
         tool: PACKAGE_INVENTORY_TOOL,
+        cacheTool: true,
         maxTokens: INVENTORY_MAX_TOKENS,
         label: `submittal package pages ${first}-${last}`,
       });
