@@ -1,10 +1,11 @@
 const express = require('express');
+const crypto = require('crypto');
 const router = express.Router();
 const multer = require('multer');
 const db = require('../database');
 const access = require('../lib/access');
 const storage = require('../lib/storage');
-const { analyzeSubmittal } = require('../lib/submittalAnalysis');
+const { analyzeSubmittal, renderMarkdown: renderSubmittalMarkdown } = require('../lib/submittalAnalysis');
 const { compareToReview } = require('../lib/submittalComparison');
 const { requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../lib/plans');
@@ -120,6 +121,35 @@ function arrivalDates(body) {
   let received = nullable(body.date_received) || toIsoDay(todayUtc());
   if (forwarded && received > forwarded) received = forwarded;
   return { received, forwarded };
+}
+
+// The prediction runs while the submittal is being entered, before there is a row to hang it
+// on. It waits here under a one-use token and is written against the entry the moment it is
+// created, so what the PM actually read is what ends up on the record — rather than a second,
+// differently-worded run of the same question.
+//
+// Memory only, and the same shape as the RFI log's, deliberately: the token is claimed seconds
+// after it is issued, and a restart in that window costs nothing but the prediction, which can
+// be re-run from the entry itself.
+const previews = new Map();
+const PREVIEW_TTL_MS = 60 * 60 * 1000;
+
+function stashPreview(req, payload) {
+  const now = Date.now();
+  for (const [key, held] of previews) if (held.expires <= now) previews.delete(key);
+  const token = crypto.randomBytes(18).toString('hex');
+  previews.set(token, { ...payload, userId: req.user.id, expires: now + PREVIEW_TTL_MS });
+  return token;
+}
+
+function claimPreview(req, token, projectId) {
+  const key = nullable(token);
+  if (!key) return null;
+  const held = previews.get(key);
+  if (!held) return null;
+  previews.delete(key);
+  const mine = held.userId === req.user.id && held.projectId === projectId;
+  return mine && held.expires > Date.now() ? held : null;
 }
 
 // --- The predicted review, and how it compared -----------------------------------------
@@ -353,6 +383,57 @@ router.post('/extract', upload.single('file'), async (req, res) => {
   }
 });
 
+// Predicts the A/E's review while the submittal is still being entered, before it is logged.
+//
+// The same shape as the RFI log's preview, and for the same reason: a PM decides what to do with
+// a package by reading it against the specification, and that reading is most useful before the
+// package goes out. Nothing is written here — the result is held under a token and saved by
+// POST "/" below, so the prediction on the record is the one the PM actually saw.
+router.post('/preview-analysis', upload.array('files', 4), async (req, res) => {
+  try {
+    const project = projectInScope(req, req.body.project_id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const documents = await loadDocumentBuffers(project.id, parseIdList(req.body.document_ids));
+    const submittalFiles = (req.files || []).map(f => ({ label: f.originalname, buffer: f.buffer }));
+
+    if (documents.length === 0) {
+      return res.status(400).json({
+        error: 'Choose the specification — or whichever project document this submittal should be '
+          + 'checked against — before predicting the review.',
+      });
+    }
+    if (submittalFiles.length === 0) {
+      return res.status(400).json({
+        error: 'Attach the contractor\'s package. Without it there is nothing to check against '
+          + 'the specification.',
+      });
+    }
+
+    const submittal = {
+      submittal_number: nullable(req.body.submittal_number) || '(not yet numbered)',
+      description: nullable(req.body.description) || '(no description given)',
+      spec_section: nullable(req.body.spec_section),
+      submittal_type: nullable(req.body.submittal_type),
+      vendor: nullable(req.body.vendor),
+      notes: nullable(req.body.notes),
+    };
+
+    const { analysis, sources } = await analyzeSubmittal({ submittal, documents, submittalFiles });
+    const token = stashPreview(req, {
+      projectId: project.id,
+      specSection: submittal.spec_section,
+      documentIds: parseIdList(req.body.document_ids),
+      analysis,
+      sources,
+    });
+    res.json({ token, analysis, sources });
+  } catch (err) {
+    console.error('Submittal preview analysis error:', err);
+    res.status(err.status === 429 ? 429 : err.status || 500).json({ error: friendlyAiError(err) });
+  }
+});
+
 // Enters a submittal into the log, creating its first revision at the same time. The two are
 // always created together: a submittal with no revision has no dates and no status, and
 // would render as a permanently blank row.
@@ -402,7 +483,7 @@ router.post('/', upload.single('file'), async (req, res) => {
       Number.isFinite(revisionNumber) && revisionNumber >= 0 ? revisionNumber : 0,
       dateReceived, dateForwarded,
       nullable(req.body.date_response_due)
-        || dueDateFor({ date_forwarded: dateForwarded }, reviewDays(projectId))
+        || dueDateFor({ date_forwarded: dateForwarded }, reviewDays(project.id))
     );
 
     if (req.file) {
@@ -411,9 +492,31 @@ router.post('/', upload.single('file'), async (req, res) => {
       });
     }
 
+    // A prediction the PM ran while entering this is written against the entry now, so what
+    // informed their judgement is what the record carries. The documents it read are remembered
+    // too, so re-running it later starts from the same choice.
+    const preview = claimPreview(req, req.body.analysis_token, project.id);
+    if (preview) {
+      setDocuments(submittalId, project.id, preview.documentIds);
+      db.prepare(`
+        INSERT INTO submittal_analyses (submittal_id, revision_id, spec_section, sources_json,
+          analysis_json, analysis_markdown, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        submittalId, revision.lastInsertRowid, preview.specSection || nullable(req.body.spec_section),
+        JSON.stringify(preview.sources), JSON.stringify(preview.analysis),
+        renderSubmittalMarkdown({
+          submittal: { submittal_number: submittalNumber, description },
+          analysis: preview.analysis,
+          sources: preview.sources,
+        }),
+        req.user.name || req.user.email
+      );
+    }
+
     res.json(detail(
       db.prepare(`SELECT * FROM submittals WHERE id=?`).get(submittalId),
-      optionsFor({ project_id: projectId })
+      optionsFor({ project_id: project.id })
     ));
   } catch (err) {
     console.error('Submittal create error:', err);

@@ -89,7 +89,9 @@ function Field({ label, children, className = '' }) {
 const EMPTY = {
   submittal_number: '', spec_section: '', description: '', vendor: '',
   submittal_type: '', revision_number: 0, date_received: today(),
-  date_forwarded: '', notes: '',
+  // No date_forwarded here: it comes from the sent question below, not from a form field.
+  // Kept in both, FormData carried two values under one key and the empty one won.
+  notes: '',
 };
 
 // Reading the PDF is the intended way to fill this in, so the form asks for as little as
@@ -97,6 +99,51 @@ const EMPTY = {
 // Spec section, type, revision and dates are read off the submittal — they sit behind
 // "More details", already filled, for the times something needs correcting. Asking a PM to
 // type a CSI section by hand for every submittal is exactly the data entry this replaces.
+// The project's Shared Documents, to choose what this submittal is read against. The
+// specification is normally the one that matters; a memo cover never is.
+function SubmittalDocumentPicker({ projectId, selected, onChange }) {
+  const [docs, setDocs] = useState(undefined);
+
+  useEffect(() => {
+    if (!projectId) return;
+    payAppReviewApi.listDocuments(projectId)
+      .then(all => setDocs((all || []).filter(d => d.doc_type !== 'memo-cover')))
+      .catch(() => setDocs([]));
+  }, [projectId]);
+
+  const toggle = id => onChange(
+    selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id]);
+
+  if (docs === undefined) return <p className="text-xs text-gray-400">Loading shared documents…</p>;
+  if (docs.length === 0) {
+    return (
+      <p className="text-xs text-gray-500">
+        This project has no shared documents yet. Add the specification under Shared Documents,
+        then it can be chosen here.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+      {docs.map(doc => (
+        <label key={doc.id}
+          className="flex items-start gap-2.5 p-2 rounded-lg cursor-pointer transition-colors"
+          style={{ background: selected.includes(doc.id) ? '#eff6ff' : '#fff' }}>
+          <input type="checkbox" className="mt-0.5" checked={selected.includes(doc.id)}
+            onChange={() => toggle(doc.id)} />
+          <span className="min-w-0">
+            <span className="block text-[12px] font-semibold text-gray-800 truncate">
+              {doc.label || doc.file_name}
+            </span>
+            <span className="block text-[10px] text-gray-400">{doc.doc_type} · {doc.file_name}</span>
+          </span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 function NewSubmittalForm({ onSaved, onCancel }) {
   const { projectId } = useProject();
   const [file, setFile] = useState(null);
@@ -107,7 +154,41 @@ function NewSubmittalForm({ onSaved, onCancel }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  // Whether the PM has already forwarded this to the A/E. Asked outright rather than left as a
+  // bare date field, because a blank date is ambiguous — it could mean "not sent" or "sent, but I
+  // didn't fill this in", and the response clock depends on which.
+  const [sent, setSent] = useState('no');
+  const [sentDate, setSentDate] = useState(today());
+
+  // What the submittal itself cites, and which project documents to read it against.
+  const [cited, setCited] = useState([]);
+  const [documentIds, setDocumentIds] = useState([]);
+
+  // The predicted review, run before the entry exists. Held here until the submittal is saved,
+  // at which point the token hands it to the new log entry.
+  const [preview, setPreview] = useState(null);
+  const [analysing, setAnalysing] = useState(false);
+  const [analysisError, setAnalysisError] = useState('');
+
   const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
+
+  // The package is the other half of the comparison, so there is nothing to predict without it.
+  const canAnalyse = !!file && documentIds.length > 0;
+
+  const predict = async () => {
+    setAnalysing(true); setAnalysisError(''); setPreview(null);
+    try {
+      const fd = new FormData();
+      fd.append('project_id', projectId);
+      fd.append('document_ids', JSON.stringify(documentIds));
+      ['submittal_number', 'description', 'spec_section', 'submittal_type', 'vendor', 'notes']
+        .forEach(k => fd.append(k, form[k] ?? ''));
+      fd.append('files', file);
+      setPreview(await submittalsApi.previewAnalysis(fd));
+    } catch (err) {
+      setAnalysisError(errorText(err, 'Could not predict the review. You can still log the submittal and try again from the entry.'));
+    } finally { setAnalysing(false); }
+  };
 
   const read = async () => {
     if (!file) return;
@@ -127,6 +208,9 @@ function NewSubmittalForm({ onSaved, onCancel }) {
         date_received: found.dateSubmitted || f.date_received,
         notes: found.notes || f.notes,
       }));
+      // What the submittal itself cites is worth showing: it is the strongest hint as to which
+      // shared documents to tick, and the PM knows their own set by these names.
+      setCited(found.referencedDocuments || []);
       // Only the two fields that must be right are worth mentioning. Anything else the
       // cover sheet didn't show is simply left blank rather than turned into a chore.
       setReadNote(found.submittalNumber && found.description
@@ -143,8 +227,12 @@ function NewSubmittalForm({ onSaved, onCancel }) {
     try {
       const fd = new FormData();
       fd.append('project_id', projectId);
-      Object.entries(form).forEach(([k, v]) => fd.append(k, v ?? ''));
+      Object.entries(form)
+        .filter(([k]) => k !== 'date_forwarded')
+        .forEach(([k, v]) => fd.append(k, v ?? ''));
+      fd.append('date_forwarded', sent === 'yes' ? sentDate : '');
       if (file) fd.append('file', file);
+      if (preview?.token) fd.append('analysis_token', preview.token);
       onSaved(await submittalsApi.create(fd));
     } catch (err) {
       setError(errorText(err, 'Could not save this submittal.'));
@@ -181,12 +269,99 @@ function NewSubmittalForm({ onSaved, onCancel }) {
           <input className="input" required value={form.description} onChange={set('description')}
             placeholder="VAV boxes — product data" />
         </Field>
-        <Field label="Date sent to A/E" className="col-span-2">
-          <input className="input" type="date" value={form.date_forwarded} onChange={set('date_forwarded')} />
-          <p className="text-[11px] text-gray-400 mt-1">
-            Leave blank if you haven't forwarded it yet — the response clock starts on this date.
+      </div>
+
+      {/* Asked here rather than left to a date field, because the answer decides whether the
+          response clock has started. "Not yet" leaves the date open in the log. */}
+      <div className="p-4 rounded-xl" style={{ background: '#fafbfc', border: '1px solid #eef1f4' }}>
+        <label className="label">Has this submittal been sent to the A/E?</label>
+        <div className="flex gap-2">
+          {[['no', 'Not yet'], ['yes', 'Yes — sent']].map(([value, label]) => (
+            <button key={value} type="button" onClick={() => setSent(value)}
+              className="px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors"
+              style={sent === value
+                ? { background: '#2563eb', color: '#fff' }
+                : { background: '#fff', color: '#4b5563', border: '1px solid #e8edf2' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {sent === 'yes' ? (
+          <div className="mt-3">
+            <Field label="Date sent">
+              <input className="input" type="date" value={sentDate} max={today()}
+                onChange={e => setSentDate(e.target.value)} />
+            </Field>
+            <p className="text-[11px] text-gray-400 mt-1">
+              The response due date is worked out from this, using the project's review window.
+            </p>
+          </div>
+        ) : (
+          <p className="text-[11px] text-gray-400 mt-2">
+            It will sit in the log as "Not yet sent". Fill the sent date in from the log's calendar
+            on the day you forward it, and the response clock starts then.
           </p>
-        </Field>
+        )}
+      </div>
+
+      {/* The prediction, before it goes out — which is the only time it is worth having. The
+          same step as the RFI log's: choose what it is read against, then read it. */}
+      <div className="p-4 rounded-xl space-y-4" style={{ background: '#f5f9ff', border: '1px solid #dbeafe' }}>
+        <div>
+          <p className="text-[13px] font-bold text-gray-900">What will the A/E say?</p>
+          <p className="text-[11px] text-gray-500 mt-0.5">
+            Optional. Reads the package against the specification and predicts the stamp, so a
+            missing certificate costs an email now rather than a resubmittal in three weeks.
+          </p>
+        </div>
+
+        <div>
+          <label className="label">Which documents should it be checked against?</label>
+          {cited.length > 0 && (
+            <p className="text-[11px] mb-1.5" style={{ color: '#1d4ed8' }}>
+              The submittal itself cites {cited.join(', ')} — tick whichever document holds those.
+            </p>
+          )}
+          <SubmittalDocumentPicker projectId={projectId} selected={documentIds} onChange={setDocumentIds} />
+        </div>
+
+        <div className="pt-1" style={{ borderTop: '1px solid #dbeafe' }}>
+          {!preview && (
+            <div className="pt-3">
+              <button type="button" className="btn-secondary w-full justify-center py-1.5 text-sm"
+                onClick={predict} disabled={analysing || !canAnalyse}>
+                <SparklesIcon className="w-4 h-4" />
+                {analysing ? 'Finding the section and reading it…' : 'Find the section and predict the review'}
+              </button>
+              <p className="text-[11px] text-gray-400 mt-1.5">
+                {canAnalyse
+                  ? 'Takes a minute or two on a full project manual. It has no bearing on the log.'
+                  : 'Attach the contractor\'s package above, and tick at least one document, first.'}
+              </p>
+            </div>
+          )}
+
+          {analysing && (
+            <p className="text-[11px] mt-2" style={{ color: '#1d4ed8' }}>
+              Searching the manual for the section, then reading the package against it. Leave this open.
+            </p>
+          )}
+
+          {analysisError && <p className="text-xs mt-2" style={{ color: '#b91c1c' }}>{analysisError}</p>}
+
+          {preview && (
+            <div className="pt-3">
+              <PredictionBody analysis={preview.analysis} />
+              <div className="flex items-center gap-3 mt-3">
+                <button type="button" className="text-[12px] font-semibold text-gray-500 hover:text-gray-700"
+                  onClick={predict} disabled={analysing}>Run it again</button>
+                <span className="text-[11px] text-gray-400">
+                  Saved with the submittal when you add it to the log.
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div>
@@ -432,6 +607,88 @@ const ACTION_STYLE = {
   'For Record Only': { bg: '#f1f5f9', color: '#475569' },
 };
 
+// What a predicted review looks like on screen. One component, used both while the submittal
+// is being entered and on the entry afterwards, so the PM reads the same thing in both places.
+function PredictionBody({ analysis }) {
+  if (!analysis) return null;
+  return (
+    <div className="space-y-3">
+          <p className="text-[14px] font-semibold text-gray-900 leading-snug">{analysis.headline}</p>
+
+          {analysis.deviations?.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                Departs from the specification
+              </p>
+              {analysis.deviations.map((d, i) => {
+                const st = SEVERITY_STYLE[d.severity] || SEVERITY_STYLE.minor;
+                return (
+                  <div key={i} className="p-2.5 rounded-lg" style={{ background: st.bg, border: `1px solid ${st.border}` }}>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <p className="text-[12px] font-semibold text-gray-800">{d.item}</p>
+                      <span className="text-[10px] font-semibold uppercase tracking-wider ml-auto"
+                        style={{ color: st.color }}>{d.severity}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-gray-400">Spec requires</p>
+                        <p className="text-[12px] text-gray-700">{d.required}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider" style={{ color: st.color }}>Submitted</p>
+                        <p className="text-[12px] text-gray-700">{d.submitted}</p>
+                      </div>
+                    </div>
+                    {d.whyItMatters && (
+                      <p className="text-[11px] text-gray-600 mt-1.5 pt-1.5" style={{ borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+                        {d.whyItMatters}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {analysis.missingSubmittalItems?.length > 0 && (
+            <div className="p-2.5 rounded-lg" style={{ background: '#fff7ed', border: '1px solid #fed7aa' }}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#c2410c' }}>
+                Required by the spec, not in this package
+              </p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {analysis.missingSubmittalItems.map((m, i) => <li key={i} className="text-[12px] text-gray-700">{m}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {analysis.fixBeforeSending?.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Fix before sending</p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {analysis.fixBeforeSending.map((f, i) => <li key={i} className="text-[12px] text-gray-700">{f}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {analysis.coordinationNotes && (
+            <p className="text-[12px] text-gray-600">{analysis.coordinationNotes}</p>
+          )}
+
+          <div className="flex items-center gap-3 flex-wrap pt-1" style={{ borderTop: '1px solid #eef1f4' }}>
+            <span className="text-[11px] text-gray-400 pt-2">
+              Confidence: {analysis.confidence}{analysis.confidenceReason ? ` — ${analysis.confidenceReason}` : ''}
+            </span>
+            <button className="text-[11px] text-gray-500 hover:text-gray-900 pt-2 ml-auto" onClick={() => setOpen(true)}>
+              Run again
+            </button>
+          </div>
+          {analysis.missingInformation && (
+            <p className="text-[11px] text-gray-500">Not read: {analysis.missingInformation}</p>
+          )}
+    </div>
+  );
+}
+
 function PredictedReviewPanel({ record, onRan }) {
   const { projectId } = useProject();
   const [docs, setDocs] = useState([]);
@@ -533,82 +790,8 @@ function PredictedReviewPanel({ record, onRan }) {
 
       {error && <p className="text-xs mt-2" style={{ color: '#b91c1c' }}>{error}</p>}
 
-      {a && !open && (
-        <div className="space-y-3">
-          <p className="text-[14px] font-semibold text-gray-900 leading-snug">{a.headline}</p>
+      {a && !open && <PredictionBody analysis={a} />}
 
-          {a.deviations?.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-                Departs from the specification
-              </p>
-              {a.deviations.map((d, i) => {
-                const st = SEVERITY_STYLE[d.severity] || SEVERITY_STYLE.minor;
-                return (
-                  <div key={i} className="p-2.5 rounded-lg" style={{ background: st.bg, border: `1px solid ${st.border}` }}>
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <p className="text-[12px] font-semibold text-gray-800">{d.item}</p>
-                      <span className="text-[10px] font-semibold uppercase tracking-wider ml-auto"
-                        style={{ color: st.color }}>{d.severity}</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <p className="text-[10px] uppercase tracking-wider text-gray-400">Spec requires</p>
-                        <p className="text-[12px] text-gray-700">{d.required}</p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] uppercase tracking-wider" style={{ color: st.color }}>Submitted</p>
-                        <p className="text-[12px] text-gray-700">{d.submitted}</p>
-                      </div>
-                    </div>
-                    {d.whyItMatters && (
-                      <p className="text-[11px] text-gray-600 mt-1.5 pt-1.5" style={{ borderTop: '1px solid rgba(0,0,0,0.06)' }}>
-                        {d.whyItMatters}
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {a.missingSubmittalItems?.length > 0 && (
-            <div className="p-2.5 rounded-lg" style={{ background: '#fff7ed', border: '1px solid #fed7aa' }}>
-              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#c2410c' }}>
-                Required by the spec, not in this package
-              </p>
-              <ul className="list-disc pl-4 space-y-0.5">
-                {a.missingSubmittalItems.map((m, i) => <li key={i} className="text-[12px] text-gray-700">{m}</li>)}
-              </ul>
-            </div>
-          )}
-
-          {a.fixBeforeSending?.length > 0 && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Fix before sending</p>
-              <ul className="list-disc pl-4 space-y-0.5">
-                {a.fixBeforeSending.map((f, i) => <li key={i} className="text-[12px] text-gray-700">{f}</li>)}
-              </ul>
-            </div>
-          )}
-
-          {a.coordinationNotes && (
-            <p className="text-[12px] text-gray-600">{a.coordinationNotes}</p>
-          )}
-
-          <div className="flex items-center gap-3 flex-wrap pt-1" style={{ borderTop: '1px solid #eef1f4' }}>
-            <span className="text-[11px] text-gray-400 pt-2">
-              Confidence: {a.confidence}{a.confidenceReason ? ` — ${a.confidenceReason}` : ''}
-            </span>
-            <button className="text-[11px] text-gray-500 hover:text-gray-900 pt-2 ml-auto" onClick={() => setOpen(true)}>
-              Run again
-            </button>
-          </div>
-          {a.missingInformation && (
-            <p className="text-[11px] text-gray-500">Not read: {a.missingInformation}</p>
-          )}
-        </div>
-      )}
     </div>
   );
 }

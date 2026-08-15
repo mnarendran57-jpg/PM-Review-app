@@ -59,6 +59,14 @@ const SUBMITTAL_TOOL = {
         description: 'The revision number if this is a resubmittal (Rev 1, Rev 2…), 0 for a '
           + 'first submission. Omit if not stated.',
       },
+      referencedDocuments: {
+        type: 'array',
+        description: 'Any specification section, drawing sheet or standard the submittal itself '
+          + 'cites — "Section 23 05 93", "M-401", "AWWA C900". These are what the reviewer needs '
+          + 'on file for the package to be checked against, so they are worth reporting even '
+          + 'when only mentioned in passing.',
+        items: { type: 'string' },
+      },
       specSection: {
         type: 'string',
         description: 'The CSI spec section, number and title if both are shown, e.g. '
@@ -114,6 +122,9 @@ async function extractSubmittal(pdfBuffer) {
     submittalNumber: trimmed(parsed.submittalNumber),
     revisionNumber: Number.isFinite(revision) && revision >= 0 ? Math.trunc(revision) : null,
     specSection: trimmed(parsed.specSection),
+    referencedDocuments: Array.isArray(parsed.referencedDocuments)
+      ? parsed.referencedDocuments.filter(d => typeof d === 'string' && d.trim()).slice(0, 12)
+      : [],
     description: trimmed(parsed.description),
     vendor: trimmed(parsed.vendor),
     submittalType: trimmed(parsed.submittalType),
