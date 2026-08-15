@@ -976,6 +976,43 @@ const COMPARISON_VERDICTS = {
   },
 };
 
+// What each row of the comparison means, and the colour that says so before it is read. The
+// colours are the panel's own scale — green needs nothing, amber is worth reading, red is work
+// the specification did not require.
+const POINT_STATUS = {
+  agreed: { label: 'Both flagged it', bg: '#f0fdf4', color: '#15803d', border: '#bbf7d0' },
+  ae_only: { label: 'A/E only', bg: '#eff6ff', color: '#1d4ed8', border: '#bfdbfe' },
+  beyond_spec: { label: 'Beyond the spec', bg: '#fef2f2', color: '#b91c1c', border: '#fecaca' },
+  waived: { label: 'Let through', bg: '#fefce8', color: '#a16207', border: '#fde68a' },
+};
+
+// The rows to draw, whichever shape the stored comparison is in.
+//
+// Comparisons produced before this panel became a table were saved as four separate lists, and
+// those records are still on real submittals. Rather than leave them rendering as a blank
+// panel — or keep both layouts alive — the old lists are folded into the same rows the table
+// draws. Each of the four was already a status in all but name.
+function rowsOf(review) {
+  if (Array.isArray(review.points) && review.points.length) return review.points;
+
+  const rows = [];
+  for (const n of review.notInTheContract || []) {
+    rows.push({ point: n.point, specSaid: n.specificationSaid, aeSaid: n.aeDirected,
+      status: 'beyond_spec', note: n.whyItMatters });
+  }
+  for (const m of review.missedByPrediction || []) {
+    rows.push({ point: m.point, specSaid: m.inTheSpecification, aeSaid: m.aeComment,
+      status: 'ae_only', note: null });
+  }
+  for (const c of review.approvedDespite || []) {
+    rows.push({ point: c, specSaid: null, aeSaid: 'Approved anyway', status: 'waived', note: null });
+  }
+  for (const c of review.confirmed || []) {
+    rows.push({ point: c, specSaid: null, aeSaid: 'Raised it too', status: 'agreed', note: null });
+  }
+  return rows;
+}
+
 function ReviewComparisonPanel({ record, revision, onRan }) {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
@@ -992,6 +1029,7 @@ function ReviewComparisonPanel({ record, revision, onRan }) {
   };
 
   const v = COMPARISON_VERDICTS[review?.verdict] || COMPARISON_VERDICTS.not_comparable;
+  const rows = review ? rowsOf(review) : [];
 
   return (
     <div className="p-4 rounded-xl mt-3" style={{ background: '#fff', border: `1px solid ${review ? v.border : '#eef1f4'}` }}>
@@ -1030,71 +1068,55 @@ function ReviewComparisonPanel({ record, revision, onRan }) {
             )}
           </p>
 
-          {review.notInTheContract?.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#b91c1c' }}>
-                Asked for, but not in the specification
-              </p>
-              {review.notInTheContract.map((n, i) => (
-                <div key={i} className="p-2.5 rounded-lg" style={{ background: '#fef2f2', border: '1px solid #fecaca' }}>
-                  <p className="text-[12px] font-semibold text-gray-800 mb-1.5">{n.point}</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <p className="text-[10px] uppercase tracking-wider text-gray-400">Spec said</p>
-                      <p className="text-[12px] text-gray-700">{n.specificationSaid || '—'}</p>
+          {/* One table, ordered as the model ranked it — the rows worth money first. Two
+              columns side by side is the whole point: what was required and what was asked for
+              are read against each other, which is the comparison the PM came here to make. */}
+          {rows.length > 0 && (
+            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #eef1f4' }}>
+              <div className="hidden sm:grid grid-cols-[1fr_1fr_1fr] gap-px text-[10px] font-semibold uppercase tracking-wider text-gray-400"
+                style={{ background: '#f9fafb', borderBottom: '1px solid #eef1f4' }}>
+                <div className="px-2.5 py-1.5">Point</div>
+                <div className="px-2.5 py-1.5">The spec said</div>
+                <div className="px-2.5 py-1.5">The A/E said</div>
+              </div>
+              {rows.map((p, i) => {
+                const s = POINT_STATUS[p.status] || POINT_STATUS.ae_only;
+                return (
+                  <div key={i} style={{ borderTop: i ? '1px solid #f3f4f6' : 'none', background: s.bg }}>
+                    <div className="sm:grid sm:grid-cols-[1fr_1fr_1fr]">
+                      <div className="px-2.5 py-2">
+                        <p className="text-[12px] font-semibold text-gray-900 leading-snug">{p.point}</p>
+                        <span className="inline-block text-[9px] font-bold uppercase tracking-wider mt-1 px-1.5 py-0.5 rounded"
+                          style={{ background: '#fff', color: s.color, border: `1px solid ${s.border}` }}>
+                          {s.label}
+                        </span>
+                      </div>
+                      {/* Labelled on a narrow screen, where the columns stack and the header
+                          scrolls away — an unlabelled value in a stack is unreadable. */}
+                      <div className="px-2.5 pb-2 sm:py-2">
+                        <span className="sm:hidden text-[9px] uppercase tracking-wider text-gray-400 block">The spec said</span>
+                        <p className="text-[12px] text-gray-700 leading-snug">{p.specSaid || '—'}</p>
+                      </div>
+                      <div className="px-2.5 pb-2 sm:py-2">
+                        <span className="sm:hidden text-[9px] uppercase tracking-wider text-gray-400 block">The A/E said</span>
+                        <p className="text-[12px] leading-snug" style={{ color: s.color }}>{p.aeSaid}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-[10px] uppercase tracking-wider" style={{ color: '#b91c1c' }}>A/E directed</p>
-                      <p className="text-[12px] text-gray-700">{n.aeDirected}</p>
-                    </div>
+                    {/* The one part of a row that is a sentence, kept out of the columns so the
+                        table stays scannable. */}
+                    {p.note && (
+                      <p className="text-[11px] text-gray-600 px-2.5 pb-2 sm:pl-2.5">{p.note}</p>
+                    )}
                   </div>
-                  {n.whyItMatters && (
-                    <p className="text-[11px] text-gray-600 mt-1.5 pt-1.5" style={{ borderTop: '1px solid #fecaca' }}>
-                      {n.whyItMatters}
-                    </p>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
-          {review.approvedDespite?.length > 0 && (
-            <div className="p-2.5 rounded-lg" style={{ background: '#fefce8', border: '1px solid #fde68a' }}>
-              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#a16207' }}>
-                Approved despite a departure
-              </p>
-              <ul className="list-disc pl-4 space-y-0.5">
-                {review.approvedDespite.map((x, i) => <li key={i} className="text-[12px] text-gray-700">{x}</li>)}
-              </ul>
-              <p className="text-[11px] text-gray-500 mt-1">Approval is not a waiver of the specification.</p>
-            </div>
-          )}
-
-          {review.missedByPrediction?.length > 0 && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">
-                Raised by the A/E, not by the prediction
-              </p>
-              <ul className="list-disc pl-4 space-y-0.5">
-                {review.missedByPrediction.map((m, i) => (
-                  <li key={i} className="text-[12px] text-gray-700">
-                    <b>{m.point}</b> — {m.aeComment}
-                    {m.inTheSpecification && <span className="text-gray-400"> ({m.inTheSpecification})</span>}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {review.confirmed?.length > 0 && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">
-                Predicted, and the A/E agreed
-              </p>
-              <ul className="list-disc pl-4 space-y-0.5">
-                {review.confirmed.map((c, i) => <li key={i} className="text-[12px] text-gray-700">{c}</li>)}
-              </ul>
-            </div>
+          {rows.some(p => p.status === 'waived') && (
+            <p className="text-[11px] text-gray-500">
+              Approval is not a waiver of the specification. Worth a record.
+            </p>
           )}
 
           {review.actionsForPm?.length > 0 && (
@@ -1120,6 +1142,10 @@ function ReviewComparisonPanel({ record, revision, onRan }) {
 
 function RevisionCard({ submittal, revision, isCurrent, onChanged }) {
   const files = revision.files || [];
+  // Whether this revision has already been read against the prediction. Once it has, the
+  // comparison is the answer and everything it is derived from becomes background.
+  const compared = !!revision.reviewComparison;
+  const [showNotes, setShowNotes] = useState(false);
   return (
     <div className="p-4 rounded-xl" style={{
       background: isCurrent ? '#fbfdff' : '#fafbfc',
@@ -1161,11 +1187,30 @@ function RevisionCard({ submittal, revision, isCurrent, onChanged }) {
       {revision.reviewed_by && (
         <p className="text-[11px] text-gray-500 mt-1">Reviewed by {revision.reviewed_by}</p>
       )}
+
+      {/* Once the comparison exists it has already said what the A/E said, point by point and
+          beside what the specification required. Leaving their raw comments open above it means
+          reading the same review twice in two different shapes, which is the confusion this
+          folds away. Still one click from here, because a paraphrase is not a quote and a PM
+          arguing a change order needs the words the A/E actually wrote. */}
       {revision.response_notes && (
-        <div className="mt-3 pt-3" style={{ borderTop: '1px solid #eef1f4' }}>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">A/E comments</p>
-          <p className="text-[12px] text-gray-700 whitespace-pre-wrap leading-relaxed">{revision.response_notes}</p>
-        </div>
+        compared && !showNotes ? (
+          <button type="button" className="text-[11px] font-semibold text-gray-400 hover:text-gray-700 mt-2"
+            onClick={() => setShowNotes(true)}>
+            Show the A/E's comments as they were written
+          </button>
+        ) : (
+          <div className="mt-3 pt-3" style={{ borderTop: '1px solid #eef1f4' }}>
+            <div className="flex items-baseline gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">A/E comments</p>
+              {compared && (
+                <button type="button" className="text-[10px] text-gray-400 hover:text-gray-700 ml-auto"
+                  onClick={() => setShowNotes(false)}>Hide</button>
+              )}
+            </div>
+            <p className="text-[12px] text-gray-700 whitespace-pre-wrap leading-relaxed">{revision.response_notes}</p>
+          </div>
+        )
       )}
 
       {/* Only where there is a stamp to compare against. A revision still with the A/E has
@@ -1196,6 +1241,7 @@ function SubmittalDetail({ id, onChanged, onDeleted, onClose }) {
   const [error, setError] = useState('');
   const [sub, setSub] = useState(null); // 'response' | 'resubmittal'
   const [busy, setBusy] = useState(false);
+  const [showPrediction, setShowPrediction] = useState(false);
 
   const load = useCallback(() => {
     submittalsApi.get(id).then(setRecord).catch(err => setError(errorText(err, 'Could not open this submittal.')));
@@ -1225,6 +1271,8 @@ function SubmittalDetail({ id, onChanged, onDeleted, onClose }) {
   if (!record) return <p className="text-sm text-gray-400">Loading…</p>;
 
   const current = record.revisions[record.revisions.length - 1];
+  // The comparison, once it exists, is what this page is for.
+  const compared = !!current?.reviewComparison;
 
   if (sub === 'response') {
     return <ResponseForm submittal={record} revision={current} onSaved={applyUpdate} onCancel={() => setSub(null)} />;
@@ -1279,7 +1327,26 @@ function SubmittalDetail({ id, onChanged, onDeleted, onClose }) {
 
       {error && <p className="text-xs" style={{ color: '#b91c1c' }}>{error}</p>}
 
-      <PredictedReviewPanel record={record} onRan={applyUpdate} />
+      {/* The prediction earns the top of this page right up until the A/E answers.
+          After that it is a forecast of something that has already happened, and the
+          comparison below restates every part of it that still matters — beside what the
+          A/E actually said, which is the only form in which it is now useful. Two panels
+          both headed with a stamp, one predicted and one real, is what made this page
+          confusing to read. Kept one click away for anyone checking what was foreseen. */}
+      {!compared ? (
+        <PredictedReviewPanel record={record} onRan={applyUpdate} />
+      ) : showPrediction ? (
+        <div>
+          <button type="button" className="text-[11px] font-semibold text-gray-400 hover:text-gray-700 mb-1"
+            onClick={() => setShowPrediction(false)}>Hide what was predicted</button>
+          <PredictedReviewPanel record={record} onRan={applyUpdate} />
+        </div>
+      ) : (
+        <button type="button" className="text-[11px] font-semibold text-gray-400 hover:text-gray-700"
+          onClick={() => setShowPrediction(true)}>
+          Show what Coaster predicted before it went out
+        </button>
+      )}
 
       <div>
         <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-2">

@@ -19,6 +19,10 @@ const { askForJson } = require('./aiJson');
 
 const VERDICTS = ['as_expected', 'stricter', 'more_lenient', 'different_grounds', 'not_comparable'];
 
+// What each row of the comparison is. Four kinds, because there are exactly four ways the
+// prediction and the A/E can differ, and the PM does something different about each.
+const STATUSES = ['agreed', 'ae_only', 'beyond_spec', 'waived'];
+
 // Field order is load-bearing. A tool call is generated top to bottom, so the detail is
 // enumerated first and the verdict and headline are written last, once that detail exists.
 const COMPARISON_TOOL = {
@@ -27,66 +31,69 @@ const COMPARISON_TOOL = {
   input_schema: {
     type: 'object',
     properties: {
-      confirmed: {
+      // One array, not four.
+      //
+      // This used to be four separate lists of prose — what was confirmed, what the prediction
+      // missed, what went beyond the specification, what was waived — each written as full
+      // sentences and stacked down the panel. Everything a reader needed was in there, and
+      // finding any of it meant reading all of it. But every one of those entries is the same
+      // shape of fact: a point, what the specification said about it, what the A/E said about
+      // it. Written that way it is a table, and a table is read in one glance instead of four
+      // paragraphs. The distinction the four lists carried is not lost — it is the status
+      // column, which is also what colours the row.
+      points: {
         type: 'array',
-        description: 'Deviations Coaster predicted that the A/E also picked up. Short phrases. '
-          + 'Empty if the A/E raised none of them.',
-        items: { type: 'string' },
-      },
-      missedByPrediction: {
-        type: 'array',
-        description: 'Things the A/E raised that the prediction did not. One entry each. This '
-          + 'is how the reader calibrates how much to trust the next prediction, so do not '
-          + 'soften it.',
+        description: 'One row per point of substance, most consequential first. Together these '
+          + 'are the whole comparison — every difference and every agreement worth the PM\'s '
+          + 'attention, and nothing else. Omit anything you would only include for completeness.',
         items: {
           type: 'object',
           properties: {
-            point: { type: 'string', description: 'What the A/E raised, in a few words.' },
-            aeComment: { type: 'string', description: "The A/E's comment, quoted or closely paraphrased." },
-            inTheSpecification: {
+            point: {
               type: 'string',
-              description: 'Whether the specification actually required this, so far as can be '
-                + 'told from the prediction\'s recorded basis. Say "not in what was read" if '
-                + 'the prediction never saw the governing text.',
+              description: 'What it is about: a noun phrase of 2 to 6 words, never a sentence. '
+                + '"Gate valve seat type", "Manufacturer certificates", "Hanger spacing".',
+            },
+            specSaid: {
+              type: 'string',
+              description: 'What the specification required, in AT MOST 12 words — the value or '
+                + 'the requirement itself, not a description of it. "AWWA C515, resilient '
+                + 'seated" beats "the specification requires that valves be resilient seated". '
+                + 'Write "Silent" if it did not address this, and "Not in what was read" if the '
+                + 'governing text was never reached.',
+            },
+            aeSaid: {
+              type: 'string',
+              description: "What the A/E said or directed, in AT MOST 12 words. Their words "
+                + 'where they are short enough to use.',
+            },
+            status: {
+              type: 'string',
+              enum: STATUSES,
+              description: '"agreed" — the prediction raised this and so did the A/E. '
+                + '"ae_only" — the A/E raised it and the prediction did not. '
+                + '"beyond_spec" — the A/E asked for something the specification does not '
+                + 'require. This is the row that is worth money, so use it only where the '
+                + 'prediction actually recorded what the specification requires. '
+                + '"waived" — the prediction found a departure and the A/E let it through.',
+            },
+            note: {
+              type: 'string',
+              description: 'ONLY where there is a consequence in money or time — a price to '
+                + 'ask for, a lead time, a resubmittal, another trade affected. At most 15 '
+                + 'words. Omit it entirely on a row that just records agreement; a note on '
+                + 'every row is a note on none.',
             },
           },
-          required: ['point', 'aeComment'],
+          required: ['point', 'aeSaid', 'status'],
         },
-      },
-      // The finding that pays for this whole feature.
-      notInTheContract: {
-        type: 'array',
-        description: 'Comments the A/E made that the specification does NOT appear to require '
-          + '— a preference, a tightened tolerance, an added item, a product change. One entry '
-          + 'each. Only where the prediction recorded what the specification requires and this '
-          + 'goes beyond it. Empty is common and correct; do not manufacture entries.',
-        items: {
-          type: 'object',
-          properties: {
-            point: { type: 'string' },
-            aeDirected: { type: 'string', description: 'What the A/E asked for.' },
-            specificationSaid: { type: 'string', description: 'What the specification required instead, or that it was silent.' },
-            whyItMatters: {
-              type: 'string',
-              description: 'The practical consequence — added cost, a longer lead time, a '
-                + 'resubmittal, a change to another trade.',
-            },
-          },
-          required: ['point', 'aeDirected'],
-        },
-      },
-      approvedDespite: {
-        type: 'array',
-        description: 'Deviations the prediction found that the A/E approved anyway, or did not '
-          + 'mention. Worth recording: approval is not a waiver of the specification, and the '
-          + 'PM should know what they are now holding.',
-        items: { type: 'string' },
       },
       actionsForPm: {
         type: 'array',
-        description: 'What the PM should do now. Specific and practical: a price to ask for, a '
-          + 'comment to push back on, a record to make, an item to chase before resubmittal. '
-          + 'Empty ONLY when the A/E approved it cleanly and nothing needs doing.',
+        description: 'What the PM should do now, at most 4 entries, most urgent first. Each one '
+          + 'starts with a verb and runs to at most 12 words: "Price the added isolation valves '
+          + 'before resubmittal." Empty ONLY when the A/E approved it cleanly and nothing needs '
+          + 'doing.',
         items: { type: 'string' },
       },
       // Last on purpose: both summarise the fields above.
@@ -102,8 +109,9 @@ const COMPARISON_TOOL = {
       },
       headline: {
         type: 'string',
-        description: 'ONE sentence for the PM, summarising what you set out above: did the A/E '
-          + 'review it the way the specification suggested, and if not, what changed? No preamble.',
+        description: 'ONE sentence, at most 25 words, and it must say something the table does '
+          + 'not repeat: what the difference amounts to for this PM. No preamble, no restating '
+          + 'the stamp — it is printed beside this line.',
       },
     },
     required: ['verdict', 'headline', 'actionsForPm'],
@@ -159,25 +167,37 @@ ${response.notes || '(no written comments were recorded — go by the action alo
 
 Record your comparison with the record_submittal_review_comparison tool.
 
+Record your comparison as a TABLE. Every row is one point; the three columns are what it is
+about, what the specification said, and what the A/E said. The PM reads this at a glance
+between site visits, so write cells, not paragraphs.
+
 Rules:
 - The PM already knows what the A/E stamped. The value here is the gap.
-- "notInTheContract" is the most valuable field on this page. An A/E comment asking for
-  something the specification does not require is a change to the work, and the day it arrives
-  is the day to price it — not at the pay application three months later. But only say so when
-  the prediction actually recorded what the specification requires. If the governing section
-  was never read, you cannot know it is not in there: say that instead.
+- Length is a feature. A cell over a dozen words stops being scannable and becomes something
+  to read, which defeats the table. Give the value, not a description of the value: "250 psig
+  at 180F" beats "the specification called for a rating of 250 psig at 180 degrees".
+- A short table beats a complete one. Rows the PM would not act on or forward do not earn
+  their line. If the A/E and the prediction simply agreed on everything, a handful of "agreed"
+  rows and no note is the right answer.
+- "beyond_spec" is the most valuable row on the page. An A/E comment asking for something the
+  specification does not require is a change to the work, and the day it arrives is the day to
+  price it — not at the pay application three months later. But only use it where the
+  prediction actually recorded what the specification requires. If the governing section was
+  never read, you cannot know it is not in there — put "Not in what was read" in specSaid and
+  use "ae_only" instead.
 - Be fair to the A/E. They hold the design and often know things the specification does not
   say. Report what the specification required and what they directed; whether that is a design
   change, a clarification or a contractor error is a judgement the PM makes.
-- "missedByPrediction" must be honest. The prediction was advisory and read only part of the
-  documents; where the A/E caught something real that it did not, say so plainly. A comparison
-  that only ever flatters the prediction is worthless.
-- If the A/E approved the submittal while the prediction found a real departure, say so in
-  "approvedDespite". Approval is not a waiver of the specification.
+- "ae_only" must be honest. The prediction was advisory and read only part of the documents;
+  where the A/E caught something real that it did not, give it its row. A comparison that only
+  ever flatters the prediction is worthless.
+- If the A/E approved the submittal while the prediction found a real departure, that row is
+  "waived". Approval is not a waiver of the specification.
 - If the A/E returned it without reviewing the merits — wrong package, incomplete, wrong
-  section — the verdict is "not_comparable" and the action is simply what they need.
-- Never state something in the headline that is not also in one of the fields. The headline is
-  one line in a panel; the entries are what the PM reads, forwards and prices.
+  section — the verdict is "not_comparable", the table is short or empty, and the action is
+  simply what they need.
+- Never state something in the headline that is not also in a row. The headline is one line in
+  a panel; the rows are what the PM reads, forwards and prices.
 - Write for a project manager who is not a specialist in this trade.`;
 }
 
@@ -188,6 +208,18 @@ const VERDICT_LABEL = {
   different_grounds: 'The same outcome, on grounds the prediction did not find',
   not_comparable: 'The A/E did not review it on the merits',
 };
+
+// How each row reads in a document, where colour is not available to carry the meaning.
+const STATUS_LABEL = {
+  agreed: 'Both flagged it',
+  ae_only: 'A/E only',
+  beyond_spec: 'Beyond the spec',
+  waived: 'Let through',
+};
+
+// A pipe inside a cell would end the column early and shift every value after it one place to
+// the left — so a valve rated "250 psig | 180F" would silently corrupt the row it sits in.
+const cell = value => String(value ?? '—').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim() || '—';
 
 function renderMarkdown({ submittal, review, analysis, response }) {
   const L = [];
@@ -203,40 +235,26 @@ function renderMarkdown({ submittal, review, analysis, response }) {
   L.push(review.headline || '');
   L.push('');
 
-  if (review.notInTheContract?.length) {
-    L.push('## Asked for, but not in the specification');
+  if (review.points?.length) {
+    L.push('| | Point | The specification said | The A/E said |');
+    L.push('|---|---|---|---|');
+    for (const p of review.points) {
+      L.push(`| ${STATUS_LABEL[p.status] || ''} | ${cell(p.point)} | ${cell(p.specSaid)} | ${cell(p.aeSaid)} |`);
+    }
     L.push('');
-    for (const n of review.notInTheContract) {
-      L.push(`### ${n.point}`);
+    // Notes sit under the table rather than in a fifth column: they are the one part that is
+    // a sentence, and a column of sentences is what stops a table being scannable.
+    const noted = review.points.filter(p => p.note);
+    if (noted.length) {
+      for (const p of noted) L.push(`- **${p.point}** — ${p.note}`);
       L.push('');
-      L.push(`- **The A/E directed:** ${n.aeDirected}`);
-      if (n.specificationSaid) L.push(`- **The specification said:** ${n.specificationSaid}`);
-      if (n.whyItMatters) L.push(`- **Why it matters:** ${n.whyItMatters}`);
+    }
+    if (review.points.some(p => p.status === 'waived')) {
+      L.push('_Approval is not a waiver of the specification. Worth a record._');
       L.push('');
     }
   }
-  if (review.confirmed?.length) {
-    L.push('## Predicted, and the A/E agreed');
-    L.push('');
-    for (const c of review.confirmed) L.push(`- ${c}`);
-    L.push('');
-  }
-  if (review.missedByPrediction?.length) {
-    L.push('## Raised by the A/E, not by the prediction');
-    L.push('');
-    for (const m of review.missedByPrediction) {
-      L.push(`- **${m.point}** — ${m.aeComment}${m.inTheSpecification ? ` _(${m.inTheSpecification})_` : ''}`);
-    }
-    L.push('');
-  }
-  if (review.approvedDespite?.length) {
-    L.push('## Approved despite a departure the prediction found');
-    L.push('');
-    for (const a of review.approvedDespite) L.push(`- ${a}`);
-    L.push('');
-    L.push('_Approval is not a waiver of the specification. Worth a record._');
-    L.push('');
-  }
+
   if (review.actionsForPm?.length) {
     L.push('## What to do now');
     L.push('');
@@ -249,16 +267,17 @@ function renderMarkdown({ submittal, review, analysis, response }) {
 // A verdict claiming the A/E went beyond the specification, with nothing listed under it, is
 // the one answer this must not pass on: the panel would announce a change order with nothing
 // to price. Checked rather than hoped for, exactly as in lib/rfiComparison.js.
-const isSelfContradictory = d =>
-  d?.verdict === 'stricter'
-  && !(Array.isArray(d.notInTheContract) && d.notInTheContract.length)
-  && !(Array.isArray(d.missedByPrediction) && d.missedByPrediction.length);
+const isSelfContradictory = (d) => {
+  const rows = Array.isArray(d?.points) ? d.points : [];
+  return d?.verdict === 'stricter'
+    && !rows.some(p => p && (p.status === 'beyond_spec' || p.status === 'ae_only'));
+};
 
 const CORRECTION = `Your answer said the A/E asked for more than the specification requires but
-listed nothing under "notInTheContract" or "missedByPrediction". Those cannot both be right.
-Call the tool again: either list each thing the A/E asked for that the specification does not
-require — with what they directed, what the specification said, and why it matters — or, if on
-reflection they were applying the specification, change the verdict to match.`;
+gave no row with status "beyond_spec" or "ae_only". Those cannot both be right. Call the tool
+again: either give each thing the A/E asked for its own row — what it is about, what the
+specification said, what they directed — or, if on reflection they were applying the
+specification, change the verdict to match.`;
 
 // analysis / sources: the stored prediction, as saved by lib/submittalAnalysis.
 // response: { action, notes, reviewedBy, dateReturned } — the A/E's review as logged.
@@ -285,10 +304,17 @@ async function compareToReview({ submittal, analysis, sources, response }) {
   const review = {
     verdict: VERDICTS.includes(data.verdict) ? data.verdict : 'not_comparable',
     headline: data.headline || null,
-    confirmed: Array.isArray(data.confirmed) ? data.confirmed.filter(Boolean) : [],
-    missedByPrediction: Array.isArray(data.missedByPrediction) ? data.missedByPrediction.filter(m => m && m.point) : [],
-    notInTheContract: Array.isArray(data.notInTheContract) ? data.notInTheContract.filter(n => n && n.point) : [],
-    approvedDespite: Array.isArray(data.approvedDespite) ? data.approvedDespite.filter(Boolean) : [],
+    points: (Array.isArray(data.points) ? data.points : [])
+      .filter(p => p && p.point && p.aeSaid)
+      .map(p => ({
+        point: p.point,
+        specSaid: p.specSaid || null,
+        aeSaid: p.aeSaid,
+        // An unrecognised status would otherwise render as an uncoloured row with no label,
+        // which reads as "nothing to see here" — the wrong default for a comparison.
+        status: STATUSES.includes(p.status) ? p.status : 'ae_only',
+        note: p.note || null,
+      })),
     actionsForPm: Array.isArray(data.actionsForPm) ? data.actionsForPm.filter(Boolean) : [],
     // Kept so the panel can show "predicted X, got Y" without re-reading the analysis row.
     predictedAction: analysis.likelyAction || null,
@@ -298,4 +324,4 @@ async function compareToReview({ submittal, analysis, sources, response }) {
   return { review, markdown: renderMarkdown({ submittal, review, analysis, response }) };
 }
 
-module.exports = { compareToReview, VERDICTS, VERDICT_LABEL };
+module.exports = { compareToReview, VERDICTS, VERDICT_LABEL, STATUSES, STATUS_LABEL };
