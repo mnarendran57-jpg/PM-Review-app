@@ -42,12 +42,14 @@ app.use('/api/precon-review', require('./routes/preconReview'));
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`PM Review backend running on http://0.0.0.0:${PORT}`);
-  // Contracts are read in the background, so a deploy or restart can land mid-read. Anything
-  // unfinished is picked back up here — without this a contract uploaded seconds before a deploy
-  // would sit saying "reading" for ever, with nothing left to move it along.
+  // Nothing is read on boot. A contract is read by the first review that measures against it,
+  // so a restart has no unfinished work to pick up — and a deploy can never start a bill.
+  // Anything left mid-read by a restart is reset here so it is retried on next use rather than
+  // sitting at "reading" for ever.
   try {
-    require('./lib/contractQueue').resumePending();
+    const reset = require('./database').prepare(`UPDATE project_contracts SET terms_status='pending' WHERE terms_status='reading'`).run();
+    if (reset.changes) console.log(`[contract extract] reset ${reset.changes} interrupted read(s) to pending`);
   } catch (err) {
-    console.error('Could not resume unfinished contract reads:', err.message);
+    console.error('Could not reset interrupted contract reads:', err.message);
   }
 });

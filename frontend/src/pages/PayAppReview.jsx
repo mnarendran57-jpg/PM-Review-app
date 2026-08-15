@@ -248,9 +248,9 @@ function ContractPanel({ projectId, docs, deliveryMethod, otherIds, onOtherIds, 
       {/* Not a finding — whether the document is usable yet. Worth one line, because a review run
           before the reading finishes stands its contract checks down, and the reviewer would
           otherwise have no way to know why. */}
-      {(status === 'pending' || status === 'reading') && (
+      {status === 'pending' && (
         <p className="text-[11px] text-gray-500">
-          Still being read — its terms are not available to a review until that finishes.
+          Not read yet — this review will read it once, which adds a minute or two the first time.
         </p>
       )}
       {status === 'failed' && (

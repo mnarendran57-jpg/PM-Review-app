@@ -479,8 +479,10 @@ export const payAppReviewApi = {
   extract: formData => api.post('/pay-app-review/extract', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),
+  // The first review on a project reads the contract, which is several passes on a long
+  // agreement; every review after that reads the stored terms and returns in seconds.
   create: formData => api.post('/pay-app-review', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: LONG_AI_TIMEOUT
   }).then(r => r.data),
   projects: () => api.get('/pay-app-review/projects').then(r => r.data),
   createProject: projectName =>

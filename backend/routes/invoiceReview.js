@@ -7,6 +7,7 @@ const { runInvoiceChecks } = require('../lib/invoiceChecks');
 const { buildInvoiceReport } = require('../lib/invoiceReport');
 const { friendlyAiError } = require('../lib/aiErrors');
 const { GOVERNING_SQL } = require('../lib/docTypes');
+const { ensureTermsRead } = require('../lib/contractTerms');
 const storage = require('../lib/storage');
 
 
@@ -56,11 +57,15 @@ router.post('/', upload.array('invoices', 100), async (req, res) => {
     if (projectId) {
       contractRow = contractId
         ? db.prepare(`
-            SELECT id, label, file_name, terms FROM project_contracts
+            SELECT id, label, file_name, terms, doc_type, terms_status, file_key, file_blob,
+                   party, party_role
+            FROM project_contracts
             WHERE id = ? AND project_id = ? AND doc_type IN (${GOVERNING_SQL})
           `).get(contractId, projectId)
         : db.prepare(`
-            SELECT id, label, file_name, terms FROM project_contracts
+            SELECT id, label, file_name, terms, doc_type, terms_status, file_key, file_blob,
+                   party, party_role
+            FROM project_contracts
             WHERE project_id = ? AND doc_type IN (${GOVERNING_SQL})
             ORDER BY is_primary DESC, created_at ASC LIMIT 1
           `).get(projectId);
@@ -70,7 +75,9 @@ router.post('/', upload.array('invoices', 100), async (req, res) => {
       if (contractId && !contractRow) {
         return res.status(400).json({ error: 'That contract is not on this project.' });
       }
-      if (contractRow) contractTerms = JSON.parse(contractRow.terms || '{}');
+      // Read on first use rather than at upload, so filing a contract costs nothing and a
+      // contract nobody invoices against is never read.
+      if (contractRow) contractTerms = await ensureTermsRead(contractRow);
     }
 
     const { invoice, observations } = await analyzeInvoices({

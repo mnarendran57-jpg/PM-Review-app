@@ -139,9 +139,9 @@ function UploadForm({ projectId, onSaved, onCancel }) {
         <div className="p-3 rounded-xl text-[11px] leading-relaxed"
           style={{ background: '#eff6ff', border: '1px solid #dbeafe', color: '#1e40af' }}>
           <SparklesIcon className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
-          Coaster reads it on upload — tax status, unallowable costs, retainage and the contract
-          sum — so the review tools never have to read it again. Uploading takes a moment; the
-          reading finishes in the background and this page shows when it is done.
+          Uploading only files it — nothing is read and nothing is spent. The first review that
+          checks against it reads its tax status, unallowable costs, retainage and contract sum,
+          once; every review after that uses what was read.
         </div>
       )}
 
@@ -259,11 +259,20 @@ function ReadingState({ doc }) {
   const status = doc.terms_status || 'ready';
   const terms = doc.terms || {};
 
-  if (status === 'pending' || status === 'reading') {
+  // "pending" no longer means work is happening. It means the file is filed and nothing has
+  // been spent on it, which is the normal resting state for a contract nobody has reviewed
+  // against yet — so it is worded as a fact rather than as a wait.
+  if (status === 'pending') {
+    return (
+      <p className="text-[11px] text-gray-500 mt-1">
+        On file. Its terms are read the first time a review checks against it, once.
+      </p>
+    );
+  }
+  if (status === 'reading') {
     return (
       <p className="text-[11px] mt-1" style={{ color: '#c2410c' }}>
-        Reading it now — this takes a minute or two on a long document. Reviews can use it as
-        soon as it finishes.
+        Being read by a review running now.
       </p>
     );
   }
@@ -537,10 +546,9 @@ export default function SharedDocuments() {
           </div>
           <h3 className="text-[16px] font-bold text-gray-900 mb-1.5">Nothing on file yet</h3>
           <p className="text-sm text-gray-500 max-w-md mx-auto mb-5 leading-relaxed">
-            Add the contract if the job has one, or the purchase order if it does not — Coaster
-            reads its terms once and every review from then on checks against it. Drawings, specs
-            and anything else the team needs go here too, and each review reads them when it
-            needs them.
+            Add the contract if the job has one, or the purchase order if it does not, plus
+            drawings, specs and anything else the team needs. Uploading files them and nothing
+            more — each review reads what it needs, when it runs.
           </p>
           <button className="btn-primary mx-auto" onClick={() => setUploading(true)}>
             <PlusIcon className="w-4 h-4" /> Add Document

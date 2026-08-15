@@ -7,7 +7,7 @@ const { buildReportDoc, annotationsFor } = require('../lib/payAppReportDoc');
 const { renderPayAppReportPdf } = require('../lib/payAppReportPdf');
 const { brandingFor } = require('../lib/orgBranding');
 const { annotatePayAppPdf } = require('../lib/payAppAnnotate');
-const contractQueue = require('../lib/contractQueue');
+const { ensureAllRead } = require('../lib/contractTerms');
 const { proposePlaceholders, applyPlaceholders, readDocx } = require('../lib/memoCover');
 const { runEngines, attachReadCheck } = require('../lib/payAppEngines');
 const { verifyRead } = require('../lib/payAppVerifyRead');
@@ -264,11 +264,11 @@ async function addDocument(req, res) {
         paragraphs: proposal.paragraphs,
       };
     }
-    // A contract is NOT read here. Reading a long agreement is several AI calls with rate-limit
-    // waits between them — minutes of work — and doing it inside the upload meant the browser held
-    // a connection open for all of it and gave up at three minutes. The length of a document
-    // decided whether the feature worked at all, which is not something a user can do anything
-    // about. The file is stored now and queued; lib/contractQueue.js takes it from there.
+    // A contract is NOT read here, and nothing is queued to read it either. Reading an agreement
+    // is several AI calls, and spending them on an upload charges for an action that produces
+    // nothing anybody asked for — a contract filed on Monday was read on Monday whether or not
+    // anything was ever reviewed against it. lib/contractTerms.js reads it inside the first
+    // review that measures against it, once, and every review after that uses what was stored.
 
     // The first contract on a project becomes its primary, which is what Pay App Review and
     // Change Order Review read. Existing projects keep the contract they already had.
@@ -287,9 +287,10 @@ async function addDocument(req, res) {
     const partyRole = ['prime', 'subcontractor', 'supplier'].includes(req.body.party_role)
       ? req.body.party_role : (storedTerms.partyRole || null);
 
-    // Only a governing document has a reading to wait for. Anything else — a drawing set, a
-    // schedule, a memo cover — is complete the moment it is stored.
-    const status = isGoverning(docType) ? contractQueue.STATUS.PENDING : 'ready';
+    // Uploading is filing, and filing costs nothing. A governing document is marked as not yet
+    // read; the first review that measures against it reads it then, once, and every review
+    // after that uses the stored terms. A contract nobody reviews against is never read at all.
+    const status = isGoverning(docType) ? 'pending' : 'ready';
 
     const result = db.prepare(`
       INSERT INTO project_contracts
@@ -301,9 +302,6 @@ async function addDocument(req, res) {
       key ? Buffer.alloc(0) : file.buffer, key, JSON.stringify(storedTerms),
       req.body.created_by || null, party, partyRole, status,
     );
-
-    // Handed over AFTER the row exists, so the queue always has something to read back.
-    if (isGoverning(docType)) contractQueue.enqueue(result.lastInsertRowid);
 
     res.json({
       id: result.lastInsertRowid, file_name: file.originalname,
@@ -568,6 +566,14 @@ router.post('/', upload.fields([
     let contractTerms = null;
     let contracts = [];
     if (projectId) {
+      // Read here, on first use, rather than at upload. Only the contracts this review will
+      // actually measure against, and only those not read before.
+      await ensureAllRead(db.prepare(`
+        SELECT id, doc_type, terms, terms_status, file_key, file_blob, party, party_role
+        FROM project_contracts
+        WHERE project_id = ? AND doc_type IN (${GOVERNING_SQL})
+      `).all(projectId).filter(r => !chosenIds.length || chosenIds.includes(r.id)));
+
       contracts = db.prepare(`
         SELECT id, file_name, label, terms, is_primary, party, party_role, terms_status
         FROM project_contracts
