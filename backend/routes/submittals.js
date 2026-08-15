@@ -168,9 +168,17 @@ function claimPreview(req, token, projectId) {
 // the same on both: "is this what the documents said, and if not, what does that change?" —
 // and answering it the same way in both places means one thing to learn rather than two.
 
+// Ids arrive as a JSON array from the form and as a comma-separated string from the panel on a
+// saved entry. Splitting a JSON array on commas yields "[3" and "7]", both NaN, both dropped —
+// so every ticked document was silently discarded and the prediction refused to run for want of
+// something to read. Both shapes are accepted, the way the RFI log already accepts them.
 const parseIdList = (raw) => {
   if (raw == null) return [];
-  const list = Array.isArray(raw) ? raw : String(raw).split(',');
+  let list = raw;
+  if (typeof list === 'string') {
+    try { list = JSON.parse(list); } catch { list = list.split(','); }
+  }
+  if (!Array.isArray(list)) return [];
   return list.map(v => Number(String(v).trim())).filter(n => Number.isInteger(n) && n > 0);
 };
 

@@ -29,9 +29,16 @@ const { REVIEW_ACTIONS } = require('./submittalLog');
 const SMALL_DOC_PAGES = 12;
 // A project manual's contents live at the front, and so does a spec section's own header.
 const INDEX_PAGES = 8;
-// The ceiling on what reaches the reviewing call, across every document together. Set by the
-// per-minute token allowance rather than the model's page limit.
-const MAX_ANALYSIS_PAGES = 18;
+// The ceiling on what reaches the reviewing call, across every document together.
+//
+// Raised from 18 because what arrives has changed. This used to compete with a whole project
+// manual for room, so the package's share had to be small; now the PM hands over the one section
+// the submittal named, which is a handful of pages, and the room freed up belongs to the package.
+const MAX_ANALYSIS_PAGES = 44;
+
+// The specification's reserved share, never given to the package. It is what decides the outcome,
+// and a review that read the whole package and none of the specification has nothing to compare.
+const MIN_SPEC_PAGES = 12;
 // The contractor's package is the thing being reviewed, so ALL of it is read.
 //
 // It used to be cut to its first 6 pages, under a constant named as a minimum but used as a
@@ -49,8 +56,13 @@ const MAX_ANALYSIS_PAGES = 18;
 // No page is dropped on a guess about its content, either. A near-empty page looks like a tab
 // divider and looks identical to a scanned page with no text layer — and dropping the second
 // kind is the very mistake being fixed here.
-const PACKAGE_DIRECT_PAGES = 12;
-const PACKAGE_CHUNK_PAGES = 12;
+// Every pass is an AI call, and a call is about forty seconds whatever is in it — so the number
+// of passes IS the wait. A 28-page package catalogued in twelves was three calls plus the review,
+// two and a half minutes, against the RFI log's two calls for the same job. Sent whole it is one
+// call. The cataloguing is still there for a package genuinely too big to send, which is what it
+// was built for; it is no longer the ordinary route.
+const PACKAGE_DIRECT_PAGES = 32;
+const PACKAGE_CHUNK_PAGES = 24;
 // A ceiling exists because the per-minute allowance is real, but it is stated in the report
 // rather than applied quietly. Silent truncation is what produced the wrong answer above.
 const MAX_PACKAGE_CHUNKS = 40;
@@ -705,10 +717,13 @@ async function analyzeSubmittal({ submittal, documents = [], submittalFiles = []
   let submittalPages = 0;
   let chunksSpent = 0;
 
+  // What the package may take, leaving the specification its reserved share.
+  const packageCeiling = Math.min(PACKAGE_DIRECT_PAGES, MAX_ANALYSIS_PAGES - MIN_SPEC_PAGES);
+
   for (const f of submittalFiles.slice(0, 2)) {
     const total = await pageCount(f.buffer);
 
-    if (total == null || total <= PACKAGE_DIRECT_PAGES) {
+    if (total == null || total <= packageCeiling) {
       packageBlocks.push(asDocument(f.buffer));
       submittalPages += total || 0;
       budget -= total || 1;

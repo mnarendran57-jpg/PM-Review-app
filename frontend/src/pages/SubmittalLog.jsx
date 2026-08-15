@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   PlusIcon, ArrowDownTrayIcon, TrashIcon, PaperClipIcon, SparklesIcon,
   PaperAirplaneIcon, ArrowUturnLeftIcon, InboxArrowDownIcon, ClockIcon,
@@ -32,6 +32,31 @@ const STATUS_FILTERS = [
 ];
 
 const today = () => new Date().toISOString().slice(0, 10);
+
+// "23 05 93" belongs to Division 23. The division is how a project manual is filed and how a PM
+// finds anything in it, so it is worth saying out loud rather than leaving them to read it off
+// the first two digits.
+const DIVISIONS = {
+  '00': 'Procurement and Contracting', '01': 'General Requirements', '02': 'Existing Conditions',
+  '03': 'Concrete', '04': 'Masonry', '05': 'Metals', '06': 'Wood, Plastics and Composites',
+  '07': 'Thermal and Moisture Protection', '08': 'Openings', '09': 'Finishes', '10': 'Specialties',
+  '11': 'Equipment', '12': 'Furnishings', '13': 'Special Construction', '14': 'Conveying Equipment',
+  '21': 'Fire Suppression', '22': 'Plumbing', '23': 'HVAC', '25': 'Integrated Automation',
+  '26': 'Electrical', '27': 'Communications', '28': 'Electronic Safety and Security',
+  '31': 'Earthwork', '32': 'Exterior Improvements', '33': 'Utilities', '34': 'Transportation',
+  '35': 'Waterway and Marine', '40': 'Process Interconnections', '41': 'Material Processing',
+  '42': 'Process Heating and Cooling', '43': 'Process Gas and Liquid Handling',
+  '44': 'Pollution Control', '46': 'Water and Wastewater Equipment', '48': 'Electrical Power Generation',
+};
+
+// Only a specification section has a division; a drawing sheet or an ASTM standard does not.
+function divisionOf(need) {
+  if (need.kind && need.kind !== 'specification') return null;
+  const digits = String(need.ref || '').match(/^\s*(\d{2})[\s.-]?\d/);
+  if (!digits) return null;
+  const name = DIVISIONS[digits[1]];
+  return name ? `Division ${digits[1]} — ${name}` : `Division ${digits[1]}`;
+}
 
 // Dates are stored as plain YYYY-MM-DD with no zone. Splitting the string rather than
 // parsing it keeps the displayed day identical to the one that was typed in, which
@@ -167,6 +192,9 @@ function NewSubmittalForm({ onSaved, onCancel }) {
   // prediction — a project does not have to hold a spec section for a submittal to be checked
   // against it.
   const [referenceFiles, setReferenceFiles] = useState([]);
+  // The project's own documents are the secondary route, folded away: on a job with a full manual
+  // on file the list is long, and the named upload above is the answer nine times in ten.
+  const [showProjectDocs, setShowProjectDocs] = useState(false);
 
   // The predicted review, run before the entry exists. Held here until the submittal is saved,
   // at which point the token hands it to the new log entry.
@@ -176,8 +204,25 @@ function NewSubmittalForm({ onSaved, onCancel }) {
 
   const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
 
+  // Read as soon as the package is attached, rather than behind a button. Naming the section it
+  // has to be judged against is the first thing a PM needs and the cheapest thing to produce —
+  // one call over the cover sheet — and asking them to press for it put the generic question
+  // ("upload something") in front of the specific answer ("upload 23 05 93").
+  // Guarded against a second run on the same file. React invokes an effect twice in development,
+  // and this one spends a request every time it runs — so the scan was paid for twice, and the
+  // wait doubled, on every attach while developing. The guard also covers a re-render that hands
+  // back the same File object.
+  const scanned = useRef(null);
+  useEffect(() => {
+    if (!file) { scanned.current = null; setNeeds([]); setReadNote(''); return; }
+    if (scanned.current === file) return;
+    scanned.current = file;
+    read();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file]);
+
   // The package is the other half of the comparison, so there is nothing to predict without it.
-  const canAnalyse = !!file && (documentIds.length > 0 || referenceFiles.length > 0);
+  const canAnalyse = !!file && (documentIds.length > 0 || referenceFiles.some(Boolean));
 
   const predict = async () => {
     setAnalysing(true); setAnalysisError(''); setPreview(null);
@@ -188,7 +233,7 @@ function NewSubmittalForm({ onSaved, onCancel }) {
       ['submittal_number', 'description', 'spec_section', 'submittal_type', 'vendor', 'notes']
         .forEach(k => fd.append(k, form[k] ?? ''));
       fd.append('files', file);
-      for (const ref of referenceFiles) fd.append('reference_files', ref);
+      for (const ref of referenceFiles) if (ref) fd.append('reference_files', ref);
       setPreview(await submittalsApi.previewAnalysis(fd));
     } catch (err) {
       setAnalysisError(errorText(err, 'Could not predict the review. You can still log the submittal and try again from the entry.'));
@@ -248,12 +293,11 @@ function NewSubmittalForm({ onSaved, onCancel }) {
     <form onSubmit={save} className="space-y-5">
       <div className="p-4 rounded-xl" style={{ background: '#fafbfc', border: '1px solid #eef1f4' }}>
         <FileDrop file={file} onChange={f => { setFile(f); setReadNote(''); }} label="The submittal the contractor sent (PDF)" />
-        {file && (
-          <button type="button" className="btn-secondary w-full justify-center py-1.5 text-sm mt-2"
-            onClick={read} disabled={reading}>
-            <SparklesIcon className="w-4 h-4" />
-            {reading ? 'Reading the cover sheet…' : 'Read it and fill in the form'}
-          </button>
+        {reading && (
+          <p className="text-[11px] mt-2" style={{ color: '#1d4ed8' }}>
+            Reading the cover sheet — filling the form in and working out which specification this
+            has to be checked against.
+          </p>
         )}
         {readNote && <p className="text-[11px] mt-2" style={{ color: '#15803d' }}>{readNote}</p>}
         <p className="text-[11px] text-gray-400 mt-2">
@@ -320,86 +364,147 @@ function NewSubmittalForm({ onSaved, onCancel }) {
           </p>
         </div>
 
-        {/* What the scan asked for, named as the submittal prints it. This is the point of
-            reading the cover sheet first: the PM fetches one section rather than hunting through
-            a manual, and the prediction reads a section rather than searching a book for it. */}
-        {needs.length > 0 && (
-          <div className="p-3 rounded-xl" style={{ background: '#fff', border: '1px solid #bfdbfe' }}>
-            <p className="text-[12px] font-semibold text-gray-900">
-              This submittal needs to be checked against:
+        {!file && (
+          <p className="text-[12px] text-gray-500">
+            Attach the contractor's package above. Coaster reads its cover sheet and names the
+            specification section it has to be checked against — so you fetch one section instead
+            of searching the manual.
+          </p>
+        )}
+
+        {file && reading && (
+          <p className="text-[12px]" style={{ color: '#1d4ed8' }}>
+            Reading the submittal to work out what it needs…
+          </p>
+        )}
+
+        {/* Nothing generic is asked for until there is something specific to ask FOR. A project
+            manual runs to dozens of divisions, and "upload what it should be checked against" put
+            the burden of identifying the right one back on the PM — which is the job this is
+            supposed to do for them. So the request is made per document, by name. */}
+        {file && !reading && needs.length === 0 && (
+          <div className="p-3 rounded-xl" style={{ background: '#fff7ed', border: '1px solid #fed7aa' }}>
+            <p className="text-[12px]" style={{ color: '#9a3412' }}>
+              The cover sheet did not name a specification section, so Coaster cannot say which
+              document this needs. Put the section number in "More details" below and scan again,
+              or pick the document yourself further down.
             </p>
-            <ul className="mt-1.5 space-y-1">
-              {needs.map((n, i) => (
-                <li key={i} className="text-[12px] text-gray-700 flex gap-2">
-                  <span className="font-semibold" style={{ color: '#1d4ed8' }}>{n.ref}</span>
-                  <span className="min-w-0">
-                    {n.title ? <span className="text-gray-600">{n.title}</span> : null}
-                    {n.why ? <span className="block text-[11px] text-gray-400">{n.why}</span> : null}
-                  </span>
-                </li>
-              ))}
-            </ul>
-            <p className="text-[11px] text-gray-500 mt-2">
-              Tick it below if the project already holds it, or upload just that document. One
-              section reads faster and predicts better than the whole manual it came from.
-            </p>
+            <button type="button" className="text-[11px] font-semibold mt-1.5"
+              style={{ color: '#9a3412' }} onClick={read} disabled={reading}>
+              Scan it again
+            </button>
           </div>
         )}
 
-        <div>
-          <label className="label">Upload what it should be checked against</label>
-          <input type="file" multiple accept=".pdf"
-            className="text-xs text-gray-500 w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 file:cursor-pointer"
-            onChange={e => setReferenceFiles(Array.from(e.target.files || []))} />
-          <p className="text-[11px] text-gray-400 mt-1">
-            {referenceFiles.length > 0
-              ? `${referenceFiles.length} document${referenceFiles.length === 1 ? '' : 's'} added — read for this prediction only.`
-              : 'The specification section or drawing sheet named above. Used for this prediction only; it is not filed in the project.'}
-          </p>
-        </div>
-
-        <div>
-          <label className="label">…or pick from the project's documents</label>
-          <SubmittalDocumentPicker projectId={projectId} selected={documentIds} onChange={setDocumentIds} />
-        </div>
-
-        <div className="pt-1" style={{ borderTop: '1px solid #dbeafe' }}>
-          {!preview && (
-            <div className="pt-3">
-              <button type="button" className="btn-secondary w-full justify-center py-1.5 text-sm"
-                onClick={predict} disabled={analysing || !canAnalyse}>
-                <SparklesIcon className="w-4 h-4" />
-                {analysing ? 'Finding the section and reading it…' : 'Find the section and predict the review'}
-              </button>
-              <p className="text-[11px] text-gray-400 mt-1.5">
-                {canAnalyse
-                  ? 'Takes a minute or two on a full project manual, and seconds on one section.'
-                  : 'Attach the contractor\'s package above, then upload or tick what it is checked against.'}
+        {needs.length > 0 && (
+          <>
+            <div>
+              <p className="text-[12px] font-bold text-gray-900">
+                Go and find {needs.length === 1 ? 'this document' : 'these documents'}, then upload
+                {needs.length === 1 ? ' it' : ' them'} here:
+              </p>
+              <p className="text-[11px] text-gray-500 mt-0.5">
+                Read from the submittal itself. The first one decides the outcome; the rest are
+                supporting. Upload only what you have — the prediction runs on whatever it is given
+                and says what it could not check.
               </p>
             </div>
-          )}
 
-          {analysing && (
-            <p className="text-[11px] mt-2" style={{ color: '#1d4ed8' }}>
-              Searching the manual for the section, then reading the package against it. Leave this open.
-            </p>
-          )}
+            <div className="space-y-2">
+              {needs.map((need, i) => {
+                const division = divisionOf(need);
+                const held = referenceFiles[i];
+                return (
+                  <div key={i} className="p-3 rounded-xl"
+                    style={{ background: '#fff', border: `1px solid ${held ? '#a7f3d0' : '#bfdbfe'}` }}>
+                    <div className="flex items-baseline gap-2 flex-wrap">
+                      <span className="text-[13px] font-bold" style={{ color: '#1d4ed8' }}>{need.ref}</span>
+                      {need.title && <span className="text-[12px] text-gray-700">{need.title}</span>}
+                      {i === 0 && (
+                        <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                          style={{ background: '#dbeafe', color: '#1d4ed8' }}>
+                          decides the outcome
+                        </span>
+                      )}
+                    </div>
+                    {division && (
+                      <p className="text-[11px] font-semibold text-gray-600 mt-0.5">{division}</p>
+                    )}
+                    {need.why && <p className="text-[11px] text-gray-400 mt-0.5">{need.why}</p>}
 
-          {analysisError && <p className="text-xs mt-2" style={{ color: '#b91c1c' }}>{analysisError}</p>}
-
-          {preview && (
-            <div className="pt-3">
-              <PredictionBody analysis={preview.analysis} />
-              <div className="flex items-center gap-3 mt-3">
-                <button type="button" className="text-[12px] font-semibold text-gray-500 hover:text-gray-700"
-                  onClick={predict} disabled={analysing}>Run it again</button>
-                <span className="text-[11px] text-gray-400">
-                  Saved with the submittal when you add it to the log.
-                </span>
-              </div>
+                    <div className="mt-2">
+                      <input type="file" accept=".pdf"
+                        className="text-[11px] text-gray-500 w-full file:mr-2 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:text-[11px] file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 file:cursor-pointer"
+                        onChange={(e) => {
+                          const next = [...referenceFiles];
+                          next[i] = e.target.files?.[0] || undefined;
+                          setReferenceFiles(next);
+                        }} />
+                      {held && (
+                        <p className="text-[11px] mt-1" style={{ color: '#047857' }}>
+                          {held.name} — read for this prediction only, not filed in the project.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          )}
-        </div>
+
+            <div>
+              <button type="button" className="text-[11px] font-semibold text-gray-500 hover:text-gray-700"
+                onClick={() => setShowProjectDocs(v => !v)}>
+                {showProjectDocs ? 'Hide' : 'Already in the project?'}
+                <span className="font-normal text-gray-400 ml-1.5">tick it instead of uploading</span>
+              </button>
+              {showProjectDocs && (
+                <div className="mt-2">
+                  <SubmittalDocumentPicker projectId={projectId} selected={documentIds} onChange={setDocumentIds} />
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {(needs.length > 0 || documentIds.length > 0) && (
+          <div className="pt-1" style={{ borderTop: '1px solid #dbeafe' }}>
+            {!preview && (
+              <div className="pt-3">
+                <button type="button" className="btn-secondary w-full justify-center py-1.5 text-sm"
+                  onClick={predict} disabled={analysing || !canAnalyse}>
+                  <SparklesIcon className="w-4 h-4" />
+                  {analysing ? 'Reading it against the specification…' : 'Predict the review'}
+                </button>
+                <p className="text-[11px] text-gray-400 mt-1.5">
+                  {canAnalyse
+                    ? 'Seconds on one section; a minute or two on a full project manual.'
+                    : 'Upload at least one of the documents above, or tick one the project holds.'}
+                </p>
+              </div>
+            )}
+
+            {analysing && (
+              <p className="text-[11px] mt-2" style={{ color: '#1d4ed8' }}>
+                Reading the package against what you gave it. Leave this open.
+              </p>
+            )}
+
+            {analysisError && <p className="text-xs mt-2" style={{ color: '#b91c1c' }}>{analysisError}</p>}
+
+            {preview && (
+              <div className="pt-3">
+                <PredictionBody analysis={preview.analysis} />
+                <div className="flex items-center gap-3 mt-3">
+                  <button type="button" className="text-[12px] font-semibold text-gray-500 hover:text-gray-700"
+                    onClick={predict} disabled={analysing}>Run it again</button>
+                  <span className="text-[11px] text-gray-400">
+                    Saved with the submittal when you add it to the log.
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div>
