@@ -213,7 +213,7 @@ function listDocuments(projectId) {
   // been confirmed without a second request per row.
   return db.prepare(`
     SELECT id, project_id, file_name, label, doc_type, is_primary, terms, terms_edited,
-           extract_json, party, party_role, terms_status, terms_error, created_at, updated_at
+           party, party_role, terms_status, terms_error, created_at, updated_at
     FROM project_contracts WHERE project_id = ?
     ORDER BY (doc_type IN (${GOVERNING_SQL})) DESC, is_primary DESC, doc_type ASC, created_at ASC
   `).all(projectId);
@@ -221,14 +221,7 @@ function listDocuments(projectId) {
 
 router.get('/project/:id/documents', (req, res) => {
   if (!visibleProject(req, req.params.id)) return res.status(404).json({ error: 'Project not found' });
-  // The stored reading travels with the list — a size worth paying because the page shows what
-  // each document yielded, and a second request per row to find out would be worse.
-  res.json(listDocuments(req.params.id).map(d => ({
-    ...d,
-    terms: JSON.parse(d.terms || '{}'),
-    extract: d.extract_json ? JSON.parse(d.extract_json) : null,
-    extract_json: undefined,
-  })));
+  res.json(listDocuments(req.params.id).map(d => ({ ...d, terms: JSON.parse(d.terms || '{}') })));
 });
 
 async function addDocument(req, res) {
@@ -252,9 +245,10 @@ async function addDocument(req, res) {
     const docType = DOC_TYPES.includes(req.body.doc_type) ? req.body.doc_type : 'other';
     const label = docLabel(req.body.label, file.originalname);
 
-    // Every document is read, not only an agreement — see lib/documentExtract.js. The memo
-    // cover is the one read here rather than on the queue, because its placeholder mapping is
-    // the thing the very next screen asks the user to confirm.
+    // Only an agreement is worth reading on upload: a drawing set or a project manual is read
+    // later, by whichever module needs it and only as far as it needs. The memo cover is the one
+    // exception read here rather than on the queue, because its placeholder mapping is the thing
+    // the very next screen asks the user to confirm.
     let storedTerms = {};
     if (docType === 'memo-cover') {
       // Stored on the document row alongside the file. The column is named `terms` because a
@@ -293,10 +287,9 @@ async function addDocument(req, res) {
     const partyRole = ['prime', 'subcontractor', 'supplier'].includes(req.body.party_role)
       ? req.body.party_role : (storedTerms.partyRole || null);
 
-    // Everything but the memo cover has a reading to wait for now: a contract and a purchase
-    // order for their terms, every other document for its index and key facts. The memo cover was
-    // read above and is complete the moment it is stored.
-    const status = docType === 'memo-cover' ? 'ready' : contractQueue.STATUS.PENDING;
+    // Only a governing document has a reading to wait for. Anything else — a drawing set, a
+    // schedule, a memo cover — is complete the moment it is stored.
+    const status = isGoverning(docType) ? contractQueue.STATUS.PENDING : 'ready';
 
     const result = db.prepare(`
       INSERT INTO project_contracts
@@ -310,7 +303,7 @@ async function addDocument(req, res) {
     );
 
     // Handed over AFTER the row exists, so the queue always has something to read back.
-    if (docType !== 'memo-cover') contractQueue.enqueue(result.lastInsertRowid);
+    if (isGoverning(docType)) contractQueue.enqueue(result.lastInsertRowid);
 
     res.json({
       id: result.lastInsertRowid, file_name: file.originalname,

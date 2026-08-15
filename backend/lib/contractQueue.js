@@ -24,7 +24,6 @@
 const db = require('../database');
 const storage = require('./storage');
 const { extractContractTerms } = require('./contractExtract');
-const { extractDocumentFacts } = require('./documentExtract');
 const { isGoverning } = require('./docTypes');
 
 const STATUS = { PENDING: 'pending', READING: 'reading', READY: 'ready', FAILED: 'failed' };
@@ -45,33 +44,20 @@ const bytesFor = row => storage.readFile({ key: row.file_key, blob: row.file_blo
 async function runOne(contractId) {
   const row = db.prepare(`SELECT * FROM project_contracts WHERE id=?`).get(contractId);
   if (!row) return;                                  // deleted while queued — nothing to do
-  // A memo cover is read at upload, by a different reader, and has nothing for this one to do.
-  // Anything else queued here is read; a row abandoned silently would sit at "pending" for ever.
-  if (row.doc_type === 'memo-cover') { setStatus(contractId, STATUS.READY); return; }
+  // Only a governing document is read: a contract, or the purchase order that stands in its
+  // place on a job too small for one. Everything else — the drawing set, the project manual —
+  // is stored and read later by whichever module actually needs it.
+  //
+  // Reading every document on upload was tried and taken out again. It cost fifteen minutes and
+  // a serious share of a month's credits for one set, to answer questions most reviews never
+  // ask. Paying for a whole book up front to save a lookup later is the wrong way round when the
+  // lookup is the cheap part.
+  if (!isGoverning(row.doc_type)) { setStatus(contractId, STATUS.READY); return; }
 
   setStatus(contractId, STATUS.READING);
   try {
     const buffer = await bytesFor(row);
     if (!buffer || !buffer.length) throw new Error('the stored file could not be read back');
-
-    // Two readers, chosen by what the document IS. A governing document — a contract, or the
-    // purchase order that stands in its place on a job too small for one — yields the terms the
-    // money modules measure against. Every other document yields its index and its key facts.
-    if (!isGoverning(row.doc_type)) {
-      const facts = await extractDocumentFacts(buffer, { label: row.label || row.file_name });
-      const { usage, ...rest } = facts;
-      if (usage) {
-        console.log(`[document extract] doc=${contractId} (${row.doc_type}) `
-          + `in=${usage.inputTokens} out=${usage.outputTokens} tokens, `
-          + `${rest.index.length} indexed, ${rest.keyFacts.length} facts`);
-      }
-      db.prepare(`
-        UPDATE project_contracts
-        SET extract_json=?, terms_status=?, terms_error=NULL, updated_at=datetime('now')
-        WHERE id=?
-      `).run(JSON.stringify(rest), STATUS.READY, contractId);
-      return;
-    }
 
     const terms = await extractContractTerms(buffer);
     const { usage, ...rest } = terms;
@@ -94,8 +80,8 @@ async function runOne(contractId) {
     // Failure is recorded, not thrown away. The contract is still on file and still downloadable;
     // what is missing is its terms, and the page says so rather than showing a contract that
     // silently governs nothing.
-    console.error(`[document extract] doc=${contractId} (${row.doc_type}) failed:`, err.message);
-    setStatus(contractId, STATUS.FAILED, err.message || 'The document could not be read.');
+    console.error(`[contract extract] contract=${contractId} failed:`, err.message);
+    setStatus(contractId, STATUS.FAILED, err.message || 'The contract could not be read.');
   }
 }
 
@@ -125,11 +111,11 @@ function enqueue(contractId) {
 function resumePending() {
   const stuck = db.prepare(`
     SELECT id FROM project_contracts
-    WHERE terms_status IN (?, ?)
+    WHERE doc_type IN ('contract', 'purchase-order') AND terms_status IN (?, ?)
     ORDER BY created_at ASC
   `).all(STATUS.PENDING, STATUS.READING);
   if (!stuck.length) return 0;
-  console.log(`[document extract] resuming ${stuck.length} unfinished document read(s)`);
+  console.log(`[contract extract] resuming ${stuck.length} unfinished contract read(s)`);
   for (const r of stuck) enqueue(r.id);
   return stuck.length;
 }

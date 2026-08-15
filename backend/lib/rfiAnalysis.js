@@ -169,98 +169,6 @@ async function extractPages(buffer, pageNumbers) {
   return { buffer: Buffer.from(await out.save()), pages: wanted };
 }
 
-// A sheet reference as it is written by hand, normalised for matching. The same sheet is
-// "M-101", "M101" and "M 101" depending on who typed it.
-const bareRef = ref => String(ref || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-
-// Sheets an RFI names outright. Free, and exact.
-//
-// A contractor asking about a detail usually says which sheet it is on — "see detail 3/M-501",
-// "per A-201". Where the stored index confirms that sheet exists and says which page it is on,
-// there is nothing left for a model to work out, and the page is read rather than estimated.
-function sheetsNamedInRfi({ doc, rfi }) {
-  const index = doc.extract?.index;
-  if (!Array.isArray(index) || !index.length) return [];
-
-  const text = `${rfi.subject || ''} ${rfi.question || ''}`;
-  // A sheet number is a letter or two, then digits, with an optional separator: M-101, A201,
-  // MD2.01. Bare digits are excluded deliberately — "24 inches" is not a sheet.
-  const mentioned = new Set(
-    (text.match(/\b[A-Za-z]{1,3}[- .]?\d{1,3}(?:\.\d{1,2})?\b/g) || []).map(bareRef)
-  );
-  if (!mentioned.size) return [];
-
-  return index
-    .filter(e => Number.isInteger(e.page) && mentioned.has(bareRef(e.ref)))
-    .slice(0, 4)
-    .map(e => ({
-      sheetNumber: e.ref,
-      sheetTitle: e.title || null,
-      estimatedPdfPage: e.page,
-      why: 'Named in the RFI itself.',
-      fromStoredIndex: true,
-    }));
-}
-
-// Which sheets bear on the question, chosen from the stored index rather than from the drawing
-// set's front pages.
-//
-// Still a judgement — "which sheet answers this question" is not a lookup — so it is still one
-// call. But it is a far cheaper one and a more accurate one. Cheaper because the index goes as a
-// few lines of text instead of six rendered PDF pages. More accurate because the old prompt had
-// the model ESTIMATE where a sheet sat ("if the index lists N sheets and the file has M pages,
-// the first sheet is usually at page M - N + 1") and the stored index simply knows.
-async function pickSheetsFromIndex({ doc, rfi, discipline }) {
-  const index = doc.extract?.index?.filter(e => Number.isInteger(e.page)) || [];
-  if (index.length < 2) return null;
-
-  const listing = index.map(e => `${e.ref}${e.title ? ` — ${e.title}` : ''}`).join('\n');
-
-  const prompt = `You are helping a construction project manager find which drawing sheets answer
-a contractor's RFI (Request for Information).
-
-This is the sheet list of "${doc.label}", already read from the document:
-
-${listing}
-
-The RFI:
-Subject: ${rfi.subject}
-Question: ${rfi.question || '(no question text was recorded — go by the subject)'}
-Discipline: ${discipline} — the sheets to look for usually carry the prefix ${DISCIPLINE_SHEET_HINTS[discipline] || 'any'}.
-
-Report which of these sheets bear on the question, with the report_relevant_sheets tool.
-
-Rules:
-- Choose at most 4, the ones most likely to actually answer the question. Fewer is better: a
-  plan sheet and its detail sheet beat six loosely-related ones.
-- Copy "sheetNumber" exactly as it appears in the list above. It is matched against that list.
-- You do NOT need to work out page numbers. Leave "estimatedPdfPage" out; the page each sheet
-  sits on is already known and will be filled in.
-- Prefer the sheet type that answers the question being asked: a dimension question needs a
-  plan, a connection or assembly question needs a detail, a capacity question needs a schedule.
-- If none of these sheets bears on the question, return an empty list. That is a real answer.`;
-
-  const { data } = await askForJson({
-    content: [{ type: 'text', text: prompt }],
-    tool: SHEET_PICKER_TOOL,
-    maxTokens: 1200,
-    label: 'rfi sheet pick (stored index)',
-  });
-
-  // The page comes from the index, never from the model. A sheet it names that is not in the
-  // list is dropped rather than guessed at.
-  const byRef = new Map(index.map(e => [bareRef(e.ref), e]));
-  const sheets = (Array.isArray(data.relevantSheets) ? data.relevantSheets : [])
-    .map((sheet) => {
-      const hit = byRef.get(bareRef(sheet.sheetNumber));
-      return hit ? { ...sheet, estimatedPdfPage: hit.page, sheetTitle: sheet.sheetTitle || hit.title || null } : null;
-    })
-    .filter(Boolean)
-    .slice(0, 4);
-
-  return { hasSheetIndex: true, sheets, fromStoredIndex: true };
-}
-
 // Pass one, for a long document only. Reads the front of the set and decides which sheets
 // bear on the question. The model is given the page count so it can work out where a sheet
 // sits: sheets appear in the PDF in index order, so if the index names N sheets and the file
@@ -326,16 +234,9 @@ async function selectFrom({ doc, rfi, discipline, budget }) {
     };
   }
 
-  // Three routes to the same answer, cheapest first. Sheets the RFI names outright cost
-  // nothing; the stored index costs one small text call; only a document with no stored reading
-  // falls back to sending its front pages as images.
   let picked = null;
-  const named = sheetsNamedInRfi({ doc, rfi });
-  if (named.length) picked = { hasSheetIndex: true, sheets: named, fromStoredIndex: true };
-
   try {
-    if (!picked) picked = await pickSheetsFromIndex({ doc, rfi, discipline });
-    if (!picked) picked = await pickSheets({ doc, rfi, discipline, totalPages });
+    picked = await pickSheets({ doc, rfi, discipline, totalPages });
   } catch (err) {
     // A failed sheet pick shouldn't sink the whole analysis — fall back to the front of the
     // document, which at least carries the index and general notes.

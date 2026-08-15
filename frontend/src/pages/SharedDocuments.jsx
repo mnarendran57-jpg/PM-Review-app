@@ -9,10 +9,10 @@ import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import FileDrop from '../components/FileDrop';
 
-// What kind of document this is. Every one of them is read on upload: a contract or purchase
-// order for its terms, everything else for its index and the statements reviews measure against.
-// The governing types are additionally the ones Pay App, Invoice and Change Order Review check
-// billing against, and only they can be marked primary.
+// What kind of document this is. A governing document — a contract, or the purchase order that
+// stands in its place — is read on upload for its terms, and is what Pay App, Invoice and Change
+// Order Review check billing against; only those can be marked primary. Everything else is stored
+// for the team and read by whichever review needs it, when it needs it.
 //
 // 'reference' predates this list and still exists on older uploads, so it is shown rather than
 // hidden; new uploads use 'other' instead.
@@ -135,18 +135,13 @@ function UploadForm({ projectId, onSaved, onCancel }) {
         </div>
       )}
 
-      {docType !== 'memo-cover' && (
+      {GOVERNING.includes(docType) && (
         <div className="p-3 rounded-xl text-[11px] leading-relaxed"
           style={{ background: '#eff6ff', border: '1px solid #dbeafe', color: '#1e40af' }}>
           <SparklesIcon className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
-          {GOVERNING.includes(docType)
-            ? 'Coaster reads it on upload — tax status, unallowable costs, retainage and the '
-              + 'contract sum — so the review tools never have to read it again.'
-            : 'Coaster reads it on upload and keeps its index and the statements reviews measure '
-              + 'against — sheet and section numbers, scope, exclusions, work by others, required '
-              + 'submittals — so no review has to search it again.'}
-          {' '}Uploading takes a moment; the reading finishes in the background and this page shows
-          when it is done.
+          Coaster reads it on upload — tax status, unallowable costs, retainage and the contract
+          sum — so the review tools never have to read it again. Uploading takes a moment; the
+          reading finishes in the background and this page shows when it is done.
         </div>
       )}
 
@@ -263,7 +258,6 @@ function MemoCoverReview({ doc, projectId, onDone, onCancel }) {
 function ReadingState({ doc }) {
   const status = doc.terms_status || 'ready';
   const terms = doc.terms || {};
-  const extract = doc.extract;
 
   if (status === 'pending' || status === 'reading') {
     return (
@@ -292,22 +286,9 @@ function ReadingState({ doc }) {
     );
   }
 
-  if (!extract) return null;
-  const indexed = extract.index?.length || 0;
-  const facts = extract.keyFacts?.length || 0;
-  return (
-    <>
-      {extract.summary && (
-        <p className="text-[11px] text-gray-500 mt-1">{extract.summary}</p>
-      )}
-      <p className="text-[11px] mt-0.5" style={{ color: indexed || facts ? '#047857' : '#6b7280' }}>
-        {indexed || facts
-          ? `Read · ${indexed} ${indexed === 1 ? 'sheet/section' : 'sheets/sections'} indexed`
-            + ` · ${facts} key ${facts === 1 ? 'item' : 'items'} on file`
-          : 'Read — nothing in it that the review tools search for.'}
-      </p>
-    </>
-  );
+  // Everything else is stored and nothing more. The review tools read it when they need it,
+  // as far as they need, so there is nothing here to report.
+  return null;
 }
 
 // Which company a contract or purchase order is with.
@@ -433,7 +414,7 @@ function DocumentRow({ doc, projectId, onChanged, onReview }) {
                     </span>}
               </p>
             )}
-            {doc.doc_type !== 'memo-cover' && <ReadingState doc={doc} />}
+            {GOVERNING.includes(doc.doc_type) && <ReadingState doc={doc} />}
             {GOVERNING.includes(doc.doc_type) && (
               <PartyField doc={doc} projectId={projectId} onChanged={onChanged} />
             )}
@@ -558,8 +539,8 @@ export default function SharedDocuments() {
           <p className="text-sm text-gray-500 max-w-md mx-auto mb-5 leading-relaxed">
             Add the contract if the job has one, or the purchase order if it does not — Coaster
             reads its terms once and every review from then on checks against it. Drawings, specs
-            and everything else are read too, for their sheets, sections and scope, so no review
-            has to search them again.
+            and anything else the team needs go here too, and each review reads them when it
+            needs them.
           </p>
           <button className="btn-primary mx-auto" onClick={() => setUploading(true)}>
             <PlusIcon className="w-4 h-4" /> Add Document

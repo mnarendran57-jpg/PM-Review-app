@@ -156,7 +156,7 @@ function setDocuments(submittalId, projectId, rawIds) {
 // from another project reads as missing rather than as a permission error.
 async function loadDocumentBuffers(projectId, ids) {
   const find = db.prepare(
-    `SELECT file_name, label, doc_type, file_key, file_blob, extract_json
+    `SELECT file_name, label, doc_type, file_key, file_blob
      FROM project_contracts WHERE id=? AND project_id=?`
   );
   const out = [];
@@ -165,14 +165,7 @@ async function loadDocumentBuffers(projectId, ids) {
     if (!doc) continue;
     const buffer = await storage.readFile({ key: doc.file_key, blob: doc.file_blob });
     if (buffer) {
-      // The reading taken when the document was uploaded travels with the bytes. Where it holds
-      // an index, the search that used to be bought on every review is already answered.
-      let extract = null;
-      try { extract = doc.extract_json ? JSON.parse(doc.extract_json) : null; } catch { extract = null; }
-      out.push({
-        label: (doc.label || '').trim() || doc.file_name,
-        doc_type: doc.doc_type, buffer, extract,
-      });
+      out.push({ label: (doc.label || '').trim() || doc.file_name, doc_type: doc.doc_type, buffer });
     }
   }
   return out;
