@@ -44,10 +44,18 @@ async function slice(source, startPage, endPage) {
 // Splits into documents that fit BOTH ceilings — page count and request size. A file that
 // already fits comes back as one part, so callers need only one code path.
 //
-// Size is checked after the split rather than predicted before it, because a PDF's weight is
-// not spread evenly across its pages: one scanned photograph in an otherwise text document
-// carries most of the file. So an oversized part is halved and each half measured again, down
-// to a single page, which is as far as splitting can go.
+// Pages first, evenly, then bytes only where they bite. Every pass is an AI call, so the number
+// of them is the cost of reading a document and it is worth being exact about.
+//
+// Halving from the whole document was the obvious way to satisfy both ceilings at once, and it
+// overshoots: halves land on powers of two, so a 1,065-page manual came out as 32 parts of 34
+// pages where 27 of 40 would do. Five calls of pure waste on one document, and every module that
+// reads in passes paid it.
+//
+// Size still has to be checked AFTER slicing rather than predicted before it, because a PDF's
+// weight is not spread evenly across its pages: one scanned photograph in an otherwise text
+// document carries most of the file. So the even split comes first, and only a part that is
+// still too heavy gets halved — which on a text document never happens at all.
 async function splitPdf(buffer, maxPages = MAX_PAGES_PER_PASS, maxBytes = MAX_BYTES_PER_PASS) {
   const total = await pageCount(buffer);
   if (total == null) return [{ buffer, startPage: 1, endPage: total, partCount: 1 }];
@@ -58,19 +66,26 @@ async function splitPdf(buffer, maxPages = MAX_PAGES_PER_PASS, maxBytes = MAX_BY
   const source = await PDFDocument.load(buffer, { ignoreEncryption: true });
   const parts = [];
 
-  const add = async (startPage, endPage) => {
+  // Only ever called on a part that is already within the page ceiling and still too heavy.
+  const halveOnWeight = async (startPage, endPage) => {
     const part = await slice(source, startPage, endPage);
-    const pages = endPage - startPage + 1;
     // A single page over the ceiling cannot be divided further. It is sent as it is: one page
     // is small enough to be accepted in practice, and refusing it here would be the upload
     // rejected for its size that this splitter exists to prevent.
-    if (pages > 1 && (pages > maxPages || part.buffer.length > maxBytes)) {
+    if (endPage > startPage && part.buffer.length > maxBytes) {
       const mid = startPage + Math.floor((endPage - startPage) / 2);
-      await add(startPage, mid);
-      await add(mid + 1, endPage);
+      await halveOnWeight(startPage, mid);
+      await halveOnWeight(mid + 1, endPage);
       return;
     }
     parts.push(part);
+  };
+
+  const add = async (startPage, endPage) => {
+    // Even runs of maxPages, the same as before the byte ceiling existed.
+    for (let first = startPage; first <= endPage; first += maxPages) {
+      await halveOnWeight(first, Math.min(first + maxPages - 1, endPage));
+    }
   };
 
   await add(1, total);
