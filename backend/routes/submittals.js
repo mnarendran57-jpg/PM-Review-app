@@ -20,9 +20,19 @@ const {
 router.use(requireOrg);
 router.use(requireFeature('submittal-log'));
 
+// One file per request on every route that takes one — a submittal, a response, an attachment.
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 200 * 1024 * 1024, files: 1 },
+});
+
+// The prediction is the exception: the contractor's package AND the specification it is judged
+// against arrive together, and the section may be handed over as several PDFs. A per-field cap
+// alone is not enough — multer counts files across the whole request, so the instance needs its
+// own ceiling or the second file is refused with "Too many files".
+const uploadForPrediction = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 200 * 1024 * 1024, files: 10 },
 });
 
 // How long the A/E gets before this counts as overdue.
@@ -389,18 +399,27 @@ router.post('/extract', upload.single('file'), async (req, res) => {
 // a package by reading it against the specification, and that reading is most useful before the
 // package goes out. Nothing is written here — the result is held under a token and saved by
 // POST "/" below, so the prediction on the record is the one the PM actually saw.
-router.post('/preview-analysis', upload.array('files', 4), async (req, res) => {
+router.post('/preview-analysis', uploadForPrediction.fields([
+  { name: 'files', maxCount: 4 },
+  { name: 'reference_files', maxCount: 6 },
+]), async (req, res) => {
   try {
     const project = projectInScope(req, req.body.project_id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    const documents = await loadDocumentBuffers(project.id, parseIdList(req.body.document_ids));
-    const submittalFiles = (req.files || []).map(f => ({ label: f.originalname, buffer: f.buffer }));
+    // Two ways to supply what it is judged against, because the scan has just told the PM
+    // exactly which section it needs: tick it if the project already holds it, or hand that one
+    // document over here. Sending a spec section beats sending the manual it came from.
+    const stored = await loadDocumentBuffers(project.id, parseIdList(req.body.document_ids));
+    const handedOver = (req.files?.reference_files || [])
+      .map(f => ({ label: f.originalname, doc_type: 'specifications', buffer: f.buffer }));
+    const documents = [...stored, ...handedOver];
+    const submittalFiles = (req.files?.files || []).map(f => ({ label: f.originalname, buffer: f.buffer }));
 
     if (documents.length === 0) {
       return res.status(400).json({
-        error: 'Choose the specification — or whichever project document this submittal should be '
-          + 'checked against — before predicting the review.',
+        error: 'Give it something to check against — tick a document the project already holds, '
+          + 'or upload the specification section the submittal was made under.',
       });
     }
     if (submittalFiles.length === 0) {

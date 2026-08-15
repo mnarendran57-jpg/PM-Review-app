@@ -161,8 +161,12 @@ function NewSubmittalForm({ onSaved, onCancel }) {
   const [sentDate, setSentDate] = useState(today());
 
   // What the submittal itself cites, and which project documents to read it against.
-  const [cited, setCited] = useState([]);
+  const [needs, setNeeds] = useState([]);
   const [documentIds, setDocumentIds] = useState([]);
+  // The document the PM went and fetched because the scan asked for it. Handed straight to the
+  // prediction — a project does not have to hold a spec section for a submittal to be checked
+  // against it.
+  const [referenceFiles, setReferenceFiles] = useState([]);
 
   // The predicted review, run before the entry exists. Held here until the submittal is saved,
   // at which point the token hands it to the new log entry.
@@ -173,7 +177,7 @@ function NewSubmittalForm({ onSaved, onCancel }) {
   const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
 
   // The package is the other half of the comparison, so there is nothing to predict without it.
-  const canAnalyse = !!file && documentIds.length > 0;
+  const canAnalyse = !!file && (documentIds.length > 0 || referenceFiles.length > 0);
 
   const predict = async () => {
     setAnalysing(true); setAnalysisError(''); setPreview(null);
@@ -184,6 +188,7 @@ function NewSubmittalForm({ onSaved, onCancel }) {
       ['submittal_number', 'description', 'spec_section', 'submittal_type', 'vendor', 'notes']
         .forEach(k => fd.append(k, form[k] ?? ''));
       fd.append('files', file);
+      for (const ref of referenceFiles) fd.append('reference_files', ref);
       setPreview(await submittalsApi.previewAnalysis(fd));
     } catch (err) {
       setAnalysisError(errorText(err, 'Could not predict the review. You can still log the submittal and try again from the entry.'));
@@ -210,7 +215,7 @@ function NewSubmittalForm({ onSaved, onCancel }) {
       }));
       // What the submittal itself cites is worth showing: it is the strongest hint as to which
       // shared documents to tick, and the PM knows their own set by these names.
-      setCited(found.referencedDocuments || []);
+      setNeeds(found.needs || []);
       // Only the two fields that must be right are worth mentioning. Anything else the
       // cover sheet didn't show is simply left blank rather than turned into a chore.
       setReadNote(found.submittalNumber && found.description
@@ -315,13 +320,46 @@ function NewSubmittalForm({ onSaved, onCancel }) {
           </p>
         </div>
 
-        <div>
-          <label className="label">Which documents should it be checked against?</label>
-          {cited.length > 0 && (
-            <p className="text-[11px] mb-1.5" style={{ color: '#1d4ed8' }}>
-              The submittal itself cites {cited.join(', ')} — tick whichever document holds those.
+        {/* What the scan asked for, named as the submittal prints it. This is the point of
+            reading the cover sheet first: the PM fetches one section rather than hunting through
+            a manual, and the prediction reads a section rather than searching a book for it. */}
+        {needs.length > 0 && (
+          <div className="p-3 rounded-xl" style={{ background: '#fff', border: '1px solid #bfdbfe' }}>
+            <p className="text-[12px] font-semibold text-gray-900">
+              This submittal needs to be checked against:
             </p>
-          )}
+            <ul className="mt-1.5 space-y-1">
+              {needs.map((n, i) => (
+                <li key={i} className="text-[12px] text-gray-700 flex gap-2">
+                  <span className="font-semibold" style={{ color: '#1d4ed8' }}>{n.ref}</span>
+                  <span className="min-w-0">
+                    {n.title ? <span className="text-gray-600">{n.title}</span> : null}
+                    {n.why ? <span className="block text-[11px] text-gray-400">{n.why}</span> : null}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[11px] text-gray-500 mt-2">
+              Tick it below if the project already holds it, or upload just that document. One
+              section reads faster and predicts better than the whole manual it came from.
+            </p>
+          </div>
+        )}
+
+        <div>
+          <label className="label">Upload what it should be checked against</label>
+          <input type="file" multiple accept=".pdf"
+            className="text-xs text-gray-500 w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 file:cursor-pointer"
+            onChange={e => setReferenceFiles(Array.from(e.target.files || []))} />
+          <p className="text-[11px] text-gray-400 mt-1">
+            {referenceFiles.length > 0
+              ? `${referenceFiles.length} document${referenceFiles.length === 1 ? '' : 's'} added — read for this prediction only.`
+              : 'The specification section or drawing sheet named above. Used for this prediction only; it is not filed in the project.'}
+          </p>
+        </div>
+
+        <div>
+          <label className="label">…or pick from the project's documents</label>
           <SubmittalDocumentPicker projectId={projectId} selected={documentIds} onChange={setDocumentIds} />
         </div>
 
@@ -335,8 +373,8 @@ function NewSubmittalForm({ onSaved, onCancel }) {
               </button>
               <p className="text-[11px] text-gray-400 mt-1.5">
                 {canAnalyse
-                  ? 'Takes a minute or two on a full project manual. It has no bearing on the log.'
-                  : 'Attach the contractor\'s package above, and tick at least one document, first.'}
+                  ? 'Takes a minute or two on a full project manual, and seconds on one section.'
+                  : 'Attach the contractor\'s package above, then upload or tick what it is checked against.'}
               </p>
             </div>
           )}
