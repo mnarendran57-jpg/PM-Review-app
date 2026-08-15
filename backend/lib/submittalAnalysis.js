@@ -1,6 +1,7 @@
 const { PDFDocument } = require('pdf-lib');
 const { pageCount } = require('./pdfChunk');
-const { askForJson } = require('./aiJson');
+const { askForJson, FAST_MODEL } = require('./aiJson');
+const { toContentBlocks } = require('./pdfText');
 const { REVIEW_ACTIONS } = require('./submittalLog');
 
 // Predicts how the A/E is likely to review a submittal, by reading it against the
@@ -63,6 +64,17 @@ const MIN_SPEC_PAGES = 12;
 // was built for; it is no longer the ordinary route.
 const PACKAGE_DIRECT_PAGES = 32;
 const PACKAGE_CHUNK_PAGES = 24;
+
+// The same ceiling for a package that reads as prose. Both numbers above are really token
+// budgets wearing page numbers: a page sent as an image costs about two thousand tokens
+// whatever is on it, and thirty-odd of those is as much as one call should carry. A page sent
+// as text costs a few hundred, so the same budget buys several times as many of them — and a
+// package sent whole in one call beats the same package catalogued in three.
+const TEXT_DIRECT_PAGES = 120;
+
+// What a text page costs against the shared page budget, relative to an image page. Rounded in
+// the cautious direction: the measured ratio was closer to a fifth.
+const TEXT_PAGE_WEIGHT = 0.25;
 // A ceiling exists because the per-minute allowance is real, but it is stated in the report
 // rather than applied quietly. Silent truncation is what produced the wrong answer above.
 const MAX_PACKAGE_CHUNKS = 40;
@@ -336,6 +348,12 @@ Rules:
     tool: SECTION_PICKER_TOOL,
     maxTokens: 1200,
     label: 'submittal section pick',
+    // Finding a section in a contents list is a lookup, not a judgement — and whichever pages
+    // it lands on are named back to the PM in the sources, so a bad pick is visible and can be
+    // corrected by choosing the document again. Measured against the reviewing model on a real
+    // drawing set it produced the same reasoning, the same page arithmetic and the same leading
+    // sheets, in a fifth of the time.
+    model: FAST_MODEL,
   });
   return parsed;
 }
@@ -461,6 +479,11 @@ List what is on THESE pages with the report_package_contents tool.`;
         cacheTool: true,
         maxTokens: INVENTORY_MAX_TOKENS,
         label: `submittal package pages ${first}-${last}`,
+        // Cataloguing is the one call here that is explicitly not asked to judge anything — the
+        // schema asks what is printed on each page and nothing else, and the page numbers make
+        // every line of it checkable by turning to the page. The judging happens once, later,
+        // on the reviewing model, which reads this catalogue against the specification.
+        model: FAST_MODEL,
       });
       for (const it of (data.items || [])) {
         if (!it || !it.item) continue;
@@ -705,7 +728,9 @@ to the stamp those deviations actually justify. "Approved" means nothing materia
 
 // documents: [{ label, doc_type, buffer }] — the project's shared documents to read against.
 // submittalFiles: [{ label, buffer }] — the contractor's package. Sent first and never dropped.
-async function analyzeSubmittal({ submittal, documents = [], submittalFiles = [] }) {
+// fresh: pay for a new reading rather than reusing the stored one. Set when the PM has asked
+// for this again, which they only do when they doubted the answer.
+async function analyzeSubmittal({ submittal, documents = [], submittalFiles = [], fresh = false }) {
   const selections = [];
   let budget = MAX_ANALYSIS_PAGES;
 
@@ -723,10 +748,23 @@ async function analyzeSubmittal({ submittal, documents = [], submittalFiles = []
   for (const f of submittalFiles.slice(0, 2)) {
     const total = await pageCount(f.buffer);
 
-    if (total == null || total <= packageCeiling) {
-      packageBlocks.push(asDocument(f.buffer));
+    // Product data sheets are prose and go as text; the shop drawings bound into the same
+    // package stay as pages. Which is which is decided per page, so a mixed package — which is
+    // what most of them are — comes out mixed rather than being forced either way.
+    const asText = await toContentBlocks(f.buffer, { label: `${f.label} (the contractor's package)` });
+    const readable = asText.stats.mode === 'text';
+    const ceiling = readable ? TEXT_DIRECT_PAGES : packageCeiling;
+
+    if (total == null || total <= ceiling) {
+      packageBlocks.push(...asText.blocks);
       submittalPages += total || 0;
-      budget -= total || 1;
+      budget -= readable
+        ? Math.ceil((total || 1) * TEXT_PAGE_WEIGHT)
+        : (total || 1);
+      if (readable) {
+        console.log(`[submittal analysis] ${f.label}: ${asText.stats.prosePages} of `
+          + `${asText.stats.pages} pages sent as text, ${asText.stats.imagePages} as pages`);
+      }
       selections.push({
         label: `${f.label} (the contractor's package)`, docType: 'submittal',
         pagesUsed: total, wholeDocument: true, sections: [], note: null,
@@ -762,8 +800,17 @@ async function analyzeSubmittal({ submittal, documents = [], submittalFiles = []
       console.warn(`[submittal analysis] could not read ${doc.label}: ${err.message}`);
     }
     if (!selection) continue;
-    budget -= selection.pagesUsed || 1;
-    specBlocks.push(asDocument(selection.buffer));
+
+    // A specification section is the purest prose in the whole review — clauses, submittal
+    // requirements, referenced standards — and it is the half of the comparison that decides
+    // the outcome. It is also the half that costs the most as pages, because the pages chosen
+    // are dense. Sent as text it costs a fraction and reads the same.
+    const asText = await toContentBlocks(selection.buffer, { label: doc.label });
+    specBlocks.push(...asText.blocks);
+    budget -= asText.stats.mode === 'text'
+      ? Math.ceil((selection.pagesUsed || 1) * TEXT_PAGE_WEIGHT)
+      : (selection.pagesUsed || 1);
+
     const { buffer, ...rest } = selection;
     selections.push(rest);
   }
@@ -781,6 +828,7 @@ async function analyzeSubmittal({ submittal, documents = [], submittalFiles = []
     tool: REVIEW_TOOL,
     maxTokens: 3000,
     label: 'submittal review prediction',
+    fresh,
   });
 
   const content = [...packageBlocks, ...specBlocks, { type: 'text', text: prompt }];

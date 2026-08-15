@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const aiCache = require('./aiCache');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -21,6 +22,23 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // prompt keeps the reasoning and the rules, the schema says what shape the answer takes.
 
 const MODEL = 'claude-sonnet-4-5';
+
+// The cheaper model, for the reading that is not judging.
+//
+// Some of what this app asks for is transcription: what number is on this cover sheet, which
+// spec section does it cite, what is on each page of this package. There is a right answer
+// printed on the page and the job is to copy it out. Other calls are judgement: is this
+// deviation material, does this pay app add up, will the A/E reject this. Those decide what a
+// PM tells a client, and they stay on the better model.
+//
+// Haiku is a third of the price in and a third out, and faster with it. It also draws on its
+// own per-minute allowance rather than competing with the reviews for this account's Sonnet
+// budget — so moving the mechanical calls across buys headroom as well as money.
+//
+// The rule for choosing: if a wrong answer would be visible to the PM and correctable in the
+// form in front of them, it can go here. If a wrong answer would reach a client inside a
+// report, it cannot.
+const FAST_MODEL = 'claude-haiku-4-5';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // Answers worth waiting out rather than failing on. 429 is the per-minute allowance, which
@@ -77,6 +95,14 @@ function fillDeclaredNulls(value, schema) {
 //   truncatedMessage thrown when the model runs out of room mid-answer. Worth setting
 //                    wherever the output can be long, since "it was cut off" and "it failed"
 //                    call for different things from the user.
+//   model            FAST_MODEL for transcription — see its note above. Defaults to the
+//                    reviewing model, so a caller that does not think about this gets the
+//                    careful one.
+//   fresh            ignore any stored answer and pay for a new one. For the "run it again"
+//                    buttons: a PM who presses one has usually decided the answer was wrong,
+//                    and handing back the identical words instantly would read as broken.
+//                    Everywhere else the stored answer is the right one — same documents,
+//                    same question, and the reading was already paid for once.
 async function askForJson({
   content,
   tool,
@@ -86,9 +112,11 @@ async function askForJson({
   attempts = 2,
   label = 'ai',
   truncatedMessage = null,
+  fresh = false,
+  model = MODEL,
 }) {
   const request = {
-    model: MODEL,
+    model,
     max_tokens: maxTokens,
     // The cache breakpoint goes as late as possible in the invariant part of the request,
     // because everything BEFORE it is cached with it. The API orders a prompt tools -> system ->
@@ -112,6 +140,20 @@ async function askForJson({
   // Below about a thousand tokens the API declines to cache and simply ignores the marker — no
   // error, no cost, and no saving. Nothing here depends on the exact figure; a schema that grows
   // past it starts being cached on its own.
+
+  // The stored-answer lookup. Fingerprinted from what actually determines the answer — the
+  // model, the documents, the question, the shape asked for — and deliberately not from the
+  // prompt-cache markers, which change how the request is billed but not what comes back.
+  const key = aiCache.fingerprint({
+    model, content, tool, system: request.system || null, maxTokens,
+  });
+  if (!fresh) {
+    const stored = aiCache.read(key);
+    if (stored) {
+      console.log(`[${label}] answered from store — no tokens spent`);
+      return { data: stored, usage: null, stopReason: 'cached', cached: true };
+    }
+  }
 
   let response;
   for (let attempt = 1; ; attempt++) {
@@ -160,11 +202,14 @@ async function askForJson({
       : 'The model did not return an answer.');
   }
 
-  return {
-    data: fillDeclaredNulls(call.input || {}, tool.input_schema),
-    usage: response.usage || null,
-    stopReason: response.stop_reason,
-  };
+  const data = fillDeclaredNulls(call.input || {}, tool.input_schema);
+
+  // Stored only on the way out of a clean answer. A truncated or refused call throws above
+  // and never reaches here, so a failure is never remembered as if it were a result.
+  aiCache.write(key, label, data, response.usage);
+  aiCache.sweep();
+
+  return { data, usage: response.usage || null, stopReason: response.stop_reason, cached: false };
 }
 
-module.exports = { askForJson, fillDeclaredNulls, MODEL };
+module.exports = { askForJson, fillDeclaredNulls, MODEL, FAST_MODEL };

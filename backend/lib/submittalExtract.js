@@ -1,5 +1,5 @@
 const { splitPdf, pageCount } = require('./pdfChunk');
-const { askForJson } = require('./aiJson');
+const { askForJson, FAST_MODEL } = require('./aiJson');
 const { REVIEW_ACTIONS } = require('./submittalLog');
 
 // A submittal package is a cover sheet followed by the actual content — often hundreds of
@@ -26,6 +26,11 @@ async function callClaude(pdfBuffer, prompt, tool, label) {
     tool,
     maxTokens: 2000,
     label,
+    // Copying fields off a cover sheet is transcription, not judgement: the number, the spec
+    // section, who sent it. Every value lands in a form the PM is looking at and can correct
+    // before anything is saved, so the cheaper model is the right tool — and it keeps the
+    // reviewing model's per-minute allowance free for the review itself.
+    model: FAST_MODEL,
   });
   return data;
 }

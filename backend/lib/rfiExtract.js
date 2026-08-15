@@ -1,5 +1,5 @@
 const { splitPdf } = require('./pdfChunk');
-const { askForJson } = require('./aiJson');
+const { askForJson, FAST_MODEL } = require('./aiJson');
 const { RESPONSE_ACTIONS, DISCIPLINES } = require('./rfiLog');
 
 // An RFI form is one or two pages, but contractors routinely staple photographs, marked-up
@@ -24,6 +24,11 @@ async function callClaude(pdfBuffer, prompt, tool, label) {
     tool,
     maxTokens: 2000,
     label,
+    // Copying fields off a cover sheet is transcription, not judgement: the number, the spec
+    // section, who sent it. Every value lands in a form the PM is looking at and can correct
+    // before anything is saved, so the cheaper model is the right tool — and it keeps the
+    // reviewing model's per-minute allowance free for the review itself.
+    model: FAST_MODEL,
   });
   return data;
 }

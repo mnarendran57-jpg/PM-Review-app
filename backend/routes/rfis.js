@@ -381,7 +381,11 @@ router.post('/preview-analysis', upload.array('files', 6), async (req, res) => {
       question: nullable(req.body.question),
     };
 
-    const { analysis, sources } = await analyzeRfi({ rfi, discipline, documents, extraFiles });
+    // "Run it again" sends fresh=1. Anything else reuses the stored reading of these exact
+    // drawings, which costs nothing and comes back instantly.
+    const { analysis, sources } = await analyzeRfi({
+      rfi, discipline, documents, extraFiles, fresh: req.body.fresh === '1',
+    });
     const token = stashPreview(req, { projectId: project.id, discipline, analysis, sources });
     res.json({ token, discipline, analysis, sources });
   } catch (err) {
@@ -714,7 +718,9 @@ router.post('/:id/analysis', upload.array('files', 4), async (req, res) => {
       });
     }
 
-    const { analysis, sources, markdown } = await analyzeRfi({ rfi, discipline, documents, extraFiles });
+    const { analysis, sources, markdown } = await analyzeRfi({
+      rfi, discipline, documents, extraFiles, fresh: req.body.fresh === '1',
+    });
 
     const revisions = revisionsOf(rfi.id);
     const current = revisions[revisions.length - 1];

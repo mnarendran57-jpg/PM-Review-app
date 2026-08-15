@@ -446,7 +446,11 @@ router.post('/preview-analysis', uploadForPrediction.fields([
       notes: nullable(req.body.notes),
     };
 
-    const { analysis, sources } = await analyzeSubmittal({ submittal, documents, submittalFiles });
+    // "Run it again" sends fresh=1. Anything else reuses the stored reading of these exact
+    // documents, which costs nothing and comes back instantly.
+    const { analysis, sources } = await analyzeSubmittal({
+      submittal, documents, submittalFiles, fresh: req.body.fresh === '1',
+    });
     const token = stashPreview(req, {
       projectId: project.id,
       specSection: submittal.spec_section,
@@ -800,7 +804,9 @@ router.post('/:id/analysis', upload.array('files', 4), async (req, res) => {
       });
     }
 
-    const { analysis, sources, markdown } = await analyzeSubmittal({ submittal, documents, submittalFiles });
+    const { analysis, sources, markdown } = await analyzeSubmittal({
+      submittal, documents, submittalFiles, fresh: req.body.fresh === '1',
+    });
 
     const saved = db.prepare(`
       INSERT INTO submittal_analyses (submittal_id, revision_id, spec_section, sources_json,

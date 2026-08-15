@@ -224,10 +224,14 @@ function NewSubmittalForm({ onSaved, onCancel }) {
   // The package is the other half of the comparison, so there is nothing to predict without it.
   const canAnalyse = !!file && (documentIds.length > 0 || referenceFiles.some(Boolean));
 
-  const predict = async () => {
+  // fresh is set by "Run it again" only. A first run reuses any earlier reading of these exact
+  // documents — same package, same spec, same answer — which returns at once and costs nothing.
+  // Pressing "Run it again" means the PM doubted the answer, so that one is paid for.
+  const predict = async ({ fresh = false } = {}) => {
     setAnalysing(true); setAnalysisError(''); setPreview(null);
     try {
       const fd = new FormData();
+      if (fresh) fd.append('fresh', '1');
       fd.append('project_id', projectId);
       fd.append('document_ids', JSON.stringify(documentIds));
       ['submittal_number', 'description', 'spec_section', 'submittal_type', 'vendor', 'notes']
@@ -496,7 +500,7 @@ function NewSubmittalForm({ onSaved, onCancel }) {
                 <PredictionBody analysis={preview.analysis} />
                 <div className="flex items-center gap-3 mt-3">
                   <button type="button" className="text-[12px] font-semibold text-gray-500 hover:text-gray-700"
-                    onClick={predict} disabled={analysing}>Run it again</button>
+                    onClick={() => predict({ fresh: true })} disabled={analysing}>Run it again</button>
                   <span className="text-[11px] text-gray-400">
                     Saved with the submittal when you add it to the log.
                   </span>
@@ -860,6 +864,9 @@ function PredictedReviewPanel({ record, onRan }) {
     setRunning(true); setError('');
     try {
       const fd = new FormData();
+      // Asking again for a prediction that already exists means the PM wants it re-read, not
+      // handed back. A first run reuses whatever the same spec produced before, free.
+      if (a) fd.append('fresh', '1');
       fd.append('document_ids', selected.join(','));
       const res = await submittalsApi.analyze(record.id, fd);
       onRan(res.submittal);
