@@ -721,6 +721,29 @@ for (const org of db.prepare(`SELECT id FROM organizations WHERE letterhead IS N
   if (tpl) db.prepare(`UPDATE organizations SET letterhead = ? WHERE id = ?`).run(tpl.company_name, org.id);
 }
 
+// The address moved onto the organization but the logo did not, so Olivier's own memos came
+// out with the address block and a blank space where the mark belongs — unusable for the
+// document they are actually sent as. The mark ships with the app (assets/olivier-logo.jpg)
+// because Olivier is the firm the app was written for; it is attached to the organization
+// named Olivier and to no other, since handing it to whoever happens to be first is precisely
+// the leak that moving branding onto the organization was meant to end. Any organization can
+// replace or remove it from Settings afterwards, and a row that already has a logo is left
+// alone so this never overwrites an upload.
+const olivierLogoPath = path.join(__dirname, 'assets', 'olivier-logo.jpg');
+const olivierOrgs = db.prepare(`
+  SELECT id FROM organizations
+  WHERE LOWER(TRIM(name)) IN ('olivier', 'olivier inc', 'olivier inc.', 'olivier incorporated')
+    AND logo_key IS NULL AND logo_blob IS NULL
+`).all();
+if (olivierOrgs.length && require('fs').existsSync(olivierLogoPath)) {
+  const logoBytes = require('fs').readFileSync(olivierLogoPath);
+  for (const org of olivierOrgs) {
+    db.prepare(`UPDATE organizations SET logo_blob=?, logo_mime=? WHERE id=?`)
+      .run(logoBytes, 'image/jpeg', org.id);
+    console.log(`[memo] attached the Olivier logo to organization ${org.id}`);
+  }
+}
+
 // Default memo template. Seeded per organization rather than once globally: the old check
 // counted every template in the database, so the second customer to sign up got no template
 // at all and fell through to the first customer's.
