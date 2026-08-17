@@ -406,6 +406,9 @@ export default function PayAppReview() {
   const [showOptional, setShowOptional] = useState(false);
 
   const [analyzing, setAnalyzing] = useState(false);
+  // Seconds since the read started. Shown while it runs, because a document that takes four minutes
+  // and a page that has quietly died look identical without it.
+  const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null); // { id, report, extracted: { current, previous } }
   const [editing, setEditing] = useState(false);
@@ -564,7 +567,7 @@ export default function PayAppReview() {
       if (retainageMilestonePct) fd.append('retainage_milestone_pct', retainageMilestonePct);
       if (retainageReducedRate) fd.append('retainage_reduced_rate', parseFloat(retainageReducedRate) / 100);
     }
-    const data = await payAppReviewApi.create(fd);
+    const data = await payAppReviewApi.create(fd, setElapsed);
     setResult({ id: data.id, report: data.report, extracted: { current, previous }, previousReviewId });
     // A review may have created a project (or added to one), so refresh both the
     // dropdown and the budget panel rather than leaving stale numbers on screen.
@@ -584,7 +587,7 @@ export default function PayAppReview() {
       // Separately-sent backup is read alongside the pay app, in the same step. It used to be
       // attached to the review call, which accepted it and never opened it.
       for (const f of backupFiles) fd.append('backup_files', f);
-      const extracted = await payAppReviewApi.extract(fd);
+      const extracted = await payAppReviewApi.extract(fd, setElapsed);
       setBackupRead(extracted.backupRead || null);
 
       // With no previous PDF uploaded, fall back to the last pay app already on file.
@@ -610,6 +613,7 @@ export default function PayAppReview() {
       setError(err.friendlyMessage || err.response?.data?.error || 'Could not analyze these pay applications.');
     } finally {
       setAnalyzing(false);
+      setElapsed(0);
     }
   };
 
@@ -814,7 +818,9 @@ export default function PayAppReview() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
                   </svg>
-                  Analyzing pay applications…
+                  {elapsed > 8
+                    ? `Reading the documents… ${Math.floor(elapsed / 60)}m ${String(elapsed % 60).padStart(2, '0')}s`
+                    : 'Analyzing pay applications…'}
                 </span>
               ) : (
                 <span className="flex items-center gap-2"><SparklesIcon className="w-4 h-4" /> Analyze Pay Applications</span>

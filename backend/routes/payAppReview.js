@@ -17,6 +17,7 @@ const { parseCoLogCsv } = require('../lib/csv');
 const { friendlyAiError } = require('../lib/aiErrors');
 const { DOC_TYPE_KEYS, GOVERNING_SQL, isGoverning } = require('../lib/docTypes');
 const storage = require('../lib/storage');
+const jobs = require('../lib/jobs');
 
 const access = require('../lib/access');
 const { requireOrg } = require('../middleware/auth');
@@ -51,16 +52,27 @@ router.post('/extract', upload.fields([
   { name: 'previous_file', maxCount: 1 },
   { name: 'backup_files', maxCount: 10 },
 ]), async (req, res) => {
+  const currentFile = req.files?.current_file?.[0];
+  if (!currentFile) return res.status(400).json({ error: 'Current pay application PDF is required' });
+  if (currentFile.mimetype !== 'application/pdf') return res.status(400).json({ error: 'Current pay application must be a PDF' });
+
+  const previousFile = req.files?.previous_file?.[0];
+  if (previousFile && previousFile.mimetype !== 'application/pdf') {
+    return res.status(400).json({ error: 'Previous pay application must be a PDF' });
+  }
+
+  // Everything above is a check on the upload and answers immediately. Everything below is minutes
+  // of reading, and it no longer happens while the browser holds a connection open — see
+  // lib/jobs.js for why that mattered more than it sounds.
+  const jobId = jobs.start(
+    { orgId: req.orgId, userId: req.user.id, kind: 'pay-app-extract' },
+    () => extractPayApp({ currentFile, previousFile, backupFiles: req.files?.backup_files || [] }),
+  );
+  res.status(202).json({ jobId });
+});
+
+async function extractPayApp({ currentFile, previousFile, backupFiles: allBackup }) {
   try {
-    const currentFile = req.files?.current_file?.[0];
-    if (!currentFile) return res.status(400).json({ error: 'Current pay application PDF is required' });
-    if (currentFile.mimetype !== 'application/pdf') return res.status(400).json({ error: 'Current pay application must be a PDF' });
-
-    const previousFile = req.files?.previous_file?.[0];
-    if (previousFile && previousFile.mimetype !== 'application/pdf') {
-      return res.status(400).json({ error: 'Previous pay application must be a PDF' });
-    }
-
     const { current, previous } = await analyzePayApps(currentFile.buffer, previousFile?.buffer);
 
     // Backup that arrived separately from the package. It is read HERE, with the pay app,
@@ -71,7 +83,7 @@ router.post('/extract', upload.fields([
     // form invited them, multer parsed them, and they were dropped. A reconciliation pass that
     // stood down for want of invoices the contractor had actually supplied is the worst kind of
     // silence: it reads as "nothing was submitted".
-    const backupFiles = (req.files?.backup_files || []).filter(f => f.mimetype === 'application/pdf');
+    const backupFiles = allBackup.filter(f => f.mimetype === 'application/pdf');
     let backupRead = null;
     if (backupFiles.length && current) {
       const extra = await analyzeBackup(backupFiles.map(f => f.buffer));
@@ -87,12 +99,14 @@ router.post('/extract', upload.fields([
       };
     }
 
-    res.json({ current: backfillPayApp(current), previous: backfillPayApp(previous), backupRead });
+    return { current: backfillPayApp(current), previous: backfillPayApp(previous), backupRead };
   } catch (err) {
     console.error('Pay app extract error:', err);
-    res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });
+    // The job records this message verbatim, so it has to be the one a person should read.
+    err.friendlyMessage = friendlyAiError(err);
+    throw err;
   }
-});
+}
 
 // Projects to offer in the Pay App Review dropdown. Deliberately not a full project
 // list: only projects that are Active, ordered so the ones with recent pay app
@@ -503,10 +517,22 @@ router.get('/latest-for-project', (req, res) => {
 router.post('/', upload.fields([
   { name: 'current_file', maxCount: 1 },
 ]), async (req, res) => {
-  try {
-    const currentFile = req.files?.current_file?.[0];
-    if (!currentFile) return res.status(400).json({ error: 'Current pay application PDF is required' });
+  const currentFile = req.files?.current_file?.[0];
+  if (!currentFile) return res.status(400).json({ error: 'Current pay application PDF is required' });
 
+  // The engines themselves are arithmetic and take no time at all. What makes this slow is the
+  // first review on a project, which reads the governing contract — several passes on a long
+  // agreement, against a per-minute rate limit. That is enough to lose the connection, so this
+  // runs as a job like the extraction does.
+  const jobId = jobs.start(
+    { orgId: req.orgId, userId: req.user.id, kind: 'pay-app-review' },
+    () => runPayAppReview(req, currentFile),
+  );
+  res.status(202).json({ jobId });
+});
+
+async function runPayAppReview(req, currentFile) {
+  try {
     const normalizePayApp = pa => pa && backfillPayApp({
       ...pa,
       summary: pa.summary || {},
@@ -737,11 +763,23 @@ router.post('/', upload.fields([
 
     // engineError travels with the response so the page can say the checks did not run, rather
     // than showing an empty results panel that looks like nothing was wrong.
-    res.json({ id: insertResult.lastInsertRowid, projectId, report, engineResult, engineError });
+    return { id: insertResult.lastInsertRowid, projectId, report, engineResult, engineError };
   } catch (err) {
     console.error('Pay app review error:', err);
-    res.status(500).json({ error: err.message });
+    // Every other AI route already translated its errors; this one returned err.message raw.
+    err.friendlyMessage = friendlyAiError(err);
+    throw err;
   }
+}
+
+// How the work is getting on. Polled by the page while a document is being read, so it is
+// deliberately cheap: the result travels only once there is one, and a job that says "running"
+// carries nothing but that word.
+router.get('/jobs/:id', (req, res) => {
+  const row = jobs.get(req.params.id, { orgId: req.orgId, userId: req.user.id });
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  if (row.status !== jobs.RUNNING) jobs.sweep();
+  res.json(jobs.view(row));
 });
 
 router.get('/', (req, res) => {

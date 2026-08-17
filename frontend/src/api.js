@@ -65,7 +65,11 @@ api.interceptors.response.use(
     // wrong place.
     if (!err.response) {
       err.friendlyMessage = err.code === 'ECONNABORTED'
-        ? 'The server took too long to answer. Large documents can exceed the time limit — try again, and if it keeps happening split the PDF into smaller parts.'
+        // Reading a document no longer happens inside a request, so this can no longer mean "the
+        // document was too big" — and it must never again suggest splitting the PDF, which is not
+        // an answer this application is allowed to give. What is left is an ordinary slow or
+        // dropped connection.
+        ? 'The connection to the server timed out. Check your connection and try again — nothing was lost.'
         : 'Cannot reach the server. It may be offline or still starting up — check that the backend is running and reachable, then try again.';
     }
 
@@ -475,20 +479,47 @@ function triggerDownload(blob, fileName) {
   window.URL.revokeObjectURL(url);
 }
 
+// Waits for a job to finish, however long it takes.
+//
+// Nothing here has a deadline, and that is the point: the document decides how long the work takes,
+// and no clock in the browser, a proxy or a load balancer gets a vote any more. Each poll is a tiny
+// request that either says "running" or hands back the result.
+async function waitForJob(jobId, { onTick } = {}) {
+  const started = Date.now();
+  // Quick at first — a small pay application is read in seconds and should not sit waiting on a
+  // slow poll — then easing off so a twenty-minute read is not a thousand requests.
+  const delayFor = elapsed => (elapsed < 30000 ? 1500 : elapsed < 180000 ? 3000 : 6000);
+
+  for (;;) {
+    const elapsed = Date.now() - started;
+    await new Promise(r => setTimeout(r, delayFor(elapsed)));
+    const job = await api.get(`/pay-app-review/jobs/${jobId}`).then(r => r.data);
+    if (job.status === 'done') return job.result;
+    if (job.status === 'failed') {
+      const err = new Error(job.error || 'The work could not be completed.');
+      err.friendlyMessage = job.error || 'The work could not be completed.';
+      throw err;
+    }
+    if (onTick) onTick(Math.round((Date.now() - started) / 1000));
+  }
+}
+
 export const payAppReviewApi = {
   list: params => api.get('/pay-app-review', { params }).then(r => r.data),
   get: id => api.get(`/pay-app-review/${id}`).then(r => r.data),
   // The findings report, rendered server-side so the page, the PDF and the printed copy are
   // the same document rather than three renderings that can drift apart.
   reportHtml: id => api.get(`/pay-app-review/${id}/report.html`, { responseType: 'text' }).then(r => r.data),
-  extract: formData => api.post('/pay-app-review/extract', formData, {
+  // The upload still has a timeout — that part is a file transfer and a stall there is a real
+  // fault. The READING has none, because it is no longer happening on this connection.
+  extract: (formData, onTick) => api.post('/pay-app-review/extract', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
-  }).then(r => r.data),
+  }).then(r => waitForJob(r.data.jobId, { onTick })),
   // The first review on a project reads the contract, which is several passes on a long
   // agreement; every review after that reads the stored terms and returns in seconds.
-  create: formData => api.post('/pay-app-review', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }, timeout: LONG_AI_TIMEOUT
-  }).then(r => r.data),
+  create: (formData, onTick) => api.post('/pay-app-review', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => waitForJob(r.data.jobId, { onTick })),
   projects: () => api.get('/pay-app-review/projects').then(r => r.data),
   createProject: projectName =>
     api.post('/pay-app-review/projects', { project_name: projectName }).then(r => r.data),

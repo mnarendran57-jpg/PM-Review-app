@@ -1336,4 +1336,33 @@ if (resetEmail && resetPassword) {
   }
 }
 
+// --- AI work that outlives its request ------------------------------------------------------
+// Reading a pay application or a drawing set takes minutes. Held inside an HTTP request, that is a
+// race against every timeout between the browser and the server — and losing it did not just show
+// an error, it threw away work that had already been paid for and completed. See lib/jobs.js.
+//
+// Rows are transient: a job is deleted a few hours after it finishes.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS ai_jobs (
+    id TEXT PRIMARY KEY,
+    org_id INTEGER,
+    user_id INTEGER,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    result_json TEXT,
+    error TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_ai_jobs_owner ON ai_jobs(org_id, user_id);
+`);
+
+// A job still marked running at startup belonged to a process that no longer exists — this one is
+// new. Nothing it was doing survived, so saying so beats a page that polls a dead job for ever.
+db.prepare(`
+  UPDATE ai_jobs SET status='failed', updated_at=datetime('now'),
+    error='The server restarted while this was being read, so the work was lost. Nothing was saved — run it again.'
+  WHERE status='running'
+`).run();
+
 module.exports = db;
