@@ -19,6 +19,8 @@
 
 // A CSI MasterFormat number: two digits, two digits, two digits, occasionally a fourth pair.
 // Separators vary by publisher — "23 05 93", "23.05.93", "230593" all occur in the same manual.
+const { readTextPages: readPages } = require('./pdfTextLayer');
+
 const NUMBER = '(\\d{2})[\\s.\\-]?(\\d{2})[\\s.\\-]?(\\d{2})(?:[\\s.\\-]?(\\d{2}))?';
 
 // "SECTION 23 05 93" — the heading a section actually starts with. This is the reliable signal,
@@ -90,25 +92,6 @@ function parseReference(reference) {
     return { number: null, division: String(division[1]).padStart(2, '0'), hasSection: false };
   }
   return { number: null, division: null, hasSection: false };
-}
-
-// One entry per page: its number and its text. No API call; this is the PDF's own text layer.
-async function readPages(buffer) {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const doc = await pdfjs.getDocument({
-    data: new Uint8Array(buffer), useSystemFonts: true, isEvalSupported: false,
-  }).promise;
-  const pages = [];
-  for (let p = 1; p <= doc.numPages; p++) {
-    const page = await doc.getPage(p);
-    const content = await page.getTextContent();
-    pages.push({
-      page: p,
-      text: content.items.map(i => i.str).join(' ').replace(/\s+/g, ' ').trim(),
-    });
-  }
-  await doc.destroy();
-  return pages;
 }
 
 // The title printed after a section number, where there is one. Cut at the first thing that

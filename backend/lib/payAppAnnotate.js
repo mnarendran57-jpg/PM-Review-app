@@ -11,6 +11,8 @@ const { PDFDocument, PDFName, PDFString, rgb } = require('pdf-lib');
 // to the 27 checks are needed — they keep describing findings in plain English.
 
 const AUTHOR = 'Pay App Review';
+const { eachPage } = require('./pdfTextLayer');
+
 const MONEY_RE = /\$\s?[\d,]+\.\d{2}/g;
 
 const normalizeNumber = s => String(s).replace(/[$,\s]/g, '');
@@ -18,15 +20,8 @@ const normalizeNumber = s => String(s).replace(/[$,\s]/g, '');
 // Pulls positioned text out of every page via pdfjs. Returns one entry per page with the
 // item strings and their coordinates in PDF user space (origin bottom-left, matching
 // pdf-lib's drawing space).
-async function extractTextPositions(buffer) {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const doc = await pdfjs.getDocument({
-    data: new Uint8Array(buffer), useSystemFonts: true, isEvalSupported: false,
-  }).promise;
-
-  const pages = [];
-  for (let p = 1; p <= doc.numPages; p++) {
-    const page = await doc.getPage(p);
+function extractTextPositions(buffer) {
+  return eachPage(buffer, async (page, p) => {
     const tc = await page.getTextContent();
     const items = [];
     for (const i of tc.items) {
@@ -41,10 +36,8 @@ async function extractTextPositions(buffer) {
         h: i.height || 9,
       });
     }
-    pages.push({ pageIndex: p - 1, items });
-  }
-  await doc.destroy();
-  return pages;
+    return { pageIndex: p - 1, items };
+  });
 }
 
 // Finds where a dollar figure appears. Summary-sheet findings should land on the cover

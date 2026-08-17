@@ -15,7 +15,20 @@ services:
     plan: starter            # Free instances sleep and cold-start (~30-60s of "lag");
                              # Starter stays warm. Change to `free` to trial at no cost.
     buildCommand: npm install
-    startCommand: node server.js
+    # Node sizes its heap from the MACHINE's memory, not the container's, and on a shared instance
+    # that is a number far larger than this plan allows — measured at 2,240 MB on a developer laptop.
+    # V8 therefore has no reason to collect until long after Render's limit is passed, so the
+    # container is killed while V8 still believes it has room. That is what "exceeded its memory
+    # limit" means here: not a leak, but a garbage collector that was never told how small the box is.
+    #
+    # 256 MB leaves headroom for the rest. Reading a PDF's text layer settles at about 250 MB
+    # resident on top of a 54 MB baseline, and almost none of that is the JS heap — it is native
+    # allocation inside pdfjs, which does not grow across documents but does not come back either.
+    #
+    # The point is not that this makes the app use less. It is that exceeding the ceiling now fails
+    # ONE request with an out-of-memory error the logs will name, instead of restarting the service
+    # and taking every other request in flight with it. Raise this with the instance size, together.
+    startCommand: node --max-old-space-size=256 server.js
     healthCheckPath: /api/health
     autoDeploy: true
     # Persistent disk so the SQLite file (and its WAL) survive redeploys. Without this,

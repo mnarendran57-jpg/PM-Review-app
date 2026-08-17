@@ -17,6 +17,8 @@
 // The honest limit, stated wherever this is used: a SCANNED drawing set has no text layer. This
 // finds nothing in one, and must say so rather than reporting "no discrepancies".
 
+const { readTextPages: readPages } = require('./pdfTextLayer');
+
 const EXCLUSION = [
   // What the documents say somebody else is doing. The most valuable phrases in a drawing set,
   // and the ones a proposal most often prices anyway.
@@ -72,24 +74,6 @@ const contentWords = text => [...new Set(normalise(text).split(' '))]
   .filter(w => w.length >= 4 && !STOPWORDS.has(w));
 
 // --- reading the text out, free ------------------------------------------------------------------
-
-// One entry per page: its number and its text. pdfjs reports positioned fragments, which are
-// joined in reading order — good enough to search, and no API call is involved.
-async function readPages(buffer) {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const doc = await pdfjs.getDocument({
-    data: new Uint8Array(buffer), useSystemFonts: true, isEvalSupported: false,
-  }).promise;
-  const pages = [];
-  for (let p = 1; p <= doc.numPages; p++) {
-    const page = await doc.getPage(p);
-    const content = await page.getTextContent();
-    const text = content.items.map(i => i.str).join(' ').replace(/\s+/g, ' ').trim();
-    pages.push({ page: p, text });
-  }
-  await doc.destroy();
-  return pages;
-}
 
 // The single statement a phrase belongs to.
 //

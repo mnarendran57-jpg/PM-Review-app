@@ -25,6 +25,8 @@
 //
 // A correction is only ever made when the document leaves no choice about what the value is.
 
+const { eachPage } = require('./pdfTextLayer');
+
 const MONEY = /^\(?-?\$?[\d,]+\.\d{2}\)?$/;
 const ROW_TOLERANCE = 2.5;        // points; a wrapped cell sits a fraction off its row
 
@@ -50,24 +52,15 @@ const normalise = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 // them directly transposes the table, so every visual row comes back as a column. The first
 // version of this did exactly that and reconciled nothing on the wider of the two forms.
 // Applying the page's own viewport transform puts x across and y down, whatever the rotation.
-async function readPages(buffer) {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const doc = await pdfjs.getDocument({
-    data: new Uint8Array(buffer), useSystemFonts: true, isEvalSupported: false,
-  }).promise;
-  const pages = [];
-  for (let p = 1; p <= doc.numPages; p++) {
-    const page = await doc.getPage(p);
+function readPages(buffer) {
+  return eachPage(buffer, async (page, _p, pdfjs) => {
     const viewport = page.getViewport({ scale: 1 });
     const content = await page.getTextContent();
-    const items = content.items.map((i) => {
+    return content.items.map((i) => {
       const [x, y] = pdfjs.Util.applyTransform([i.transform[4], i.transform[5]], viewport.transform);
       return { str: (i.str || '').trim(), x, y };
     }).filter(i => i.str);
-    pages.push(items);
-  }
-  await doc.destroy();
-  return pages;
+  });
 }
 
 // Group a page's text into visual rows, left to right. Viewport y grows downward, so the top of

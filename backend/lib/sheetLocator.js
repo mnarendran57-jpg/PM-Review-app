@@ -18,6 +18,8 @@
 
 // A sheet number: one to three letters, an optional separator, digits, sometimes a decimal.
 // "M-401", "A101", "E-2.1", "FP-101", "MD1.02" all occur, and often in the same set.
+const { readTextPages: readPages } = require('./pdfTextLayer');
+
 const SHEET = '\\b([A-Z]{1,3})[-. ]?(\\d{1,3}(?:\\.\\d{1,2})?[A-Z]?)\\b';
 const SHEET_RE = new RegExp(SHEET, 'g');
 
@@ -59,25 +61,6 @@ function sheetsIn(text) {
     out.push({ key: keyOf(m[1], m[2]), label: `${m[1]}-${m[2]}`, at: m.index, raw: m[0] });
   }
   return out;
-}
-
-// One entry per page: number and text. No API call; this is the PDF's own text layer.
-async function readPages(buffer) {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const doc = await pdfjs.getDocument({
-    data: new Uint8Array(buffer), useSystemFonts: true, isEvalSupported: false,
-  }).promise;
-  const pages = [];
-  for (let p = 1; p <= doc.numPages; p++) {
-    const page = await doc.getPage(p);
-    const content = await page.getTextContent();
-    pages.push({
-      page: p,
-      text: content.items.map(i => i.str).join(' ').replace(/\s+/g, ' ').trim(),
-    });
-  }
-  await doc.destroy();
-  return pages;
 }
 
 // The drawing index, if the set has one: the page listing the most sheets.
