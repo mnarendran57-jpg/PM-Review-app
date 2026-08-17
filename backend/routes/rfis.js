@@ -96,9 +96,9 @@ const latestAnalysis = rfiId => {
   };
 };
 
-// How the A/E's answer compared with the prediction, for one round trip. Looked up per
-// revision rather than per RFI: an RFI that went round twice has two answers, and showing the
-// first one's review against the second one's answer would be worse than showing none.
+// Whether the A/E answered what was asked, for one round trip. Looked up per revision rather
+// than per RFI: an RFI that went round twice has two answers, and showing the first one's review
+// against the second one's answer would be worse than showing none.
 const reviewForRevision = revisionId => {
   if (!revisionId) return null;
   const row = db.prepare(
@@ -131,18 +131,21 @@ function detail(row, options) {
   };
 }
 
-// Runs the prediction-versus-answer comparison for one revision and stores it. Returns null
-// when there is nothing to compare — no prediction was ever run, or the revision has no
-// answer yet — which is a normal state rather than an error.
+// Checks the A/E's answer against the questions asked, for one revision, and stores it. Returns
+// null only when the revision has no answer yet, which is a normal state rather than an error.
+//
+// The reading of the project documents is used where one exists but is not required: predicting is
+// optional, and "did the A/E answer what was asked" is a question about the RFI and the reply, not
+// about the drawings. Refusing to check coverage because nobody ran a prediction would withhold the
+// most useful part of this from exactly the PM who skipped the optional step.
 async function runResponseReview(req, rfi, revision) {
+  if (!revision?.response_action) return null;
   const stored = latestAnalysis(rfi.id);
-  if (!stored || !revision?.response_action) return null;
 
   const { review, markdown } = await compareToResponse({
     rfi,
-    discipline: stored.discipline || rfi.discipline,
-    analysis: stored.analysis,
-    sources: stored.sources,
+    discipline: stored?.discipline || rfi.discipline,
+    analysis: stored?.analysis || null,
     response: {
       action: revision.response_action,
       notes: revision.response_notes,
@@ -158,7 +161,7 @@ async function runResponseReview(req, rfi, revision) {
     INSERT INTO rfi_response_reviews (rfi_id, revision_id, analysis_id, review_json,
       review_markdown, created_by)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(rfi.id, revision.id, stored.id, JSON.stringify(review), markdown,
+  `).run(rfi.id, revision.id, stored?.id ?? null, JSON.stringify(review), markdown,
     req.user.name || req.user.email);
 
   return review;
@@ -258,7 +261,7 @@ async function loadDocumentBuffers(projectId, ids) {
 
 // --- Suggested answers held between the analysis and the log entry -------------------------
 //
-// The PM sees the suggested answer while entering the RFI, before there is a row to hang it
+// The PM sees the documents reading while entering the RFI, before there is a row to hang it
 // on. The result waits here under a one-use token and is written against the entry the moment
 // it is created, so what informed their judgement is what ends up on the record — rather than
 // a second, differently-worded run of the same question.
@@ -485,7 +488,7 @@ router.post('/', uploadWithDocument.fields([
     // them in the submittal log, and nothing here needs them to be text.
     setDocuments(rfiId, project.id, documentIds);
 
-    // The suggested answer the PM was shown while entering this, if there was one. Its
+    // The documents reading the PM was shown while entering this, if there was one. Its
     // markdown is re-rendered now that the RFI has a number, so an export does not carry the
     // placeholder it was analysed under.
     const preview = claimPreview(req, req.body.analysis_token, project.id);
@@ -793,12 +796,9 @@ router.post('/:id/revisions/:revId/review', async (req, res) => {
         error: 'There is nothing to compare yet — record the A/E\'s response on this revision first.',
       });
     }
-    if (!latestAnalysis(rfi.id)) {
-      return res.status(400).json({
-        error: 'There is no suggested answer to compare against. Run one from this RFI first, and it will be read against the A/E\'s reply.',
-      });
-    }
-
+    // No gate on a stored reading of the documents. Whether the A/E answered every question asked
+    // is a question about the RFI and the reply, and the PM who skipped the optional prediction is
+    // the one who most needs it.
     await runResponseReview(req, rfi, revision);
     res.json(detail(rfi, optionsFor(rfi)));
   } catch (err) {
@@ -824,7 +824,7 @@ router.get('/:id/analysis.md', (req, res) => {
   const found = latestAnalysis(rfi.id);
   if (!found) return res.status(404).json({ error: 'No analysis has been run for this RFI yet.' });
   res.setHeader('Content-Type', 'text/markdown');
-  res.setHeader('Content-Disposition', `attachment; filename="${String(rfi.rfi_number).replace(/[^a-z0-9-]+/gi, '_')}_suggested_answer.md"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${String(rfi.rfi_number).replace(/[^a-z0-9-]+/gi, '_')}_rfi_review.md"`);
   res.send(found.analysis_markdown || '');
 });
 

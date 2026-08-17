@@ -4,9 +4,9 @@ const { askForJson } = require('./aiJson');
 const { locateSheets, sheetsNamedIn } = require('./sheetLocator');
 const { DISCIPLINE_SHEET_HINTS } = require('./rfiLog');
 
-// Predicts how the A/E is likely to answer an RFI, by reading it against the project
-// documents the PM selected. Advisory only: it exists so the PM understands the question
-// before the answer comes back, and it never touches the log's status.
+// Reads a contractor's RFI against the project documents the PM selected, and reports whether
+// those documents already answer it. Advisory only: it exists so the PM knows what they are
+// holding before the A/E answers, and it never touches the log's status.
 //
 // The hard constraint is that a drawing set is 200+ pages and the account allows about
 // 10,000 input tokens a minute, so the set cannot be sent. The way through is to read the
@@ -97,81 +97,110 @@ const SHEET_CHOICE_TOOL = {
   },
 };
 
-const ANSWER_TOOL = {
-  name: 'report_suggested_answer',
-  description: 'Report what the project documents appear to say about the contractor\'s question.',
+// Whether the RFI needed to be asked at all.
+//
+// This used to produce a suggested answer with its reasoning, its grounds, its conflicts, what
+// was missing and what to press the A/E on — six blocks of prose, of which the PM read the first
+// line. The question they actually have on the day an RFI lands is narrower and harder: does the
+// contract answer this already, or does it not? An RFI whose answer is on the drawing costs the
+// A/E a fee and the job a week for nothing. An RFI the documents genuinely do not settle is a gap
+// in the design, and the gap is what a change order gets written against later.
+//
+// So the output is one comparison — what the documents show against what the RFI asks — and each
+// row says which of those two it is.
+const RFI_STATUSES = ['answered', 'unclear', 'missing', 'conflict', 'mistaken'];
+
+// Four ways to read the RFI as a whole, and the PM does something different about each.
+const RFI_VERDICTS = ['not_needed', 'partly_justified', 'justified', 'cannot_tell'];
+
+// Field order is load-bearing. A tool call is generated top to bottom, so when the verdict came
+// first the model settled the whole question in it and then returned an empty table behind it.
+// Enumerating the rows first and judging last means the verdict describes work already done.
+const VALIDITY_TOOL = {
+  name: 'report_rfi_against_documents',
+  description: "Compare what the project documents show with what the contractor's RFI asks, and "
+    + 'say whether the RFI needed to be asked.',
   input_schema: {
     type: 'object',
     properties: {
-      shortAnswer: {
-        type: 'string',
-        description: 'The answer in ONE sentence, two at the very most. Plain English, no '
-          + 'preamble, no hedging phrases like "based on the documents provided". This is the '
-          + 'only line most readers will read, so it must carry the actual answer — or say '
-          + 'plainly that the documents do not settle it.',
-      },
-      likelyAnswer: {
-        type: 'string',
-        description: 'The same answer with the reasoning, in plain English, based only on what '
-          + 'these documents show. 2-5 sentences. If the documents do not answer it, say '
-          + 'exactly that instead of constructing an answer.',
+      points: {
+        type: 'array',
+        description: 'One row per thing the RFI actually asks, most consequential first. Together '
+          + 'these are the whole analysis. Most RFIs raise one or two points; an RFI with six rows '
+          + 'usually means the rows are being padded with things the PM would not act on.',
+        items: {
+          type: 'object',
+          properties: {
+            point: {
+              type: 'string',
+              description: 'What it is about: a noun phrase of 2 to 6 words, never a sentence. '
+                + '"Duct clearance at beam", "VAV box size", "Ceiling height in corridor 2".',
+            },
+            documentsShow: {
+              type: 'string',
+              description: 'What the documents actually show on this point, in AT MOST 12 words — '
+                + 'the value or the requirement itself, not a description of it. "10 feet 6 inches '
+                + 'to underside, 6 inch clearance required" beats "the drawings indicate a '
+                + 'clearance requirement". Write "Silent" where they do not address it at all, and '
+                + '"Not on the sheets read" where the governing sheet was never reached.',
+            },
+            rfiAsks: {
+              type: 'string',
+              description: "What the RFI asks or asserts on this point, in AT MOST 12 words. The "
+                + "contractor's own words where they are short enough to use.",
+            },
+            where: {
+              type: 'string',
+              description: 'Where in the documents you saw it: the sheet number PRINTED IN THE '
+                + 'TITLE BLOCK of the page you read, or the specification clause. The pages were '
+                + 'selected by searching for sheet numbers and the selection can be off, so report '
+                + 'the sheet you actually saw, not the one you expected. Omit on a "Silent" row.',
+            },
+            status: {
+              type: 'string',
+              enum: RFI_STATUSES,
+              description: '"answered" — the documents already settle this plainly; the RFI did '
+                + 'not need to be raised for it. '
+                + '"unclear" — the documents touch on it but are genuinely open to more than one '
+                + 'reading, so it was fair to ask. '
+                + '"missing" — the documents are silent; this is a gap in the design and usually '
+                + 'the row that turns into a change order. '
+                + '"conflict" — two documents or sheets disagree with each other. This is the '
+                + 'strongest kind of RFI and often the real reason it was raised. '
+                + '"mistaken" — the RFI has misread the documents: it asserts something they do '
+                + 'not say, or asks about a condition that is not what is drawn.',
+            },
+          },
+          required: ['point', 'documentsShow', 'rfiAsks', 'status'],
+        },
       },
       confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
       confidenceReason: {
         type: 'string',
-        description: 'One sentence on why — what you could and could not see.',
+        description: 'One short sentence on what you could and could not see. Say plainly if a '
+          + 'page turned out not to be the sheet that was expected — the whole comparison is worth '
+          + 'nothing if it was read off the wrong drawing.',
       },
-      basis: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            document: { type: 'string', description: 'Which document.' },
-            sheet: {
-              type: 'string',
-              description: 'The sheet number printed in the title block of the page you used. '
-                + 'Omit if this is not a drawing.',
-            },
-            shows: {
-              type: 'string',
-              description: 'What that sheet or clause actually shows, specifically — dimensions, '
-                + 'notes, schedule values.',
-            },
-          },
-          required: ['document', 'shows'],
-        },
-      },
-      conflicts: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            between: { type: 'string', description: 'Which documents or sheets disagree.' },
-            detail: {
-              type: 'string',
-              description: 'What the discrepancy is — often the real reason the RFI was raised.',
-            },
-          },
-          required: ['between', 'detail'],
-        },
-      },
-      missingInformation: {
+      // Last on purpose: both of these summarise the rows above, so they are written once the
+      // detail exists rather than in place of it.
+      verdict: {
         type: 'string',
-        description: 'What you would need in order to answer properly. Omit if the documents '
-          + 'were sufficient.',
+        enum: RFI_VERDICTS,
+        description: 'Your overall read, and it must be consistent with the rows above. '
+          + '"not_needed" — the documents answer every point; this RFI asks what the contract '
+          + 'already says. '
+          + '"partly_justified" — some of it is answered in the documents and some of it is not. '
+          + '"justified" — the documents do not settle it; the RFI had to be asked. '
+          + '"cannot_tell" — the sheets that govern this were not among the ones read, so the '
+          + 'question cannot be judged. Use this rather than guessing.',
       },
-      questionsForAE: {
-        type: 'array',
-        description: 'Specific questions the PM should press the A/E on if their answer is vague.',
-        items: { type: 'string' },
-      },
-      costScheduleFlag: {
+      headline: {
         type: 'string',
-        description: 'Plain English: does this look like it will turn into a change order or a '
-          + 'delay claim, and why? Omit if it looks like a straightforward clarification.',
+        description: 'ONE sentence, at most 25 words, saying something the table does not repeat: '
+          + 'what this RFI amounts to for the PM. No preamble, no restating the question.',
       },
     },
-    required: ['shortAnswer', 'likelyAnswer', 'confidence'],
+    required: ['points', 'confidence', 'verdict', 'headline'],
   },
 };
 
@@ -428,10 +457,11 @@ function buildAnswerPrompt({ rfi, discipline, selections, extraCount }) {
     return `${i + 1}. "${s.label}" — ${what}${s.note ? ` — ${s.note}` : ''}`;
   }).join('\n');
 
-  return `You are an experienced MEP construction project manager reviewing a contractor's
-RFI (Request for Information) before the architect/engineer answers it. Your job is to tell
-the owner's PM what the documents appear to say, so they understand the question and can
-judge the A/E's answer when it arrives.
+  return `You are an experienced MEP construction project manager, acting for the OWNER, reading a
+contractor's RFI (Request for Information) against the project documents before the
+architect/engineer answers it. The owner pays for every RFI twice — the A/E's fee to answer it and
+the time the work waits — so the PM's first question is not "what is the answer" but "did the
+contract already answer this?"
 
 THE RFI
 Number: ${rfi.rfi_number}
@@ -439,81 +469,90 @@ Subject: ${rfi.subject}
 Question: ${rfi.question || '(no question text was recorded — go by the subject and the attached RFI document)'}
 Discipline: ${discipline}
 
-WHAT YOU HAVE BEEN GIVEN
+THE DOCUMENTS YOU HAVE BEEN GIVEN
 ${inventory}${extraCount ? `\n${extraCount} further document(s) attached to this RFI by the PM.` : ''}
 
-Report your reading with the report_suggested_answer tool.
+Report your comparison as a TABLE, with the report_rfi_against_documents tool. Every row is one
+point the RFI raises; the two columns are what the documents show and what the RFI asks.
 
 Rules:
-- "shortAnswer" is the whole point of this. The PM reads it between meetings. One sentence
-  that answers the question, or one sentence saying the documents do not answer it. Never
-  restate the question back, never describe your process.
-- Ground every statement in something visible on the pages provided. Quote the note, the
-  dimension or the schedule value you are relying on. If you cannot point to it, leave it out.
-- IMPORTANT: for each entry in "basis", report the sheet number ACTUALLY PRINTED in the title
-  block of the page you read. The pages were selected from a drawing index and the selection
-  can be off. If a page is not the sheet that was expected, say so plainly in
-  "confidenceReason" — a wrong sheet read confidently is worse than no answer.
-- "low" confidence is the right answer more often than not. Say so when the sheets provided
-  do not settle the question. The PM is using this to prepare, not to decide.
-- Do not speculate about what the A/E intended. Report what the documents show.
+- Judge the RFI, do not answer it. The output is not an answer the PM can send — it is whether the
+  question needed asking, and what the documents say about it.
+- Length is a feature. A cell over a dozen words stops being scannable and becomes something to
+  read, which defeats the table. Give the value, not a description of the value.
+- Ground every row in something visible on the pages provided. If you cannot point to the note,
+  the dimension or the schedule value, the row's status is "missing" or "cannot_tell" — never
+  construct what the documents "probably" intended.
+- IMPORTANT: in "where", report the sheet number ACTUALLY PRINTED in the title block of the page
+  you read, not the one you expected to be given. The pages were selected by searching the set for
+  sheet numbers and that selection can be off. A comparison read off the wrong drawing is worse
+  than no comparison, so if a page is not the sheet expected, say so in "confidenceReason".
+- Be fair, and be direct. If the answer is plainly on the drawing, say so — that is worth real
+  money to the owner and it is the finding they are paying you for. But an RFI is not frivolous
+  merely because an expert could have worked it out: "answered" means the documents settle it
+  plainly, not that the answer is derivable by someone who knows the trade.
+- A "missing" or "conflict" row is the most valuable thing on this page. Work the contract does not
+  cover is work somebody has to pay for, and the PM needs to know on the day the RFI arrives, not
+  when the change order lands.
+- "cannot_tell" is the honest verdict more often than it is comfortable. Say it when the sheets
+  provided do not govern the question, rather than judging the RFI on drawings that do not bear
+  on it.
+- Do not speculate about what the A/E intended, and do not apportion blame. Report what the
+  documents show and what the RFI asks; whose fault that is, is the PM's call with information you
+  do not have.
 - Write for a reader who is not a specialist in this trade.`;
 }
+
+// How each row and each verdict reads in a document, where colour cannot carry the meaning.
+const RFI_STATUS_LABEL = {
+  answered: 'Already in the documents',
+  unclear: 'Documents are open to reading',
+  missing: 'Documents are silent',
+  conflict: 'Documents disagree',
+  mistaken: 'RFI has it wrong',
+};
+
+const RFI_VERDICT_LABEL = {
+  not_needed: 'The documents already answer this RFI',
+  partly_justified: 'Partly answered in the documents already',
+  justified: 'The documents do not settle this — the RFI had to be asked',
+  cannot_tell: 'Cannot be judged from the sheets that were read',
+};
+
+// A pipe inside a cell would end the column early and shift every value after it one place left,
+// so a duct noted as "24x12 | 30x8 oval" would silently corrupt its own row.
+const cell = value => String(value ?? '—').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim() || '—';
 
 // Renders the analysis for reading and export. Kept beside the prompt so the two stay in
 // step when a field is added.
 function renderMarkdown({ rfi, discipline, analysis, sources }) {
   const lines = [];
-  lines.push(`# Suggested answer — ${rfi.rfi_number}: ${rfi.subject}`);
+  lines.push(`# RFI against the documents — ${rfi.rfi_number}: ${rfi.subject}`);
   lines.push('');
-  lines.push('> This is Coaster\'s reading of the project documents, produced before the A/E replied. It is for the PM\'s understanding only — it is not an answer to the RFI and carries no authority.');
+  lines.push('> Coaster\'s reading of the project documents, produced before the A/E replied. It says whether the documents answer this RFI — it is not an answer to it, and it carries no authority.');
   lines.push('');
+  lines.push(`**${RFI_VERDICT_LABEL[analysis.verdict] || analysis.verdict}**  `);
   lines.push(`**Discipline:** ${discipline}  `);
   lines.push(`**Confidence:** ${analysis.confidence}${analysis.confidenceReason ? ` — ${analysis.confidenceReason}` : ''}`);
   lines.push('');
-  if (analysis.shortAnswer) {
-    lines.push('## In short');
-    lines.push('');
-    lines.push(`**${analysis.shortAnswer}**`);
+  if (analysis.headline) {
+    lines.push(analysis.headline);
     lines.push('');
   }
-  lines.push('## What the documents appear to say');
-  lines.push('');
-  lines.push(analysis.likelyAnswer || '_No answer could be drawn from the documents provided._');
-  lines.push('');
 
-  if (analysis.basis?.length) {
-    lines.push('## What that is based on');
-    lines.push('');
-    for (const b of analysis.basis) {
-      lines.push(`- **${b.document}${b.sheet ? ` — ${b.sheet}` : ''}**: ${b.shows}`);
+  if (analysis.points?.length) {
+    lines.push('| | Point | The documents show | The RFI asks | Where |');
+    lines.push('|---|---|---|---|---|');
+    for (const p of analysis.points) {
+      lines.push(`| ${RFI_STATUS_LABEL[p.status] || ''} | ${cell(p.point)} `
+        + `| ${cell(p.documentsShow)} | ${cell(p.rfiAsks)} | ${cell(p.where)} |`);
     }
     lines.push('');
-  }
-  if (analysis.conflicts?.length) {
-    lines.push('## Conflicts found between documents');
-    lines.push('');
-    for (const c of analysis.conflicts) lines.push(`- **${c.between}**: ${c.detail}`);
+  } else {
+    lines.push('_Nothing in this RFI could be compared with the documents provided._');
     lines.push('');
   }
-  if (analysis.missingInformation) {
-    lines.push('## What is missing');
-    lines.push('');
-    lines.push(analysis.missingInformation);
-    lines.push('');
-  }
-  if (analysis.questionsForAE?.length) {
-    lines.push('## Press the A/E on');
-    lines.push('');
-    for (const q of analysis.questionsForAE) lines.push(`- ${q}`);
-    lines.push('');
-  }
-  if (analysis.costScheduleFlag) {
-    lines.push('## Cost or schedule exposure');
-    lines.push('');
-    lines.push(analysis.costScheduleFlag);
-    lines.push('');
-  }
+
   if (sources?.length) {
     lines.push('## Documents read');
     lines.push('');
@@ -526,6 +565,27 @@ function renderMarkdown({ rfi, discipline, analysis, sources }) {
     lines.push('');
   }
   return lines.join('\n');
+}
+
+// A verdict the table does not support is the one answer this must not pass on. "The documents
+// already answer this RFI" printed above a row saying the documents are silent is worse than no
+// verdict at all: the PM forwards the verdict, and the row is what the A/E would have to answer to.
+//
+// It is settled from the rows rather than by asking again, because the rows ARE the evidence and a
+// second call on a rate-limited account has to earn itself. Where they agree, nothing changes.
+function reconcileVerdict({ verdict, points }) {
+  if (!points.length) return 'cannot_tell';
+  // "I could not see the sheets that govern this" is a statement about the quality of the read,
+  // not about the rows, so the rows cannot overrule it. Deriving a verdict over the top of it
+  // would turn "I do not know" into a judgement of the contractor.
+  if (verdict === 'cannot_tell') return 'cannot_tell';
+
+  const kinds = new Set(points.map(p => p.status));
+  const open = ['missing', 'conflict', 'unclear'].some(k => kinds.has(k));
+  const settled = kinds.has('answered') || kinds.has('mistaken');
+  if (open && settled) return 'partly_justified';
+  if (open) return 'justified';
+  return 'not_needed';
 }
 
 // documents: [{ label, doc_type, buffer }] — the Shared Documents the PM selected.
@@ -556,22 +616,27 @@ async function analyzeRfi({ rfi, discipline, documents = [], extraFiles = [] }) 
   });
 
   const { data: parsed } = await askForJson({
-    content, tool: ANSWER_TOOL, maxTokens: 3000, label: 'rfi analysis',
+    content, tool: VALIDITY_TOOL, maxTokens: 2000, label: 'rfi analysis',
   });
 
   const analysis = {
-    // The one-line version leads every display of this. Falling back to the long answer
-    // keeps an older stored analysis, produced before this field existed, readable.
-    shortAnswer: parsed.shortAnswer || parsed.likelyAnswer || null,
-    likelyAnswer: parsed.likelyAnswer || null,
+    verdict: RFI_VERDICTS.includes(parsed.verdict) ? parsed.verdict : 'cannot_tell',
+    headline: parsed.headline || null,
+    points: (Array.isArray(parsed.points) ? parsed.points : [])
+      .filter(p => p && p.point)
+      .map(p => ({
+        point: p.point,
+        documentsShow: p.documentsShow || null,
+        rfiAsks: p.rfiAsks || null,
+        where: p.where || null,
+        // An unrecognised status would render as an uncoloured row with no label, which reads as
+        // "nothing to see here" — the wrong default. "unclear" is the neutral one of the five.
+        status: RFI_STATUSES.includes(p.status) ? p.status : 'unclear',
+      })),
     confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low',
     confidenceReason: parsed.confidenceReason || null,
-    basis: Array.isArray(parsed.basis) ? parsed.basis : [],
-    conflicts: Array.isArray(parsed.conflicts) ? parsed.conflicts : [],
-    missingInformation: parsed.missingInformation || null,
-    questionsForAE: Array.isArray(parsed.questionsForAE) ? parsed.questionsForAE : [],
-    costScheduleFlag: parsed.costScheduleFlag || null,
   };
+  analysis.verdict = reconcileVerdict(analysis);
 
   // The buffers are dropped: what is worth keeping is the record of what was read, so the PM
   // can judge the answer and re-run against a different selection if it read the wrong sheets.
@@ -586,4 +651,10 @@ async function analyzeRfi({ rfi, discipline, documents = [], extraFiles = [] }) 
   return { analysis, sources, markdown: renderMarkdown({ rfi, discipline, analysis, sources }) };
 }
 
-module.exports = { analyzeRfi, renderMarkdown, MAX_ANALYSIS_PAGES, SMALL_DOC_PAGES };
+module.exports = {
+  analyzeRfi, renderMarkdown, MAX_ANALYSIS_PAGES, SMALL_DOC_PAGES,
+  RFI_STATUSES, RFI_STATUS_LABEL, RFI_VERDICTS, RFI_VERDICT_LABEL,
+  // Exported for tests/rfiReconcile.test.js. This is the guard that stops a verdict the table does
+  // not support reaching the PM, so it is worth being able to exercise without an API call.
+  reconcileVerdict,
+};

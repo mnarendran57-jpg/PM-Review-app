@@ -1,312 +1,318 @@
 const { askForJson } = require('./aiJson');
+const { RFI_STATUS_LABEL } = require('./rfiAnalysis');
 
-// Reads the A/E's actual answer against the one Coaster predicted, and tells the PM what the
-// difference means.
+// Checks the A/E's answer against the questions the contractor actually asked, and closes the RFI
+// out with a list of what to do.
 //
-// The prediction was made from the drawings alone, before anyone with authority had spoken.
-// When the answer arrives, the question the PM actually has is not "what did the A/E say" —
-// they can read that — but "is this what the documents said, and if not, what does that
-// change?" An A/E who answers against the drawings is confirming the design. An A/E who
-// answers around them has changed something, and that is usually where the money is.
+// This used to compare the A/E's answer with the one Coaster predicted, row by row. That was
+// interesting but it was not the PM's problem. An A/E answering four questions with three answers
+// is the thing that costs a job a fortnight, because nobody notices until the work stops at the
+// fourth — and the RFI is closed by then, so re-opening it is a favour rather than a right. So the
+// only question asked here is coverage: was every question answered? Everything else the PM needs
+// is in the To Do underneath.
 //
-// No documents are re-sent. Both sides of the comparison are already text, so this is a small
-// call — which matters on an account limited to 10,000 input tokens a minute.
+// No documents are re-sent. Both the RFI and the answer are already text, so this is a small call —
+// which matters on an account limited to about 10,000 input tokens a minute.
 
-const VERDICTS = ['confirmed', 'partly_confirmed', 'contradicted', 'not_comparable'];
+// Whether one question the contractor asked came back answered.
+const COVERAGE_STATUSES = ['answered', 'partly', 'unanswered'];
 
-// What each row of the comparison is. Four kinds, because there are exactly four ways an answer
-// can stand against the documents it was supposed to come from, and the PM does something
-// different about each.
-const STATUSES = ['agreed', 'differs', 'new_information', 'unanswered'];
+// The kinds of thing a closed-out RFI leaves behind. A change order is called out on its own
+// because it is the one with a deadline attached that nobody sets.
+const TODO_KINDS = [
+  'change_order', 'revise_drawings', 'press_ae', 'instruct_contractor', 'schedule', 'record',
+];
 
-// Field order is load-bearing. A tool call is generated top to bottom, so when the verdict and
-// the headline came first the model would answer the whole question in the headline and then
-// return empty arrays behind it — a panel showing a finding with nothing under it. Enumerating
-// the detail first and summarising last means the headline describes work already done.
-const COMPARISON_TOOL = {
-  name: 'record_response_comparison',
-  description: "Compare the A/E's actual answer with the one predicted from the documents.",
+const COVERAGE = ['all', 'most', 'none'];
+
+// Field order is load-bearing. A tool call is generated top to bottom, so when the verdict and the
+// headline came first the model would settle the whole question in the headline and then return
+// empty arrays behind it — a panel showing a finding with nothing under it. Enumerating the detail
+// first and summarising last means the summary describes work already done.
+const COVERAGE_TOOL = {
+  name: 'record_ae_response_coverage',
+  description: "Report whether the A/E's answer addressed every question the contractor asked, "
+    + 'and what is left to do.',
   input_schema: {
     type: 'object',
     properties: {
-      // One array, not four.
-      //
-      // This was four separate fields — what agreed, what differed, what the A/E relied on that
-      // the drawings did not contain, and what it might cost — each written as prose and stacked
-      // down the panel. Everything a reader needed was there, and finding any of it meant
-      // reading all of it. But every entry is the same shape of fact: a point, what the
-      // documents showed, what the A/E answered. Written that way it is a table, read in one
-      // glance instead of four paragraphs, and the distinction the four fields carried survives
-      // as the status column that colours each row.
-      points: {
+      questions: {
         type: 'array',
-        description: 'One row per point of substance, most consequential first. Together these '
-          + 'are the whole comparison — every difference and every agreement worth the PM\'s '
-          + 'attention, and nothing else. Omit anything you would include only for completeness.',
+        description: 'One row per question the CONTRACTOR asked, in the order the RFI asks them. '
+          + 'Read the RFI for what it actually asks — an RFI that reads as one question often '
+          + 'contains two or three, and a buried one is exactly the one that comes back unanswered. '
+          + 'Do not invent questions the RFI does not ask, and do not merge two into one.',
         items: {
           type: 'object',
           properties: {
-            point: {
+            asked: {
               type: 'string',
-              description: 'What it is about: a noun phrase of 2 to 6 words, never a sentence. '
-                + '"Duct clearance at beam", "VAV box size", "Who bears the cost".',
-            },
-            documentsSaid: {
-              type: 'string',
-              description: 'What the drawings and documents showed, in AT MOST 12 words — the '
-                + 'value or the requirement itself, not a description of it. "10 feet 6 inches '
-                + 'to underside, 6 inch clearance" beats "the drawings indicated a clearance '
-                + 'requirement". Write "Silent" where they did not address it, and "Not in what '
-                + 'was read" where the governing sheet was never reached.',
+              description: 'The question, in AT MOST 14 words. The contractor\'s own words where '
+                + 'they are short enough to use. A question, not a topic.',
             },
             aeSaid: {
               type: 'string',
-              description: "What the A/E actually answered, in AT MOST 12 words. Their words "
-                + 'where they are short enough to use.',
+              description: 'What the A/E said about THIS question, in AT MOST 14 words. Where they '
+                + 'said nothing about it, write "Nothing" rather than filling the cell with the '
+                + 'nearest thing they did say.',
             },
             status: {
               type: 'string',
-              enum: STATUSES,
-              description: '"agreed" — the A/E answered what the documents showed. '
-                + '"differs" — the A/E answered differently from the documents. '
-                + '"new_information" — the A/E relied on something not in the documents at all: '
-                + 'a decision, a field condition, an intent never drawn. This is the row that is '
-                + 'usually worth money, because it is a change arriving as an answer. '
-                + '"unanswered" — the question, or part of it, was not addressed.',
-            },
-            note: {
-              type: 'string',
-              description: 'ONLY where there is a consequence in money or time — a change order, '
-                + 'a delay, a drawing to have revised, another trade affected. Say on whose '
-                + 'account where you can. At most 15 words. Omit it entirely on a row that just '
-                + 'records agreement; a note on every row is a note on none.',
+              enum: COVERAGE_STATUSES,
+              description: '"answered" — the A/E gave a clear answer this question can be closed '
+                + 'on. "partly" — they addressed it but left something open, or answered a '
+                + 'narrower question than the one asked. "unanswered" — they did not address it at '
+                + 'all, or deferred it.',
             },
           },
-          required: ['point', 'aeSaid', 'status'],
+          required: ['asked', 'aeSaid', 'status'],
         },
       },
-      actionsForPm: {
+      todo: {
         type: 'array',
-        description: 'What the PM should do now, at most 4 entries, most urgent first. Each one '
-          + 'starts with a verb and runs to at most 12 words: "Price the duct transition before '
-          + 'fabrication." Empty ONLY if the answer simply confirms the documents and needs '
-          + 'nothing.',
-        items: { type: 'string' },
+        description: 'What has to happen now that this answer is in, most urgent first, at most 5 '
+          + 'entries. This is the closing list for the whole RFI, so draw on everything above: the '
+          + 'answer, what the documents showed, and any question that came back unanswered. Empty '
+          + 'ONLY where the answer settles the RFI and genuinely leaves nothing behind.',
+        items: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              description: 'Starts with a verb, runs to at most 14 words, and names the thing to '
+                + 'be done: "Price the duct transition before the sheet metal is fabricated." Not '
+                + 'a topic, not an observation — something a person can do and then tick off.',
+            },
+            kind: {
+              type: 'string',
+              enum: TODO_KINDS,
+              description: '"change_order" — this needs pricing or a change order raised, because '
+                + 'the answer directs work the contract documents do not carry. '
+                + '"revise_drawings" — the A/E has to revise or reissue a drawing to match what '
+                + 'they just said. '
+                + '"press_ae" — go back to the A/E: a question was not answered, or the answer is '
+                + 'too vague to build to. '
+                + '"instruct_contractor" — the contractor needs telling to proceed, to correct '
+                + 'something, or that the answer was already in the documents. '
+                + '"schedule" — there is a time impact to record or to claim. '
+                + '"record" — nothing to chase; note it and close.',
+            },
+            why: {
+              type: 'string',
+              description: 'ONLY where the reason is not obvious from the action itself — the '
+                + 'consequence in money or time, or who bears it. At most 15 words. Omit it '
+                + 'entirely on an item that explains itself; a why on every item is a why on none.',
+            },
+          },
+          required: ['action', 'kind'],
+        },
       },
-      // Last on purpose: both of these summarise the fields above, so they are written once
-      // the detail exists rather than in place of it.
-      verdict: {
+      // Last on purpose: these summarise the rows above, so they are written once the detail
+      // exists rather than in place of it.
+      coverage: {
         type: 'string',
-        enum: VERDICTS,
-        description: 'Your overall read, consistent with the differences you listed above. '
-          + '"confirmed" — the A/E said substantially what the documents said, and you listed '
-          + 'no differences. "partly_confirmed" — the same broad answer with a material '
-          + 'qualification or addition. "contradicted" — the A/E answered differently from '
-          + 'what the documents showed. "not_comparable" — the A/E did not answer the question '
-          + '(asked for more information, deferred it, or answered something else).',
+        enum: COVERAGE,
+        description: 'Consistent with the rows above. "all" — every question came back answered. '
+          + '"most" — at least one question is partly answered or unanswered. "none" — the A/E did '
+          + 'not answer the RFI at all: they asked for more information, deferred it, or answered '
+          + 'a different question.',
       },
-      headline: {
+      explanation: {
         type: 'string',
-        description: 'ONE sentence, at most 25 words, and it must say something the table does '
-          + 'not repeat: what the difference amounts to for this PM. No preamble, no restating '
-          + 'the answer — it is printed beside this line.',
+        description: 'One or two sentences in plain English on whether the A/E answered what was '
+          + 'asked. Name what was left open, if anything, and say nothing else — the questions are '
+          + 'tabled above and the actions are listed below, so do not repeat either. If everything '
+          + 'was answered, say that plainly in one sentence rather than padding it.',
       },
     },
-    required: ['actionsForPm', 'verdict', 'headline'],
+    required: ['questions', 'todo', 'coverage', 'explanation'],
   },
 };
 
-function buildPrompt({ rfi, discipline, analysis, sources, response }) {
-  const read = (sources || []).map(s => {
-    const what = s.wholeDocument ? 'read in full'
-      : s.sheets?.length ? `sheets ${s.sheets.map(x => x.sheetNumber).join(', ')}`
-      : `opening ${s.pagesUsed} pages`;
-    return `  - ${s.label} (${what})`;
-  }).join('\n') || '  (not recorded)';
+function buildPrompt({ rfi, discipline, analysis, response }) {
+  // The documents reading, where one was run. It is what makes the difference between "the A/E
+  // answered the question" and "the A/E answered it with something the contract does not carry",
+  // and the second is what the To Do is written against.
+  const documentsRead = analysis?.points?.length
+    ? (analysis.points.map(p =>
+        `  - ${p.point}: the documents show "${p.documentsShow || '—'}"; the RFI asks `
+        + `"${p.rfiAsks || '—'}" (${RFI_STATUS_LABEL[p.status] || p.status})`
+      ).join('\n')
+      + `\n  Overall: ${analysis.headline || '(none recorded)'}`
+      + `\n  Confidence in that reading: ${analysis.confidence}`
+        + `${analysis.confidenceReason ? ` — ${analysis.confidenceReason}` : ''}`)
+    : null;
 
-  const basis = (analysis.basis || []).map(b =>
-    `  - ${b.document}${b.sheet ? ` — ${b.sheet}` : ''}: ${b.shows}`).join('\n') || '  (none recorded)';
+  return `You are advising the OWNER's project manager on a construction RFI that the
+architect/engineer (A/E) has just answered.
 
-  return `You are advising the owner's project manager on a construction RFI that has just been
-answered by the architect/engineer (A/E).
+The PM can read the answer for themselves. What they cannot easily see, and what costs them when
+they miss it, is a question that went unanswered — an RFI answered four-fifths of the way is closed
+in the log and stops the work a fortnight later at the part nobody replied to. So your job is to
+check the answer against the questions, and then say what is left to do.
 
-Before the answer came back, Coaster read the project documents and predicted how the RFI
-would likely be answered. That prediction and the A/E's actual answer are both below. Compare
-them and tell the PM what the difference means.
-
-THE RFI
+THE RFI, AS THE CONTRACTOR ASKED IT
 Number: ${rfi.rfi_number}
 Subject: ${rfi.subject}
 Discipline: ${discipline || 'not recorded'}
-Question: ${rfi.question || '(no question text was recorded)'}
+Question as recorded:
+"""
+${rfi.question || '(no question text was recorded — go by the subject alone, and say so in the explanation)'}
+"""
 
-WHAT COASTER PREDICTED, FROM THE DOCUMENTS ALONE
-Answer: ${analysis.shortAnswer || analysis.likelyAnswer || '(none recorded)'}
-${analysis.likelyAnswer && analysis.likelyAnswer !== analysis.shortAnswer ? `Reasoning: ${analysis.likelyAnswer}\n` : ''}Confidence: ${analysis.confidence}${analysis.confidenceReason ? ` — ${analysis.confidenceReason}` : ''}
-Grounded in:
-${basis}
-${analysis.missingInformation ? `Noted as missing at the time: ${analysis.missingInformation}\n` : ''}${analysis.costScheduleFlag ? `Flagged then as cost/schedule exposure: ${analysis.costScheduleFlag}\n` : ''}
-Documents that prediction was read from:
-${read}
-
-WHAT THE A/E ACTUALLY ANSWERED
+WHAT THE A/E ANSWERED
 Disposition: ${response.action}
 ${response.respondedBy ? `From: ${response.respondedBy}\n` : ''}${response.dateReturned ? `Dated: ${response.dateReturned}\n` : ''}Answer:
 """
 ${response.notes || '(no written answer was recorded — go by the disposition alone)'}
 """
-
-Record your comparison as a TABLE, with the record_response_comparison tool. Every row is one
-point; the three columns are what it is about, what the documents showed, and what the A/E
-answered. The PM reads this at a glance between site visits, so write cells, not paragraphs.
+${documentsRead ? `
+WHAT COASTER FOUND IN THE PROJECT DOCUMENTS BEFORE THE ANSWER CAME
+${documentsRead}
+` : `
+No reading of the project documents was run on this RFI, so judge the answer against the question
+alone and do not assume what the drawings show.
+`}
+Report with the record_ae_response_coverage tool.
 
 Rules:
-- The PM already knows what the A/E said. The value here is the gap: where the answer departs
-  from what the contract documents showed, and what that costs them.
-- Length is a feature. A cell over a dozen words stops being scannable and becomes something to
-  read, which defeats the table. Give the value, not a description of the value: "10'-6" to
-  underside, 6 inch clearance" beats "the drawings indicated a clearance was required".
-- A short table beats a complete one. Rows the PM would not act on or forward do not earn their
-  line. If the A/E simply confirmed the documents, a couple of "agreed" rows and no note is the
-  right answer.
-- The headline summarises; the rows carry the detail. Never state a difference in the headline
-  that does not also appear as a row — the headline is one line in a panel and the rows are what
-  the PM reads, forwards and prices.
-- Only report differences of substance. A different way of phrasing the same instruction is
-  not a difference; that row is "agreed".
-- A row whose status is "new_information" is the most valuable thing on this page: work not in
-  the contract documents is work somebody has to pay for, and the PM needs to see it the day the
-  answer arrives, not at the pay application. Use it where the A/E relied on something the
-  documents do not carry, and put the consequence in that row's note.
-- Be careful about blame. Report what the documents showed and what the A/E directed. Whether
-  that is a design change, a clarification or a contractor error is often a judgement the PM
-  makes with information you do not have.
-- If the A/E asked for more information rather than answering, the verdict is
-  "not_comparable" — say what they still need.
-- The prediction was advisory and may simply have been wrong. Where the A/E clearly had
-  information the documents did not carry, say that rather than presenting it as a conflict.
+- Coverage is the whole point. Split the RFI into the questions it actually asks and check each one
+  off against the answer. A contractor who writes one paragraph has often asked three things.
+- "unanswered" is a finding, not a failure of yours to look harder. If the A/E did not address
+  something, say so in that row and put "press_ae" in the To Do. This is the single most useful
+  thing on the page.
+- Length is a feature. These are cells in a table, read at a glance between site visits, not
+  paragraphs. Give the substance, not a description of it.
+- The To Do is the closing list for the entire RFI and it is what the PM works from tomorrow
+  morning. Every item starts with a verb and is something a person can finish.
+- Raise "change_order" where the A/E's answer directs work the contract documents do not carry —
+  where the reading above shows the documents were silent, or where the answer relies on something
+  never drawn. An instruction that arrives as an answer to an RFI is still a change, and it is far
+  cheaper to price it now than to argue it at the pay application.
+- Be careful about blame. Report what was asked, what was answered, and what has to happen. Whether
+  something is a design change, a clarification or a contractor error is a judgement the PM makes
+  with information you do not have.
+- Do not pad. A clean answer to a simple RFI is one row, "all", and a single "record" item. That is
+  a good outcome and it should read like one.
 - Write for a reader who is not a specialist in this trade.`;
 }
 
 // How each row reads in a document, where colour cannot carry the meaning.
-const STATUS_LABEL = {
-  agreed: 'Matches the documents',
-  differs: 'Differs',
-  new_information: 'Not in the documents',
+const COVERAGE_STATUS_LABEL = {
+  answered: 'Answered',
+  partly: 'Partly answered',
   unanswered: 'Not answered',
 };
 
-// A pipe inside a cell would end the column early and shift every value after it one place
-// left — so a duct noted as "24x12 | 30x8 oval" would silently corrupt its own row.
+const COVERAGE_LABEL = {
+  all: 'The A/E answered every question asked',
+  most: 'The A/E left part of the RFI unanswered',
+  none: 'The A/E did not answer the RFI',
+};
+
+const TODO_LABEL = {
+  change_order: 'Change order',
+  revise_drawings: 'Drawing revision',
+  press_ae: 'Back to the A/E',
+  instruct_contractor: 'Tell the contractor',
+  schedule: 'Schedule',
+  record: 'Record and close',
+};
+
+// A pipe inside a cell would end the column early and shift every value after it one place left,
+// so a duct noted as "24x12 | 30x8 oval" would silently corrupt its own row.
 const cell = value => String(value ?? '—').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim() || '—';
 
 function renderMarkdown({ rfi, review, response }) {
-  const VERDICT_LABEL = {
-    confirmed: 'The A/E confirmed what the documents showed',
-    partly_confirmed: 'The A/E broadly confirmed the documents, with a qualification',
-    contradicted: 'The A/E answered differently from the documents',
-    not_comparable: 'The A/E did not answer the question',
-  };
-
   const lines = [];
   lines.push(`# Response review — ${rfi.rfi_number}: ${rfi.subject}`);
   lines.push('');
-  lines.push('> How the A/E\'s answer compares with the reading Coaster made of the project documents before it arrived. Advisory: it is the PM\'s judgement that matters, not this comparison.');
+  lines.push('> Whether the A/E answered what the contractor asked, and what is left to do. Advisory: it is the PM\'s judgement that closes an RFI, not this review.');
   lines.push('');
-  lines.push(`**Verdict:** ${VERDICT_LABEL[review.verdict] || review.verdict}  `);
+  lines.push(`**${COVERAGE_LABEL[review.coverage] || review.coverage}**  `);
   lines.push(`**A/E disposition:** ${response.action}${response.dateReturned ? ` on ${response.dateReturned}` : ''}`);
   lines.push('');
-  lines.push(review.headline || '');
-  lines.push('');
-
-  if (review.points?.length) {
-    lines.push('| | Point | The documents said | The A/E answered |');
-    lines.push('|---|---|---|---|');
-    for (const p of review.points) {
-      lines.push(`| ${STATUS_LABEL[p.status] || ''} | ${cell(p.point)} | ${cell(p.documentsSaid)} `
-        + `| ${cell(p.aeSaid)} |`);
-    }
-    lines.push('');
-    // Notes sit under the table rather than in a fifth column: they are the one part that is a
-    // sentence, and a column of sentences is what stops a table being scannable.
-    const noted = review.points.filter(p => p.note);
-    if (noted.length) {
-      for (const p of noted) lines.push(`- **${p.point}** — ${p.note}`);
-      lines.push('');
-    }
-  } else {
-    lines.push('_No material differences between the answer and the contract documents._');
+  if (review.explanation) {
+    lines.push(review.explanation);
     lines.push('');
   }
 
-  if (review.actionsForPm?.length) {
-    lines.push('## What to do now');
+  if (review.questions?.length) {
+    lines.push('| | The contractor asked | The A/E said |');
+    lines.push('|---|---|---|');
+    for (const q of review.questions) {
+      lines.push(`| ${COVERAGE_STATUS_LABEL[q.status] || ''} | ${cell(q.asked)} | ${cell(q.aeSaid)} |`);
+    }
     lines.push('');
-    for (const a of review.actionsForPm) lines.push(`- ${a}`);
+  }
+
+  if (review.todo?.length) {
+    lines.push('## To do');
+    lines.push('');
+    for (const t of review.todo) {
+      lines.push(`- **${TODO_LABEL[t.kind] || t.kind}** — ${t.action}${t.why ? ` _(${t.why})_` : ''}`);
+    }
     lines.push('');
   }
   return lines.join('\n');
 }
 
-// A verdict saying the A/E departed from the documents, with no departure listed, is the one
-// answer this must not pass on: the panel would show a finding with nothing underneath it, and
-// the PM would have nothing to forward or price. It happens occasionally whatever the prompt
-// says, so it is checked rather than hoped for.
-const DEPARTURES = new Set(['contradicted', 'partly_confirmed']);
+// A coverage line saying every question was answered, above a row saying one was not, is the one
+// answer this must not pass on: the PM reads the line, closes the RFI, and the unanswered question
+// surfaces when the work stops. It is settled from the rows rather than by asking again, because
+// the rows ARE the evidence and a second call on a rate-limited account has to earn itself.
+function reconcileCoverage({ coverage, questions }) {
+  if (!questions.length) return coverage;
+  if (questions.every(q => q.status === 'unanswered')) return 'none';
+  if (questions.some(q => q.status !== 'answered')) return 'most';
+  // Every question answered. "none" can still be right where the A/E refused the RFI outright and
+  // the model recorded that as the answer to each question, so it is left to stand.
+  return coverage === 'none' ? 'none' : 'all';
+}
 
-const isSelfContradictory = (data) => {
-  const rows = Array.isArray(data?.points) ? data.points : [];
-  return DEPARTURES.has(data?.verdict)
-    && !rows.some(p => p && (p.status === 'differs' || p.status === 'new_information'));
-};
+async function compareToResponse({ rfi, discipline, analysis, response }) {
+  const content = [{ type: 'text', text: buildPrompt({ rfi, discipline, analysis, response }) }];
 
-const CORRECTION = `Your verdict says the A/E departed from the documents, but no row you gave
-has status "differs" or "new_information". Those cannot both be right. Call the tool again:
-either give each departure its own row — what it is about, what the documents showed, what the
-A/E answered — or, if on reflection the answer sits within the documents, change the verdict to
-match.`;
-
-async function compareToResponse({ rfi, discipline, analysis, sources, response }) {
-  const content = [{ type: 'text', text: buildPrompt({ rfi, discipline, analysis, sources, response }) }];
-  const ask = blocks => askForJson({
-    content: blocks,
-    tool: COMPARISON_TOOL,
+  const { data } = await askForJson({
+    content,
+    tool: COVERAGE_TOOL,
     maxTokens: 2000,
     label: 'rfi response review',
   });
 
-  let { data } = await ask(content);
-  if (isSelfContradictory(data)) {
-    console.warn('[rfi response review] verdict claimed a departure but listed none — asking again');
-    // One corrective pass, and only when it is actually needed: this runs on a rate-limited
-    // account, so a second call has to earn itself. If the retry is no better the first answer
-    // still stands — its headline and exposure notes are worth showing.
-    try {
-      const { data: second } = await ask([...content, { type: 'text', text: CORRECTION }]);
-      if (!isSelfContradictory(second)) data = second;
-    } catch (err) {
-      console.warn(`[rfi response review] corrective pass failed, keeping the first: ${err.message}`);
-    }
-  }
-
   const review = {
-    verdict: VERDICTS.includes(data.verdict) ? data.verdict : 'not_comparable',
-    headline: data.headline || null,
-    points: (Array.isArray(data.points) ? data.points : [])
-      .filter(p => p && p.point && p.aeSaid)
-      .map(p => ({
-        point: p.point,
-        documentsSaid: p.documentsSaid || null,
-        aeSaid: p.aeSaid,
-        // An unrecognised status would render as an uncoloured row with no label, which reads
-        // as "nothing to see here" — the wrong default for a comparison.
-        status: STATUSES.includes(p.status) ? p.status : 'differs',
-        note: p.note || null,
+    coverage: COVERAGE.includes(data.coverage) ? data.coverage : 'most',
+    explanation: data.explanation || null,
+    questions: (Array.isArray(data.questions) ? data.questions : [])
+      .filter(q => q && q.asked)
+      .map(q => ({
+        asked: q.asked,
+        aeSaid: q.aeSaid || null,
+        // An unrecognised status would render as an uncoloured row with no label, which reads as
+        // "answered, nothing to see here" — the wrong default for a coverage check.
+        status: COVERAGE_STATUSES.includes(q.status) ? q.status : 'partly',
       })),
-    actionsForPm: Array.isArray(data.actionsForPm) ? data.actionsForPm.filter(Boolean) : [],
+    todo: (Array.isArray(data.todo) ? data.todo : [])
+      .filter(t => t && t.action)
+      .map(t => ({
+        action: t.action,
+        kind: TODO_KINDS.includes(t.kind) ? t.kind : 'record',
+        why: t.why || null,
+      })),
+    // Recorded so the panel can say the reading was never run, rather than leaving the reader to
+    // wonder why the To Do says nothing about the drawings.
+    hadDocumentReading: Boolean(analysis?.points?.length),
   };
+  review.coverage = reconcileCoverage(review);
 
   return { review, markdown: renderMarkdown({ rfi, review, response }) };
 }
 
-module.exports = { compareToResponse, VERDICTS, STATUSES, STATUS_LABEL };
+module.exports = {
+  compareToResponse,
+  COVERAGE, COVERAGE_LABEL, COVERAGE_STATUSES, COVERAGE_STATUS_LABEL,
+  TODO_KINDS, TODO_LABEL,
+  // Exported for tests/rfiReconcile.test.js. This is the guard that stops "every question answered"
+  // appearing above a row saying one was not, so it is worth exercising without an API call.
+  reconcileCoverage,
+};

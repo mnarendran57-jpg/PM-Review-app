@@ -16,7 +16,7 @@ const RESPONSE_ACTIONS = [
 ];
 
 // Which trade the question is really about. This is the one answer that has to come from the
-// PM: it decides which drawings the suggested answer is read against.
+// PM: it decides which drawings the RFI is read against.
 const DISCIPLINES = [
   'Architectural', 'Electrical', 'Mechanical', 'Plumbing', 'Contract', 'Miscellaneous',
 ];
@@ -147,7 +147,7 @@ function DocumentPicker({ projectId, selected, onChange, onLoaded }) {
   );
 }
 
-// --- Showing a suggested answer ----------------------------------------------------------------
+// --- Showing the RFI against the documents -----------------------------------------------------
 
 const CONFIDENCE = {
   high: { label: 'High confidence', bg: '#f0fdf4', color: '#15803d' },
@@ -155,109 +155,103 @@ const CONFIDENCE = {
   low: { label: 'Low confidence', bg: '#fef2f2', color: '#b91c1c' },
 };
 
-// Which sheets the answer actually turned on. The sheet numbers the model read off the title
-// blocks are the truthful ones — the index-derived picks are only what it went looking for —
-// so those come first and the picks are the fallback.
-function sheetsRead(analysis, sources) {
-  const printed = (analysis?.basis || []).map(b => b.sheet).filter(Boolean);
-  if (printed.length) return [...new Set(printed)];
-  return [...new Set((sources || [])
-    .flatMap(s => (s.sheets || []).map(x => x.sheetNumber))
-    .filter(Boolean))];
-}
+// The five ways one point of an RFI can stand against the documents. Colour carries the meaning at a
+// glance and the label carries it everywhere else: green where the contract already answers it, red
+// where it does not, because those two lead to opposite conversations.
+const RFI_POINT_STATUS = {
+  answered: { label: 'Already in the documents', bg: '#f0fdf4', color: '#15803d', bar: '#22c55e' },
+  unclear: { label: 'Open to reading', bg: '#fefce8', color: '#a16207', bar: '#eab308' },
+  missing: { label: 'Documents silent', bg: '#fef2f2', color: '#b91c1c', bar: '#ef4444' },
+  conflict: { label: 'Documents disagree', bg: '#fff7ed', color: '#c2410c', bar: '#f97316' },
+  mistaken: { label: 'RFI has it wrong', bg: '#eff6ff', color: '#1d4ed8', bar: '#3b82f6' },
+};
 
-// The answer as the PM reads it: the sheets it came from, one sentence, and how much to trust
-// it. Everything that justifies those three things is a click away rather than on the page —
-// the whole request here was for something concise and minimal.
-function AnswerBody({ analysis: a, sources }) {
-  const [open, setOpen] = useState(false);
+const RFI_VERDICT = {
+  not_needed: { label: 'The documents already answer this', bg: '#f0fdf4', color: '#15803d' },
+  partly_justified: { label: 'Partly answered already', bg: '#fefce8', color: '#a16207' },
+  justified: { label: 'The documents do not settle this', bg: '#fef2f2', color: '#b91c1c' },
+  cannot_tell: { label: 'Cannot be judged from the sheets read', bg: '#f8fafc', color: '#475569' },
+};
+
+// An analysis stored before this table existed carried a one-line answer and its reasoning instead
+// of rows. Those records are still in the log and still worth reading, so they render as the
+// sentence they are rather than as an empty table.
+const legacyAnswer = a => a?.shortAnswer || a?.likelyAnswer || null;
+
+// What the documents show against what the RFI asks, and whether it needed asking. One table and
+// two lines around it: this is read between site visits, and every field that was here before was a
+// field the PM scrolled past.
+function ValidityBody({ analysis: a, sources }) {
   const conf = CONFIDENCE[a?.confidence] || CONFIDENCE.low;
-  const sheets = sheetsRead(a, sources);
-  const headline = a?.shortAnswer || a?.likelyAnswer;
+  const verdict = RFI_VERDICT[a?.verdict] || RFI_VERDICT.cannot_tell;
+  const rows = Array.isArray(a?.points) ? a.points : [];
+  const legacy = rows.length ? null : legacyAnswer(a);
 
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
-        {sheets.length > 0 ? sheets.map(s => (
-          <span key={s} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-mono text-[11px] font-bold"
-            style={{ background: '#eff6ff', color: '#1d4ed8' }}>
-            <DocumentTextIcon className="w-3 h-3" />{s}
-          </span>
-        )) : (
-          <span className="text-[11px] text-gray-400">No specific sheet could be tied to the question.</span>
-        )}
+        <span className="text-[11px] px-2 py-0.5 rounded-full font-bold"
+          style={{ background: verdict.bg, color: verdict.color }}>{verdict.label}</span>
         <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold ml-auto flex-shrink-0"
           style={{ background: conf.bg, color: conf.color }}>{conf.label}</span>
       </div>
 
-      <p className="text-[14px] font-semibold text-gray-900 leading-snug">
-        {headline || 'No answer could be drawn from the documents provided.'}
-      </p>
+      {a?.headline && (
+        <p className="text-[14px] font-semibold text-gray-900 leading-snug">{a.headline}</p>
+      )}
 
-      {a?.costScheduleFlag && (
-        <p className="text-[12px] px-2.5 py-1.5 rounded-lg" style={{ background: '#fefce8', color: '#854d0e' }}>
-          <span className="font-semibold">Watch: </span>{a.costScheduleFlag}
+      {legacy && <p className="text-[13px] text-gray-700 leading-relaxed">{legacy}</p>}
+
+      {rows.length > 0 && (
+        <div className="overflow-x-auto -mx-1">
+          <table className="w-full text-[12px]" style={{ borderCollapse: 'separate', borderSpacing: '0 4px' }}>
+            <thead>
+              <tr className="text-[10px] uppercase tracking-wider text-gray-400 text-left">
+                <th className="px-2 font-semibold">Point</th>
+                <th className="px-2 font-semibold">The documents show</th>
+                <th className="px-2 font-semibold">The RFI asks</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((p, i) => {
+                const st = RFI_POINT_STATUS[p.status] || RFI_POINT_STATUS.unclear;
+                return (
+                  <tr key={i} style={{ background: st.bg }}>
+                    <td className="px-2 py-1.5 align-top rounded-l-lg"
+                      style={{ borderLeft: `3px solid ${st.bar}` }}>
+                      <p className="font-semibold text-gray-900 leading-snug">{p.point}</p>
+                      <p className="text-[10px] font-semibold mt-0.5" style={{ color: st.color }}>{st.label}</p>
+                      {p.where && (
+                        <p className="text-[10px] font-mono text-gray-500 mt-0.5">{p.where}</p>
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5 align-top text-gray-700 leading-snug">{p.documentsShow || '—'}</td>
+                    <td className="px-2 py-1.5 align-top text-gray-700 leading-snug rounded-r-lg">{p.rfiAsks || '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {rows.length === 0 && !legacy && (
+        <p className="text-[13px] text-gray-500">
+          Nothing in this RFI could be compared with the documents provided.
         </p>
       )}
 
-      <button type="button" onClick={() => setOpen(v => !v)}
-        className="text-[12px] font-semibold text-blue-600 hover:text-blue-700">
-        {open ? 'Hide the detail' : 'Why — the reasoning and the sheets it read'}
-      </button>
+      {a?.confidenceReason && <p className="text-[11px] text-gray-500">{a.confidenceReason}</p>}
 
-      {open && (
-        <div className="space-y-3 pt-1">
-          {a.likelyAnswer && a.likelyAnswer !== headline && (
-            <p className="text-[12px] text-gray-700 leading-relaxed whitespace-pre-wrap">{a.likelyAnswer}</p>
-          )}
-          {a.confidenceReason && <p className="text-[11px] text-gray-500">{a.confidenceReason}</p>}
-
-          {a.basis?.length > 0 && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Based on</p>
-              {a.basis.map((b, i) => (
-                <p key={i} className="text-[12px] text-gray-700 mb-1">
-                  <span className="font-semibold">{b.document}{b.sheet ? ` — ${b.sheet}` : ''}:</span> {b.shows}
-                </p>
-              ))}
-            </div>
-          )}
-
-          {a.conflicts?.length > 0 && (
-            <div className="p-2.5 rounded-lg" style={{ background: '#fff7ed', border: '1px solid #fed7aa' }}>
-              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#c2410c' }}>
-                Conflicts between documents
-              </p>
-              {a.conflicts.map((c, i) => (
-                <p key={i} className="text-[12px] text-gray-700"><span className="font-semibold">{c.between}:</span> {c.detail}</p>
-              ))}
-            </div>
-          )}
-
-          {a.missingInformation && (
-            <p className="text-[12px] text-gray-600"><span className="font-semibold">Missing:</span> {a.missingInformation}</p>
-          )}
-
-          {a.questionsForAE?.length > 0 && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Press the A/E on</p>
-              <ul className="list-disc pl-4 space-y-0.5">
-                {a.questionsForAE.map((q, i) => <li key={i} className="text-[12px] text-gray-700">{q}</li>)}
-              </ul>
-            </div>
-          )}
-
-          {sources?.length > 0 && (
-            <p className="text-[11px] text-gray-400">
-              Read: {sources.map(s => {
-                const what = s.wholeDocument ? 'in full'
-                  : s.sheets?.length ? s.sheets.map(x => x.sheetNumber).join(', ')
-                  : `first ${s.pagesUsed} pages`;
-                return `${s.label} (${what})`;
-              }).join(' · ')}
-            </p>
-          )}
-        </div>
+      {sources?.length > 0 && (
+        <p className="text-[11px] text-gray-400">
+          Read: {sources.map(s => {
+            const what = s.wholeDocument ? 'in full'
+              : s.sheets?.length ? s.sheets.map(x => x.sheetNumber).join(', ')
+              : `first ${s.pagesUsed} pages`;
+            return `${s.label} (${what})`;
+          }).join(' · ')}
+        </p>
       )}
     </div>
   );
@@ -300,7 +294,7 @@ function NewRfiForm({ onSaved, onCancel }) {
   const [sent, setSent] = useState('no');
   const [sentDate, setSentDate] = useState(today());
 
-  // The suggested answer, run before the entry exists. Held here until the RFI is saved, at
+  // The documents reading, run before the entry exists. Held here until the RFI is saved, at
   // which point the token hands it to the new log entry.
   const [preview, setPreview] = useState(null);
   const [analysing, setAnalysing] = useState(false);
@@ -326,7 +320,7 @@ function NewRfiForm({ onSaved, onCancel }) {
       for (const extra of extras) fd.append('files', extra);
       setPreview(await rfisApi.previewAnalysis(fd));
     } catch (err) {
-      setAnalysisError(errorText(err, 'Could not produce a suggested answer. You can still log the RFI and try again from the entry.'));
+      setAnalysisError(errorText(err, 'Could not read the RFI against the documents. You can still log the RFI and try again from the entry.'));
     } finally { setAnalysing(false); }
   };
 
@@ -415,10 +409,10 @@ function NewRfiForm({ onSaved, onCancel }) {
       <div className="p-4 rounded-xl space-y-4" style={{ background: '#fbfdff', border: '1px solid #dbeafe' }}>
         <div className="flex items-center gap-2">
           <LightBulbIcon className="w-4 h-4" style={{ color: '#2563eb' }} />
-          <p className="text-[12px] font-bold text-gray-900">So Coaster can suggest an answer</p>
+          <p className="text-[12px] font-bold text-gray-900">So Coaster can read it against the documents</p>
         </div>
 
-        {/* Deliberately not a required field. It is needed to suggest an answer, not to log
+        {/* Deliberately not a required field. It is needed to read the RFI, not to log
             an RFI, and marking it required made the browser block the whole form — so an RFI
             the PM only wanted to record could not be saved at all. The suggestion step below
             asks for it in its own right. */}
@@ -473,7 +467,7 @@ function NewRfiForm({ onSaved, onCancel }) {
               <button type="button" className="btn-secondary w-full justify-center py-1.5 text-sm"
                 onClick={suggest} disabled={analysing || !canAnalyse}>
                 <SparklesIcon className="w-4 h-4" />
-                {analysing ? 'Finding the sheets and reading them…' : 'Find the sheets and suggest an answer'}
+                {analysing ? 'Finding the sheets and reading them…' : 'Read it against the documents'}
               </button>
               <p className="text-[11px] text-gray-400 mt-1.5">
                 {canAnalyse
@@ -493,7 +487,7 @@ function NewRfiForm({ onSaved, onCancel }) {
 
           {preview && (
             <div className="pt-3">
-              <AnswerBody analysis={preview.analysis} sources={preview.sources} />
+              <ValidityBody analysis={preview.analysis} sources={preview.sources} />
               <div className="flex items-center gap-3 mt-3">
                 <button type="button" className="text-[12px] font-semibold text-gray-500 hover:text-gray-700"
                   onClick={suggest} disabled={analysing}>Run it again</button>
@@ -550,7 +544,7 @@ function NewRfiForm({ onSaved, onCancel }) {
           <div className="grid grid-cols-2 gap-4 mt-3">
             <Field label="The contractor's question" className="col-span-2">
               <textarea className="input" rows={4} value={form.question} onChange={set('question')}
-                placeholder="Read from the RFI — this is what the suggested answer is based on" />
+                placeholder="Read from the RFI — this is what gets checked against the documents" />
             </Field>
             <Field label="Date received from contractor">
               <input className="input" type="date" value={form.date_received} onChange={set('date_received')} />
@@ -574,7 +568,7 @@ function NewRfiForm({ onSaved, onCancel }) {
   );
 }
 
-// --- The predicted answer, on an RFI already in the log -----------------------------------------
+// --- The RFI against the documents, on an entry already in the log ------------------------------
 
 function AnalysisPanel({ rfi, onRan }) {
   const { projectId } = useProject();
@@ -595,7 +589,7 @@ function AnalysisPanel({ rfi, onRan }) {
       setEditing(false);
       onRan();
     } catch (err) {
-      setError(errorText(err, 'Could not produce a suggested answer.'));
+      setError(errorText(err, 'Could not read the RFI against the documents.'));
     } finally { setRunning(false); }
   };
 
@@ -605,12 +599,12 @@ function AnalysisPanel({ rfi, onRan }) {
     <div className="p-4 rounded-xl" style={{ background: '#fbfdff', border: '1px solid #dbeafe' }}>
       <div className="flex items-center gap-2 mb-2">
         <LightBulbIcon className="w-4 h-4 flex-shrink-0" style={{ color: '#2563eb' }} />
-        <p className="text-[13px] font-bold text-gray-900">Suggested answer</p>
+        <p className="text-[13px] font-bold text-gray-900">The RFI against the documents</p>
       </div>
 
       <p className="text-[11px] text-gray-500 mb-3">
-        Coaster's reading of the project documents, for your understanding before the A/E replies.
-        It is not an answer to the RFI and does not affect the log.
+        Whether the project documents already answer this RFI. For your understanding before the
+        A/E replies — it is not an answer to the RFI and does not affect the log.
       </p>
 
       {/* Shown, not hidden. The PM is accountable for the answer being drawn from the right
@@ -632,7 +626,7 @@ function AnalysisPanel({ rfi, onRan }) {
             <button className="btn-primary" onClick={run}
               disabled={running || !discipline || !documentIds.length}>
               <SparklesIcon className="w-4 h-4" />
-              {running ? 'Finding the sheets…' : stored ? 'Run it again' : 'Suggest an answer'}
+              {running ? 'Finding the sheets…' : stored ? 'Run it again' : 'Read it against the documents'}
             </button>
             {stored && (
               <button className="btn-secondary" onClick={() => setEditing(false)}>Cancel</button>
@@ -644,8 +638,8 @@ function AnalysisPanel({ rfi, onRan }) {
             </p>
           ) : !documentIds.length ? (
             <p className="text-[11px] text-gray-400">
-              Tick a document to run this. The RFI is logged either way — a suggested answer is
-              only worth having when there are drawings to read it against.
+              Tick a document to run this. The RFI is logged either way — there is nothing to
+              read it against until a document is chosen.
             </p>
           ) : (
             <p className="text-[11px] text-gray-400">
@@ -660,7 +654,7 @@ function AnalysisPanel({ rfi, onRan }) {
 
       {stored && !editing && (
         <div className="space-y-3">
-          <AnswerBody analysis={a} sources={stored.sources} />
+          <ValidityBody analysis={a} sources={stored.sources} />
 
           <div className="flex gap-2 pt-1">
             <button className="btn-secondary text-[12px] py-1" onClick={() => setEditing(true)}>
@@ -673,64 +667,56 @@ function AnalysisPanel({ rfi, onRan }) {
   );
 }
 
-// --- The A/E's answer against what was predicted --------------------------------------------------
+// --- Whether the A/E answered what was asked ------------------------------------------------------
 
-// Coloured by what the PM has to do about it: green needs nothing, amber is a qualification to
-// read, red is work the drawings did not show — which is where the money usually is.
-const VERDICTS = {
-  confirmed: {
-    label: 'Matches the documents',
+// Coloured by what the PM has to do about it: green closes, amber means part of the RFI is still
+// open, grey means the A/E has not really answered at all.
+const COVERAGE = {
+  all: {
+    label: 'Every question answered',
     bg: '#f0fdf4', color: '#15803d', border: '#bbf7d0',
-    blurb: 'The A/E answered the way the project documents indicated.',
   },
-  partly_confirmed: {
-    label: 'Matches, with a qualification',
+  most: {
+    label: 'Part of it is unanswered',
     bg: '#fefce8', color: '#a16207', border: '#fde68a',
-    blurb: 'Broadly what the documents showed, but the A/E has added or qualified something.',
   },
-  contradicted: {
-    label: 'Differs from the documents',
-    bg: '#fef2f2', color: '#b91c1c', border: '#fecaca',
-    blurb: 'The A/E has directed something the contract documents do not show.',
-  },
-  not_comparable: {
-    label: 'Not an answer yet',
+  none: {
+    label: 'Not answered',
     bg: '#f9fafb', color: '#6b7280', border: '#e5e7eb',
-    blurb: 'The A/E did not answer the question, so there is nothing to compare.',
   },
 };
 
-// What each row of the comparison means, and the colour that says so before it is read.
-const POINT_STATUS = {
-  agreed: { label: 'Matches the documents', bg: '#f0fdf4', color: '#15803d', border: '#bbf7d0' },
-  differs: { label: 'Differs', bg: '#fef2f2', color: '#b91c1c', border: '#fecaca' },
-  new_information: { label: 'Not in the documents', bg: '#fff7ed', color: '#c2410c', border: '#fed7aa' },
-  unanswered: { label: 'Not answered', bg: '#f9fafb', color: '#6b7280', border: '#e5e7eb' },
+// One row per question the contractor asked. The unanswered one is what this panel exists to
+// surface, so it is the row that is coloured to be noticed.
+const QUESTION_STATUS = {
+  answered: { label: 'Answered', bg: '#f0fdf4', color: '#15803d', border: '#bbf7d0' },
+  partly: { label: 'Partly', bg: '#fefce8', color: '#a16207', border: '#fde68a' },
+  unanswered: { label: 'Not answered', bg: '#fef2f2', color: '#b91c1c', border: '#fecaca' },
 };
 
-// The rows to draw, whichever shape the stored comparison is in.
-//
-// Comparisons produced before this panel became a table were saved as four separate fields, and
-// those records are still on real RFIs. Rather than leave them rendering as a blank panel — or
-// keep both layouts alive — the old fields are folded into the same rows the table draws. Each
-// of them was already a status in all but name.
-function rowsOf(review) {
-  if (Array.isArray(review.points) && review.points.length) return review.points;
+// The To Do, by the kind of thing each item is. A change order is the one with money attached and a
+// deadline nobody sets, so it reads differently from the rest.
+const TODO_KIND = {
+  change_order: { label: 'Change order', bg: '#fef2f2', color: '#b91c1c' },
+  revise_drawings: { label: 'Drawing revision', bg: '#fff7ed', color: '#c2410c' },
+  press_ae: { label: 'Back to the A/E', bg: '#fefce8', color: '#a16207' },
+  instruct_contractor: { label: 'Tell the contractor', bg: '#eff6ff', color: '#1d4ed8' },
+  schedule: { label: 'Schedule', bg: '#f5f3ff', color: '#6d28d9' },
+  record: { label: 'Record and close', bg: '#f8fafc', color: '#475569' },
+};
 
-  const rows = [];
-  for (const d of review.differences || []) {
-    rows.push({ point: d.point, documentsSaid: d.predicted, aeSaid: d.actual,
-      status: 'differs', note: d.whyItMatters });
-  }
-  if (review.newInformation) {
-    rows.push({ point: 'The A/E knew something the documents did not carry', documentsSaid: 'Silent',
-      aeSaid: review.newInformation, status: 'new_information', note: review.changeOrderRisk || null });
-  }
-  for (const a of review.agreements || []) {
-    rows.push({ point: a, documentsSaid: null, aeSaid: 'Answered as the documents showed',
-      status: 'agreed', note: null });
-  }
-  return rows;
+// A review stored before this panel checked coverage compared the answer with the prediction
+// instead, and those records are still on real RFIs. Its headline and its actions still mean what
+// they said, so they are shown; its table does not, because coverage was never assessed. Inventing
+// a coverage row from an agreement row would put a claim on the page that nobody ever checked.
+function legacyReview(review) {
+  if (Array.isArray(review.questions)) return null;
+  const actions = Array.isArray(review.actionsForPm) ? review.actionsForPm.filter(Boolean) : [];
+  if (!review.headline && !actions.length) return null;
+  return {
+    explanation: review.headline || null,
+    todo: actions.map(action => ({ action, kind: 'record', why: null })),
+  };
 }
 
 function ResponseReviewPanel({ rfi, revision, onRan }) {
@@ -744,34 +730,36 @@ function ResponseReviewPanel({ rfi, revision, onRan }) {
     try {
       onRan(await rfisApi.reviewResponse(rfi.id, revision.id));
     } catch (err) {
-      setError(errorText(err, 'Could not compare the response with the suggested answer.'));
+      setError(errorText(err, 'Could not check the A/E\'s answer.'));
     } finally { setRunning(false); }
   };
 
-  const v = VERDICTS[review?.verdict] || VERDICTS.not_comparable;
-  const rows = review ? rowsOf(review) : [];
+  const legacy = review ? legacyReview(review) : null;
+  const c = COVERAGE[review?.coverage] || COVERAGE.most;
+  const questions = Array.isArray(review?.questions) ? review.questions : [];
+  const todo = legacy ? legacy.todo : Array.isArray(review?.todo) ? review.todo : [];
+  const explanation = legacy ? legacy.explanation : review?.explanation;
 
   return (
-    <div className="p-4 rounded-xl" style={{ background: '#fff', border: `1px solid ${review ? v.border : '#eef1f4'}` }}>
+    <div className="p-4 rounded-xl" style={{ background: '#fff', border: `1px solid ${review ? c.border : '#eef1f4'}` }}>
       <div className="flex items-center gap-2 mb-2 flex-wrap">
         <ScaleIcon className="w-4 h-4 flex-shrink-0" style={{ color: '#6366f1' }} />
-        <p className="text-[13px] font-bold text-gray-900">The A/E's answer vs the documents</p>
-        {review && (
+        <p className="text-[13px] font-bold text-gray-900">Did the A/E answer the question?</p>
+        {review && !legacy && (
           <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold ml-auto flex-shrink-0"
-            style={{ background: v.bg, color: v.color }}>{v.label}</span>
+            style={{ background: c.bg, color: c.color }}>{c.label}</span>
         )}
       </div>
 
       {!review && (
         <div className="space-y-2">
           <p className="text-[12px] text-gray-600">
-            {rfi.analysis
-              ? 'Compare what the A/E answered with the reading Coaster made of the drawings before it came back.'
-              : 'No suggested answer was produced for this RFI, so there is nothing to compare the A/E\'s reply against. Run one above first.'}
+            Check the A/E's reply against every question the contractor asked, and get the list of
+            what to do about it.
           </p>
-          <button className="btn-primary" onClick={run} disabled={running || !rfi.analysis}>
+          <button className="btn-primary" onClick={run} disabled={running}>
             <ScaleIcon className="w-4 h-4" />
-            {running ? 'Comparing…' : 'Compare with the suggested answer'}
+            {running ? 'Checking…' : 'Check the answer'}
           </button>
         </div>
       )}
@@ -780,28 +768,26 @@ function ResponseReviewPanel({ rfi, revision, onRan }) {
 
       {review && (
         <div className="space-y-3">
-          <p className="text-[14px] font-semibold text-gray-900 leading-snug">{review.headline}</p>
-          <p className="text-[11px] text-gray-500">{v.blurb}</p>
+          {explanation && (
+            <p className="text-[13px] text-gray-800 leading-relaxed">{explanation}</p>
+          )}
 
-          {/* One table, ordered as the model ranked it — the rows worth money first. Two
-              columns side by side is the whole point: what the documents showed and what the
-              A/E answered are read against each other, which is the comparison the PM came
-              here to make. */}
-          {rows.length > 0 && (
+          {/* Question against answer, side by side. The RFI is the left column because that is what
+              the A/E was obliged to reply to, and a blank on the right is the finding. */}
+          {questions.length > 0 && (
             <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #eef1f4' }}>
-              <div className="hidden sm:grid grid-cols-[1fr_1fr_1fr] gap-px text-[10px] font-semibold uppercase tracking-wider text-gray-400"
+              <div className="hidden sm:grid grid-cols-[1fr_1fr] gap-px text-[10px] font-semibold uppercase tracking-wider text-gray-400"
                 style={{ background: '#f9fafb', borderBottom: '1px solid #eef1f4' }}>
-                <div className="px-2.5 py-1.5">Point</div>
-                <div className="px-2.5 py-1.5">The documents said</div>
-                <div className="px-2.5 py-1.5">The A/E answered</div>
+                <div className="px-2.5 py-1.5">The contractor asked</div>
+                <div className="px-2.5 py-1.5">The A/E said</div>
               </div>
-              {rows.map((p, i) => {
-                const st = POINT_STATUS[p.status] || POINT_STATUS.differs;
+              {questions.map((q, i) => {
+                const st = QUESTION_STATUS[q.status] || QUESTION_STATUS.partly;
                 return (
                   <div key={i} style={{ borderTop: i ? '1px solid #f3f4f6' : 'none', background: st.bg }}>
-                    <div className="sm:grid sm:grid-cols-[1fr_1fr_1fr]">
+                    <div className="sm:grid sm:grid-cols-[1fr_1fr]">
                       <div className="px-2.5 py-2">
-                        <p className="text-[12px] font-semibold text-gray-900 leading-snug">{p.point}</p>
+                        <p className="text-[12px] font-semibold text-gray-900 leading-snug">{q.asked}</p>
                         <span className="inline-block text-[9px] font-bold uppercase tracking-wider mt-1 px-1.5 py-0.5 rounded"
                           style={{ background: '#fff', color: st.color, border: `1px solid ${st.border}` }}>
                           {st.label}
@@ -810,37 +796,49 @@ function ResponseReviewPanel({ rfi, revision, onRan }) {
                       {/* Labelled on a narrow screen, where the columns stack and the header
                           scrolls away — an unlabelled value in a stack is unreadable. */}
                       <div className="px-2.5 pb-2 sm:py-2">
-                        <span className="sm:hidden text-[9px] uppercase tracking-wider text-gray-400 block">The documents said</span>
-                        <p className="text-[12px] text-gray-700 leading-snug">{p.documentsSaid || '—'}</p>
-                      </div>
-                      <div className="px-2.5 pb-2 sm:py-2">
-                        <span className="sm:hidden text-[9px] uppercase tracking-wider text-gray-400 block">The A/E answered</span>
-                        <p className="text-[12px] leading-snug" style={{ color: st.color }}>{p.aeSaid}</p>
+                        <span className="sm:hidden text-[9px] uppercase tracking-wider text-gray-400 block">The A/E said</span>
+                        <p className="text-[12px] leading-snug" style={{ color: st.color }}>{q.aeSaid || '—'}</p>
                       </div>
                     </div>
-                    {/* The one part of a row that is a sentence, kept out of the columns so the
-                        table stays scannable. */}
-                    {p.note && (
-                      <p className="text-[11px] text-gray-600 px-2.5 pb-2 sm:pl-2.5">{p.note}</p>
-                    )}
                   </div>
                 );
               })}
             </div>
           )}
 
-          {review.actionsForPm?.length > 0 && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Do now</p>
-              <ul className="list-disc pl-4 space-y-0.5">
-                {review.actionsForPm.map((a, i) => <li key={i} className="text-[12px] text-gray-700">{a}</li>)}
-              </ul>
+          {/* The last thing on the page, and the only part that is a list of instructions rather
+              than a record of what happened. */}
+          {todo.length > 0 && (
+            <div className="p-3 rounded-lg" style={{ background: '#fafbfc', border: '1px solid #eef1f4' }}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-2">To do</p>
+              <div className="space-y-1.5">
+                {todo.map((t, i) => {
+                  const k = TODO_KIND[t.kind] || TODO_KIND.record;
+                  return (
+                    <div key={i} className="flex items-start gap-2">
+                      <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded flex-shrink-0 mt-0.5"
+                        style={{ background: k.bg, color: k.color }}>{k.label}</span>
+                      <div className="min-w-0">
+                        <p className="text-[12px] text-gray-800 leading-snug">{t.action}</p>
+                        {t.why && <p className="text-[11px] text-gray-500 leading-snug">{t.why}</p>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
+          )}
+
+          {review.hadDocumentReading === false && (
+            <p className="text-[11px] text-gray-400">
+              No reading of the project documents was run on this RFI, so the list above is drawn
+              from the question and the answer alone.
+            </p>
           )}
 
           <div className="flex gap-2 pt-1">
             <button className="btn-secondary text-[12px] py-1" onClick={run} disabled={running}>
-              {running ? 'Comparing…' : 'Run it again'}
+              {running ? 'Checking…' : 'Run it again'}
             </button>
           </div>
         </div>
@@ -1043,8 +1041,8 @@ function FollowUpForm({ rfi, onSaved, onCancel }) {
 // --- One RFI, opened -------------------------------------------------------------------------
 
 function RevisionCard({ rfi, revision, isCurrent }) {
-  // Whether this revision's answer has already been read against the prediction. Once it has,
-  // the comparison is the answer and everything it is derived from becomes background.
+  // Whether this revision's answer has already been checked against the questions asked. Once it
+  // has, that check is what the PM works from and the raw answer becomes background.
   const compared = !!revision.responseReview;
   const [showAnswer, setShowAnswer] = useState(false);
   const files = revision.files || [];
@@ -1152,7 +1150,7 @@ function RfiDetail({ id, onChanged, onDeleted }) {
     // the response with it. Saying so beats leaving the panel looking as though nothing
     // happened — the PM can press the button and try again.
     setError(updated?.reviewError
-      ? `The response was recorded. Comparing it with the suggested answer didn't work: ${updated.reviewError}`
+      ? `The response was recorded. Checking whether it answered the question didn't work: ${updated.reviewError}`
       : '');
     onChanged();
   };
@@ -1252,30 +1250,28 @@ function RfiDetail({ id, onChanged, onDeleted }) {
 
       {error && <p className="text-xs" style={{ color: '#b91c1c' }}>{error}</p>}
 
-      {/* Once the A/E has answered, the comparison is the more useful of the two — the
-          prediction has served its purpose, and what matters now is where the answer departs
-          from it. So it sits above. */}
+      {/* Once the A/E has answered, whether they answered it is the more useful of the two, and
+          it is the panel that carries the To Do. So it sits above. */}
       {current.response_action && (
         <ResponseReviewPanel rfi={record} revision={current} onRan={applyUpdate} />
       )}
 
-      {/* The suggested answer earns its place right up until the A/E replies. After that it is
-          a forecast of something that has already happened, and the comparison above restates
-          every part of it that still matters — beside what the A/E actually said, which is the
-          only form in which it is now useful. Two panels both headed with a verdict, one
-          predicted and one real, is what made this page confusing to read. */}
+      {/* The documents reading earns its place right up until the A/E replies. After that the
+          conclusion the PM acts on has moved into the To Do above, and two panels each headed
+          with their own verdict is what made this page confusing to read. It folds away rather
+          than disappearing: it is the evidence a change order gets argued from. */}
       {!compared ? (
         <AnalysisPanel rfi={record} onRan={load} />
       ) : showPrediction ? (
         <div>
           <button type="button" className="text-[11px] font-semibold text-gray-400 hover:text-gray-700 mb-1"
-            onClick={() => setShowPrediction(false)}>Hide what was predicted</button>
+            onClick={() => setShowPrediction(false)}>Hide the documents reading</button>
           <AnalysisPanel rfi={record} onRan={load} />
         </div>
       ) : (
         <button type="button" className="text-[11px] font-semibold text-gray-400 hover:text-gray-700"
           onClick={() => setShowPrediction(true)}>
-          Show what Coaster predicted before the answer came back
+          Show what the documents said before the answer came back
         </button>
       )}
 
@@ -1453,7 +1449,7 @@ export default function RfiLog() {
                   onClick={() => setModal({ id: r.id })}>
                   <td className="table-td font-mono text-xs font-semibold text-gray-700 whitespace-nowrap">
                     {r.rfi_number}
-                    {r.hasAnalysis && <LightBulbIcon className="w-3.5 h-3.5 inline ml-1.5 text-blue-500" title="A suggested answer has been produced" />}
+                    {r.hasAnalysis && <LightBulbIcon className="w-3.5 h-3.5 inline ml-1.5 text-blue-500" title="This RFI has been read against the documents" />}
                   </td>
                   <td className="table-td text-center text-sm text-gray-500">{r.currentRevision}</td>
                   <td className="table-td font-medium max-w-xs">
