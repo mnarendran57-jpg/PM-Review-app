@@ -479,6 +479,9 @@ async function analyzeBackup(buffers = []) {
       cacheTool: true,
       maxTokens: 8000,
       label: 'pay app backup extract',
+      // Copying invoice totals and vendor names off receipts. Nothing is judged here — the R rules
+      // do the reconciling afterwards from these figures.
+      fast: true,
       truncatedMessage: 'One page of this backup carries more documents than can be read in a '
         + 'single pass.',
     });
@@ -551,6 +554,10 @@ async function callClaudeWithRetry(content, hasPrevious) {
     cacheTool: true,
     maxTokens: 20000,
     label: 'pay app extract',
+    // The big one, and pure transcription: the figures printed on a G702 and a G703. This is where
+    // the time went — tens of thousands of tokens of typing — and it is the call with a safety net
+    // under it, because payAppVerifyRead reconciles every line against the page's own text layer.
+    fast: true,
     truncatedMessage: TOO_MANY_LINE_ITEMS,
   });
   return data;

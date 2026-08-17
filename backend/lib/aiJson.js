@@ -20,7 +20,19 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // The field descriptions move out of the prompt and into the schema, where they belong: the
 // prompt keeps the reasoning and the rules, the schema says what shape the answer takes.
 
+// Two models, chosen by what the call is for.
+//
+// What makes a document read slow is the model WRITING its answer, at roughly a hundred tokens a
+// second, and a pay application transcribes into tens of thousands of them. Transcription is also
+// the least judgemental thing this app asks: copy the figures out of a form. So it goes to the fast
+// model, and everything that WEIGHS something — whether a subcontractor's billing is justified,
+// whether a contract forbids a cost, whether an A/E answered the question — stays on the careful
+// one. Getting a number wrong here is caught downstream: lib/payAppVerifyRead.js reconciles every
+// transcribed line against the PDF's own text layer and corrects unambiguous misreads from the
+// document itself, which is a safety net that judgement calls do not have.
 const MODEL = 'claude-sonnet-4-5';
+// Reserved for copying figures out of a document, never for deciding what they mean.
+const FAST_MODEL = 'claude-haiku-4-5-20251001';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // Answers worth waiting out rather than failing on. 429 is the per-minute allowance, which
@@ -86,9 +98,11 @@ async function askForJson({
   attempts = 2,
   label = 'ai',
   truncatedMessage = null,
+  // Transcription only. See FAST_MODEL above for where the line is drawn.
+  fast = false,
 }) {
   const request = {
-    model: MODEL,
+    model: fast ? FAST_MODEL : MODEL,
     max_tokens: maxTokens,
     // The cache breakpoint goes as late as possible in the invariant part of the request,
     // because everything BEFORE it is cached with it. The API orders a prompt tools -> system ->
@@ -134,7 +148,10 @@ async function askForJson({
   if (response.usage) {
     const read = response.usage.cache_read_input_tokens;
     const written = response.usage.cache_creation_input_tokens;
-    console.log(`[${label}] in=${response.usage.input_tokens} out=${response.usage.output_tokens}`
+    // The model is logged because which one answered is the first thing worth knowing when a
+    // transcription comes back wrong.
+    console.log(`[${label}] ${fast ? 'fast' : 'careful'} in=${response.usage.input_tokens} `
+      + `out=${response.usage.output_tokens}`
       + (read ? ` cache-hit=${read}` : '') + (written ? ` cache-write=${written}` : '') + ' tokens');
   }
 
@@ -167,4 +184,4 @@ async function askForJson({
   };
 }
 
-module.exports = { askForJson, fillDeclaredNulls, MODEL };
+module.exports = { MODEL, FAST_MODEL, askForJson, fillDeclaredNulls };
