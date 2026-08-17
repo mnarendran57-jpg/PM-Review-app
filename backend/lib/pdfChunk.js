@@ -5,11 +5,17 @@ const { PDFDocument } = require('pdf-lib');
 // long document and reading it in passes removes the ceiling from the user's side, so no
 // upload is rejected for being long.
 //
-// Well under the ceiling on purpose: a page of dense drawings costs far more tokens than a
-// page of prose, and the account's per-minute token allowance binds sooner than the page
-// count does. Smaller passes also fail smaller — one can be retried without redoing the
-// whole document.
-const MAX_PAGES_PER_PASS = 40;
+// Well under the ceiling on purpose: smaller passes also fail smaller — one can be retried
+// without redoing the whole document.
+//
+// Small on purpose, now that passes run at the same time rather than one after another.
+//
+// Forty pages a pass minimised the NUMBER of requests, which was the scarce thing when the account
+// allowed five a minute. It now allows five thousand, and the scarce thing is wall-clock time —
+// which is dominated by the model writing its answer at roughly a hundred tokens a second. Smaller
+// passes mean more of that writing happens simultaneously, so twelve pages a pass reads a
+// sixty-page package in five concurrent passes instead of two long ones.
+const MAX_PAGES_PER_PASS = 12;
 
 // The other ceiling, which pages alone do not catch. A request carries the PDF base64-encoded,
 // which inflates it by a third, and the API refuses an oversized request outright. A scanned
@@ -153,7 +159,6 @@ function mergeExtracted(results) {
 async function analyzeInPasses(buffer, analyze, maxPages = MAX_PAGES_PER_PASS) {
   const parts = await splitPdf(buffer, maxPages);
   const source = await PDFDocument.load(buffer, { ignoreEncryption: true }).catch(() => null);
-  const results = [];
 
   // A pass can fit the request and still overflow the ANSWER: forty pages of a continuation
   // sheet carrying three hundred line items produce more JSON than one reply holds. That used
@@ -178,16 +183,46 @@ async function analyzeInPasses(buffer, analyze, maxPages = MAX_PAGES_PER_PASS) {
     }
   };
 
-  for (const [index, part] of parts.entries()) {
-    results.push(await run(part, {
-      isPart: parts.length > 1,
-      partNumber: index + 1,
-      partCount: parts.length,
-      startPage: part.startPage,
-      endPage: part.endPage,
-    }));
-  }
+  // Passes run CONCURRENTLY, and the wall clock is the slowest pass rather than the sum of all of
+  // them. They used to run one after another for a specific reason: the account allowed about
+  // 10,000 input tokens a minute and five requests a minute, so two passes at once simply failed.
+  // Measured on 2026-08-17 the same account allows 5,000,000 input tokens, 1,000,000 output tokens
+  // and 5,000 requests a minute. Every wait this loop imposed was paying a toll that no longer
+  // exists — and the toll was expensive, because what makes a pass slow is the model WRITING the
+  // transcription, about a hundred tokens a second, which is time no amount of input allowance
+  // shortens. Four passes of five thousand output tokens is three minutes in series and fifty
+  // seconds in parallel.
+  //
+  // Capped rather than unbounded: a three-hundred-page package would otherwise open sixty
+  // simultaneous requests, which is neither kind to the API nor necessary — past a handful, the
+  // slowest pass dominates anyway.
+  const results = await inParallel(parts, (part, index) => run(part, {
+    isPart: parts.length > 1,
+    partNumber: index + 1,
+    partCount: parts.length,
+    startPage: part.startPage,
+    endPage: part.endPage,
+  }));
   return mergeExtracted(results);
+}
+
+// Runs at most CONCURRENCY of them at a time, preserving order in the result. Order matters:
+// mergeExtracted concatenates line items, and a continuation sheet read out of order would come
+// back with its rows shuffled.
+const CONCURRENCY = 6;
+
+async function inParallel(items, work) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await work(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, worker));
+  return out;
 }
 
 // Wording for the prompt so the model treats a part as an extract rather than the whole

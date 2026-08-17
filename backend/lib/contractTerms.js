@@ -70,10 +70,20 @@ async function ensureTermsRead(row) {
   }
 }
 
-// Reads every governing document a review is about to measure against, in turn. Sequential
-// because the account's per-minute allowance would rate-limit parallel reads into retries.
+// Reads every governing document a review is about to measure against, all at once.
+//
+// These were read one after another because the account's per-minute allowance would have
+// rate-limited parallel reads into retries — five requests a minute, when a single contract can be
+// several passes on its own. Measured on 2026-08-17 the same account allows five thousand requests
+// and five million input tokens a minute, so the reason is gone and the cost of keeping it was the
+// worst kind: a CMAR job with a prime contract and four subcontracts read them in series, and the
+// PM waited for the sum of five reads to do work that has no order to it. Each contract is
+// independent — nothing in one informs another.
+//
+// ensureTermsRead records its own failures and returns null rather than throwing, so one unreadable
+// contract cannot reject the others through Promise.all.
 async function ensureAllRead(rows) {
-  for (const row of rows) await ensureTermsRead(row);
+  await Promise.all(rows.map(row => ensureTermsRead(row)));
 }
 
 module.exports = { ensureTermsRead, ensureAllRead };

@@ -149,8 +149,10 @@ async function analyzeInvoices({ invoiceBuffers, contractTerms }) {
     return callWithRetry(content);
   };
 
-  const results = [];
-  for (const buffer of invoiceBuffers) results.push(await analyzeInPasses(buffer, readOne));
+  // All of them at once. Each file is independent — merging happens afterwards — and these ran in
+  // series only because the old per-minute allowance made parallel reads fail. Order is preserved so
+  // that merged lists stay in the order the files were given.
+  const results = await Promise.all(invoiceBuffers.map(buffer => analyzeInPasses(buffer, readOne)));
   const merged = mergeExtracted(results);
 
   return { invoice: merged.invoice || {}, observations: merged.observations || {} };

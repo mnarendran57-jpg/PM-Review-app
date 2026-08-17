@@ -485,8 +485,10 @@ async function analyzeBackup(buffers = []) {
     return data;
   };
 
-  const results = [];
-  for (const buffer of buffers) results.push(await analyzeInPasses(buffer, readOne));
+  // All of them at once. Each file is independent — merging happens afterwards — and these ran in
+  // series only because the old per-minute allowance made parallel reads fail. Order is preserved so
+  // that merged lists stay in the order the files were given.
+  const results = await Promise.all(buffers.map(buffer => analyzeInPasses(buffer, readOne)));
 
   const merged = mergeExtracted(results) || {};
   const tag = list => (Array.isArray(list) ? list : []).map(x => ({ ...x, sentSeparately: true }));
@@ -569,13 +571,24 @@ async function analyzePayApps(currentBuffer, previousBuffer) {
     return (await callClaudeWithRetry(content, false)).current;
   };
 
-  const inPasses = async () => ({
-    current: await analyzeInPasses(currentBuffer, readOne),
-    previous: previousBuffer ? await analyzeInPasses(previousBuffer, readOne) : null,
-  });
+  // The two applications are read at the same time. They have nothing to do with each other until
+  // both are in hand, so reading the previous one after the current one was doubling the wait for
+  // no reason beyond the per-minute allowance that used to make it necessary.
+  const inPasses = async () => {
+    const [current, previous] = await Promise.all([
+      analyzeInPasses(currentBuffer, readOne),
+      previousBuffer ? analyzeInPasses(previousBuffer, readOne) : Promise.resolve(null),
+    ]);
+    return { current, previous };
+  };
 
-  // Both fit: keep the single two-document call. It costs one request instead of two, which
-  // matters given how narrow this account's per-minute limit is.
+  // Both fit in one request: send one call rather than two.
+  //
+  // This is now a much narrower case than it was, because MAX_PAGES_PER_PASS is deliberately small
+  // and most real packages split. It is kept for the genuinely short pay app — a cover and one
+  // continuation sheet — where a single call is the whole job and splitting it would add a request
+  // to save nothing. The old reason for preferring it, that requests were rationed at five a
+  // minute, no longer holds.
   if (currentParts.length === 1 && previousParts.length <= 1) {
     const content = [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: currentBuffer.toString('base64') } },
