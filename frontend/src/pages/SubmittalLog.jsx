@@ -118,6 +118,22 @@ function NewSubmittalForm({ onSaved, onCancel }) {
   const [error, setError] = useState('');
   // 'no' until said otherwise: most submittals are logged as they arrive, before being sent on.
   const [sent, setSent] = useState('no');
+  // What it will be checked against. Asked here rather than left to the review, because a
+  // submittal with nothing to measure it against cannot be reviewed at all, and discovering
+  // that at prediction time means coming back to fix the entry.
+  const [docs, setDocs] = useState([]);
+  const [documentIds, setDocumentIds] = useState([]);
+  const [specFile, setSpecFile] = useState(null);
+
+  useEffect(() => {
+    if (!projectId) return;
+    payAppReviewApi.listDocuments(projectId)
+      .then(all => setDocs(all.filter(d => d.doc_type !== 'memo-cover')))
+      .catch(() => setDocs([]));
+  }, [projectId]);
+
+  const toggleDoc = id => setDocumentIds(
+    documentIds.includes(id) ? documentIds.filter(x => x !== id) : [...documentIds, id]);
 
   const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
 
@@ -156,6 +172,8 @@ function NewSubmittalForm({ onSaved, onCancel }) {
       const fd = new FormData();
       fd.append('project_id', projectId);
       Object.entries(form).forEach(([k, v]) => fd.append(k, v ?? ''));
+      fd.append('document_ids', JSON.stringify(documentIds));
+      if (specFile) fd.append('spec_file', specFile);
       if (file) fd.append('file', file);
       onSaved(await submittalsApi.create(fd));
     } catch (err) {
@@ -193,6 +211,44 @@ function NewSubmittalForm({ onSaved, onCancel }) {
           <input className="input" required value={form.description} onChange={set('description')}
             placeholder="VAV boxes — product data" />
         </Field>
+        {/* Offered, not demanded. Predicting the review is a feature a PM opts into when it is
+            worth the wait, and the log's first job is to record what was sent and when — which
+            has to work for someone holding the submittal and nothing else. Asked here anyway,
+            because this is the moment the specification is in mind. */}
+        <Field label="Check it against a specification?" className="col-span-2">
+          <p className="text-[11px] text-gray-500 -mt-1 mb-2">
+            Optional. Choose or attach one and Coaster can predict how the A/E will review it —
+            it finds the section this submittal cites inside whatever you give it. You can also
+            do this later, or not at all.
+          </p>
+          {docs.length > 0 && (
+            <div className="space-y-1 mb-2">
+              {docs.map(d => (
+                <label key={d.id} className="flex items-start gap-2 cursor-pointer">
+                  <input type="checkbox" className="mt-0.5" checked={documentIds.includes(d.id)}
+                    onChange={() => toggleDoc(d.id)} />
+                  <span className="text-[12px] text-gray-700">
+                    {d.label || d.file_name}
+                    <span className="text-gray-400"> · {d.doc_type}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          <input type="file" accept=".pdf"
+            className="text-xs text-gray-500 w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 file:cursor-pointer"
+            onChange={e => setSpecFile(e.target.files?.[0] || null)} />
+          <p className="text-[11px] text-gray-400 mt-1">
+            {specFile
+              ? `${specFile.name} — it will be filed under Shared Documents, so you only upload it once.`
+              : docs.length
+                ? 'Tick one above, or attach it here if it is not filed yet.'
+                : 'Nothing is filed on this project yet — anything you attach here is added to '
+                  + 'Shared Documents.'}
+          </p>
+        </Field>
+
         {/* Asked as a question rather than offered as a blank date box. A blank box does not say
             whether the submittal is sitting on the PM's desk or sitting with the A/E, and those
             are different states: one has a clock running against it and the other does not. */}
@@ -499,17 +555,17 @@ function PredictedReviewPanel({ record, onRan }) {
   const toggle = id => setChosen(
     selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id]);
 
-  // The project's own specifications, which is what the review uses when nothing is ticked.
-  const projectSpecs = docs.filter(d => d.doc_type === 'specifications');
+  // There has to be something to measure against, and the panel says so rather than failing
+  // once the PM has waited for a review to run.
+  const canRun = selected.length > 0 || specFiles.length > 0;
 
   const run = async () => {
     setRunning(true); setError('');
     try {
       const fd = new FormData();
-      // Sent only when the PM has actually chosen something. An empty list means "use the
-      // project's specification", which the review resolves for itself — sending an empty
-      // document_ids would instead be read as "the PM deselected everything".
-      if (chosen && chosen.length) fd.append('document_ids', chosen.join(','));
+      // Always sent, because the panel now shows the choice: what is ticked is what is read,
+      // including when the PM has deliberately unticked everything and attached a file instead.
+      fd.append('document_ids', JSON.stringify(selected));
       for (const f of specFiles) fd.append('spec_files', f);
       const res = await submittalsApi.analyze(record.id, fd);
       onRan(res.submittal);
@@ -519,14 +575,11 @@ function PredictedReviewPanel({ record, onRan }) {
     } finally { setRunning(false); }
   };
 
-  // What the review will read, said plainly before it is run, so the PM is never guessing.
-  const willRead = specFiles.length
-    ? `${specFiles.length} specification${specFiles.length === 1 ? '' : 's'} you attached below`
-    : chosen && chosen.length
-      ? `${chosen.length} document${chosen.length === 1 ? '' : 's'} you ticked below`
-      : projectSpecs.length
-        ? projectSpecs.map(d => d.label || d.file_name).join(', ')
-        : null;
+  // What the review will read, named before it runs, so the PM is never guessing.
+  const willRead = [
+    ...docs.filter(d => selected.includes(d.id)).map(d => d.label || d.file_name),
+    ...specFiles.map(f => f.name),
+  ].join(', ') || null;
 
   const actionStyle = ACTION_STYLE[a?.likelyAction] || ACTION_STYLE['For Record Only'];
 
@@ -543,50 +596,25 @@ function PredictedReviewPanel({ record, onRan }) {
         )}
       </div>
 
-      {/* One button. The submittal names the section it was made under, the project holds the
-          specification, and the section is found inside it by number — so there is nothing for
-          the PM to choose, and asking them to choose was asking a question the project already
-          answers. Overriding it is still one click away, for the manual filed under the wrong
-          type or the section that has not been filed at all. */}
-      {!a && !open && (
+      {/* What it is read against is shown, not hidden. The choice was folded behind a link on
+          the theory that the project already answers it — but the PM is the one accountable for
+          the review being measured against the right document, and a choice they cannot see is
+          a choice they cannot check. It comes pre-ticked from the entry, so the common case is
+          still one button. */}
+      {(!a || open) && (
         <div className="space-y-2">
           <p className="text-[12px] text-gray-600">
-            Read this submittal against the specification before it goes out — the deviations and
-            missing items it finds are the ones that would otherwise come back as a resubmittal.
+            Optional. Read this submittal against the specification before it goes out — the
+            deviations and missing items it finds are the ones that would otherwise come back as
+            a resubmittal.
           </p>
-          {willRead ? (
-            <p className="text-[11px] text-gray-500">
-              Will look for {record.spec_section
-                ? <b>{record.spec_section}</b>
-                : 'the section this submittal cites'} in {willRead}.
-            </p>
-          ) : (
-            <p className="text-[12px]" style={{ color: '#b45309' }}>
-              No specification is filed on this project yet. Add it under Shared Documents, or
-              attach the section here.
-            </p>
-          )}
-          <div className="flex gap-2 flex-wrap items-center">
-            <button className="btn-primary" onClick={run} disabled={running}>
-              <SparklesIcon className="w-4 h-4" />
-              {running ? 'Finding the section…' : 'Predict the review'}
-            </button>
-            <button type="button" className="text-[11px] font-semibold text-gray-500 hover:text-gray-700"
-              onClick={() => setOpen(true)}>
-              Read it against something else
-            </button>
-          </div>
-        </div>
-      )}
 
-      {open && (
-        <div className="space-y-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 pt-1">
             Read it against
           </p>
           {docs.length === 0 && (
             <p className="text-[12px] text-gray-500">
-              This project has no shared documents yet — attach the specification section below.
+              Nothing is filed on this project yet — attach the specification below.
             </p>
           )}
           {docs.map(d => (
@@ -601,7 +629,7 @@ function PredictedReviewPanel({ record, onRan }) {
           ))}
 
           <div className="pt-1">
-            <label className="label">…or attach the specification for this review only</label>
+            <label className="label">…or attach it, if it is not filed yet</label>
             <input type="file" multiple accept=".pdf"
               className="text-xs text-gray-500 w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 file:cursor-pointer"
               onChange={e => setSpecFiles(Array.from(e.target.files || []))} />
@@ -612,16 +640,30 @@ function PredictedReviewPanel({ record, onRan }) {
             </p>
           </div>
 
+          {willRead && (
+            <p className="text-[11px] text-gray-500">
+              Will look for {record.spec_section
+                ? <b>{record.spec_section}</b>
+                : 'the section this submittal cites'} in {willRead}.
+            </p>
+          )}
+
           <div className="flex gap-2 pt-1">
-            <button className="btn-primary" onClick={run} disabled={running}>
+            <button className="btn-primary" onClick={run} disabled={running || !canRun}>
               <SparklesIcon className="w-4 h-4" />
               {running ? 'Finding the section…' : a ? 'Run it again' : 'Predict the review'}
             </button>
-            <button className="btn-secondary" onClick={() => setOpen(false)} disabled={running}>Cancel</button>
+            {a && (
+              <button className="btn-secondary" onClick={() => setOpen(false)} disabled={running}>Cancel</button>
+            )}
           </div>
           <p className="text-[11px] text-gray-400">
-            The section is found by its number in the manual's own text, so a long book costs no
-            more to read than the one section does.
+            {canRun
+              ? 'The section is found by its number in the manual\'s own text, so a long book '
+                + 'costs no more to read than the one section does.'
+              : 'Tick a document or attach one to run this. The submittal is logged either way — '
+                + 'a prediction is only worth having when there is a specification to measure '
+                + 'against.'}
           </p>
         </div>
       )}

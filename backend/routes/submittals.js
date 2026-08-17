@@ -137,9 +137,23 @@ function arrivalDates(body) {
 // the same on both: "is this what the documents said, and if not, what does that change?" —
 // and answering it the same way in both places means one thing to learn rather than two.
 
+// Document ids arrive as a JSON array from the form, but a bare comma-separated string is
+// tolerated so a hand-made request is not silently ignored.
+//
+// Splitting on commas alone is not enough, and the failure is silent: "[3,7]" splits into "[3"
+// and "7]", both of which are NaN, so every ticked document is dropped and the review runs
+// against nothing while the panel still shows them ticked.
 const parseIdList = (raw) => {
   if (raw == null) return [];
-  const list = Array.isArray(raw) ? raw : String(raw).split(',');
+  let list = raw;
+  if (typeof list === 'string') {
+    try { list = JSON.parse(list); } catch { list = list.split(','); }
+    // A single id survives JSON.parse as a number rather than an array — "37" parses to 37,
+    // not [37]. Treating that as "not a list" silently dropped it, so one ticked document
+    // linked nothing while two linked both.
+    if (!Array.isArray(list)) list = [list];
+  }
+  if (!Array.isArray(list)) return [];
   return list.map(v => Number(String(v).trim())).filter(n => Number.isInteger(n) && n > 0);
 };
 
@@ -178,6 +192,26 @@ async function loadDocumentBuffers(projectId, ids) {
     }
   }
   return out;
+}
+
+// Files a specification the PM attached while logging a submittal, and returns its id.
+//
+// It goes into Shared Documents rather than being held against this one submittal, because a
+// specification is a project document that happens to have arrived here: the next submittal in
+// the same division is measured against the same manual, and a copy invisible outside this
+// entry would make the PM upload it again. terms_status is 'ready' because only a contract or a
+// purchase order has terms to read — nothing here reads a specification on upload.
+async function fileSpecification(projectId, file, createdBy) {
+  const { key } = await storage.storeFile('contract', file.buffer, file.mimetype, file.originalname);
+  return db.prepare(`
+    INSERT INTO project_contracts
+      (project_id, file_name, label, doc_type, is_primary, file_blob, file_key, terms,
+       created_by, terms_status)
+    VALUES (?, ?, ?, 'specifications', 0, ?, ?, '{}', ?, 'ready')
+  `).run(
+    projectId, file.originalname, file.originalname.replace(/\.pdf$/i, ''),
+    key ? Buffer.alloc(0) : file.buffer, key, createdBy || null,
+  ).lastInsertRowid;
 }
 
 // The project's specifications, for a submittal nobody has chosen documents for.
@@ -384,7 +418,10 @@ router.post('/extract', upload.single('file'), async (req, res) => {
 // Enters a submittal into the log, creating its first revision at the same time. The two are
 // always created together: a submittal with no revision has no dates and no status, and
 // would render as a permanently blank row.
-router.post('/', upload.single('file'), async (req, res) => {
+router.post('/', uploadForAnalysis.fields([
+  { name: 'file', maxCount: 1 },
+  { name: 'spec_file', maxCount: 1 },
+]), async (req, res) => {
   try {
     const project = projectInScope(req, req.body.project_id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -393,6 +430,12 @@ router.post('/', upload.single('file'), async (req, res) => {
     const description = nullable(req.body.description);
     if (!submittalNumber) return res.status(400).json({ error: 'A submittal number is required.' });
     if (!description) return res.status(400).json({ error: 'A description is required.' });
+
+    // What this submittal would be judged against, if the PM wants a prediction. Offered when
+    // the entry is made because that is when the specification is in mind, but never required:
+    // the log is a record of what was sent and when, and that record has to be enterable by
+    // someone who has the submittal in front of them and nothing else.
+    const specFile = req.files?.spec_file?.[0] || null;
 
     // Duplicate numbers are refused rather than merged. On a real job the same number coming
     // in twice is either a resubmittal — which belongs on the existing entry as a new
@@ -435,9 +478,20 @@ router.post('/', upload.single('file'), async (req, res) => {
         || dueDateFor({ date_forwarded: dateForwarded }, reviewDays(project.id))
     );
 
-    if (req.file) {
+    // The specification, filed if it arrived here and linked either way, so the review that
+    // runs next already knows what it is measured against.
+    const documentIds = parseIdList(req.body.document_ids);
+    if (specFile) {
+      documentIds.push(await fileSpecification(project.id, specFile, req.user.name || req.user.email));
+    }
+    // The array itself, not a joined string — round-tripping ids through text is what dropped
+    // them in the first place, and there is nothing here that needs them to be text.
+    setDocuments(submittalId, project.id, documentIds);
+
+    const packageFile = req.files?.file?.[0] || null;
+    if (packageFile) {
       await attachFile({
-        submittalId, revisionId: revision.lastInsertRowid, kind: 'submittal', file: req.file,
+        submittalId, revisionId: revision.lastInsertRowid, kind: 'submittal', file: packageFile,
       });
     }
 
