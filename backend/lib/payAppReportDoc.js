@@ -185,9 +185,10 @@ function renderMarkdown(doc) {
       push('');
     }
   };
+  // Same order as the on-screen report and the PDF. Three renderings of one document that disagree
+  // about what comes first are three documents.
   section('What to resolve', doc.resolve);
   section('To confirm', doc.confirm);
-  section('Noted, no action expected', doc.noted);
 
   if (doc.subMatch?.rows?.length) {
     push('## Subcontractor billing', '');
@@ -205,12 +206,14 @@ function renderMarkdown(doc) {
   // above, and the only place a reader can see that one subcontract is billed across two lines.
   if (doc.vendorRollup?.length) {
     push('## Subcontractor scope on the schedule', '');
-    push('| Subcontractor | Lines carrying their scope | They billed | On the schedule | Columns agreeing |');
-    push('|---|---|---|---|---|');
+    push('| Subcontractor | Lines carrying their scope | They billed | Contractor billed | Difference | Columns agreeing |');
+    push('|---|---|---|---|---|---|');
     for (const r of doc.vendorRollup) {
+      const diff = r.difference == null ? '—'
+        : `${money(r.difference)}${r.exceeds ? ' — billed above the sub' : r.short ? ' — sub billed more' : ''}`;
       push(`| ${r.vendor} | ${r.lines.length ? r.lines.join('; ') : '—'} | `
         + `${r.theyBilled == null ? '—' : money(r.theyBilled)} | `
-        + `${r.onSchedule == null ? '—' : money(r.onSchedule)} | `
+        + `${r.onSchedule == null ? '—' : money(r.onSchedule)} | ${diff} | `
         + `${r.columnsCompared ? `${r.columnsMatched} of ${r.columnsCompared} — ${r.status}` : r.status} |`);
     }
     push('');
@@ -247,6 +250,8 @@ function renderMarkdown(doc) {
     }
     push('');
   }
+
+  section('Noted, no action expected', doc.noted);
 
   if (doc.waivers?.length) {
     push('## Lien waivers', '');

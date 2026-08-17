@@ -543,19 +543,45 @@ const STATUS = {
   'no-figures': 'no totals on their application',
 };
 
+// A dollar of rounding is not a finding. Anything above this is a real gap between what the
+// subcontractor asked for and what the contractor billed the owner for their work.
+const OVERBILL_TOLERANCE = 1;
+
 function vendorRollupTable(rolls) {
-  const rows = (rolls || []).map(r => ({
-    vendor: r.vendor.vendor,
-    note: [r.vendor.applicationNumber ? `app ${r.vendor.applicationNumber}` : null,
-      r.vendor.commitment, r.vendor.contractFor].filter(Boolean).join(' · '),
-    lines: nameList(r.lines || []),
-    theyBilled: isNum(r.vendor.thisPeriod) ? r.vendor.thisPeriod : null,
-    onSchedule: r.lines?.length && r.lines.every(l => isNum(l.thisPeriod))
-      ? sum(r.lines, l => l.thisPeriod) : null,
-    columnsMatched: r.cmp ? r.cmp.matched.length : 0,
-    columnsCompared: r.cmp ? r.cmp.comparable : 0,
-    status: STATUS[r.outcome] || r.outcome,
-  }));
+  const rows = (rolls || []).map((r) => {
+    const theyBilled = isNum(r.vendor.thisPeriod) ? r.vendor.thisPeriod : null;
+    const onSchedule = r.lines?.length && r.lines.every(l => isNum(l.thisPeriod))
+      ? sum(r.lines, l => l.thisPeriod) : null;
+
+    // The number the reviewer is actually looking for, and the reason this table exists: the gap
+    // between what the subcontractor asked the contractor for and what the contractor asked the
+    // owner for the same work. Positive is the contractor's margin on this line — legitimate where
+    // the contract allows a fee, and money taken twice where it does not. Negative usually means
+    // the contractor has not billed everything the sub has claimed, which is the owner's gain this
+    // month and a catch-up next month.
+    //
+    // It is computed rather than described because a difference stated in a sentence is a
+    // difference nobody checks. Whether the margin is ALLOWED is the fee rule's job (S3, S9); this
+    // only ensures the figure is on the page.
+    const difference = isNum(theyBilled) && isNum(onSchedule) ? onSchedule - theyBilled : null;
+
+    return {
+      vendor: r.vendor.vendor,
+      note: [r.vendor.applicationNumber ? `app ${r.vendor.applicationNumber}` : null,
+        r.vendor.commitment, r.vendor.contractFor].filter(Boolean).join(' · '),
+      lines: nameList(r.lines || []),
+      theyBilled,
+      onSchedule,
+      difference,
+      // Named for what it is from the owner's side. The contractor billing MORE than the
+      // subcontractor did is the direction that costs money, so it is the one that gets a flag.
+      exceeds: isNum(difference) && difference > OVERBILL_TOLERANCE,
+      short: isNum(difference) && difference < -OVERBILL_TOLERANCE,
+      columnsMatched: r.cmp ? r.cmp.matched.length : 0,
+      columnsCompared: r.cmp ? r.cmp.comparable : 0,
+      status: STATUS[r.outcome] || r.outcome,
+    };
+  });
   return rows.length ? rows : null;
 }
 

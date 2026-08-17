@@ -142,9 +142,10 @@ async function renderPayAppReportPdf({ report, companyName }) {
       else y -= 4;
     }
   };
+  // Same order as the on-screen report and the markdown: what stops a cheque, then what to confirm,
+  // then the tables, then observations. See payAppReportHtml.js for why.
   findingSection('What to resolve', report.resolve, RED);
   findingSection('To confirm', report.confirm, AMBER);
-  findingSection('Noted, no action expected', report.noted, GREY);
 
   // ---- subcontractor billing ----------------------------------------------------------------------
   if (report.subMatch?.rows?.length) {
@@ -174,15 +175,18 @@ async function renderPayAppReportPdf({ report, companyName }) {
     rule();
     text('Subcontractor scope on the schedule', { bold: true, size: 11, gapAfter: 6 });
     table(
-      [{ label: 'Subcontractor', width: 0.22 }, { label: 'Lines carrying their scope', width: 0.36 },
-        { label: 'They billed', width: 0.14, align: 'right' },
-        { label: 'On schedule', width: 0.14, align: 'right' },
-        { label: 'Columns', width: 0.14 }],
+      [{ label: 'Subcontractor', width: 0.20 }, { label: 'Lines carrying their scope', width: 0.28 },
+        { label: 'They billed', width: 0.13, align: 'right' },
+        { label: 'Contractor billed', width: 0.13, align: 'right' },
+        { label: 'Difference', width: 0.14, align: 'right' },
+        { label: 'Columns', width: 0.12 }],
       report.vendorRollup.map(r => [
         r.vendor,
         r.lines.length ? r.lines.join('; ') : '—',
         r.theyBilled == null ? '—' : money(r.theyBilled),
         r.onSchedule == null ? '—' : money(r.onSchedule),
+        r.difference == null ? '—'
+          : `${money(r.difference)}${r.exceeds ? ' over' : r.short ? ' under' : ''}`,
         r.columnsCompared ? `${r.columnsMatched}/${r.columnsCompared} ${r.status}` : r.status,
       ]),
     );
@@ -227,6 +231,8 @@ async function renderPayAppReportPdf({ report, companyName }) {
       ]),
     );
   }
+
+  findingSection('Noted, no action expected', report.noted, GREY);
 
   // ---- lien waivers ---------------------------------------------------------------------------------
   if (report.waivers?.length) {

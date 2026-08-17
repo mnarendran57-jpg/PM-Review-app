@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   CloudArrowUpIcon, SparklesIcon, DocumentMagnifyingGlassIcon, ArrowDownTrayIcon,
   TrashIcon, ClockIcon, DocumentTextIcon, CodeBracketIcon, PencilSquareIcon,
+  ArrowUpTrayIcon,
 } from '@heroicons/react/24/outline';
 import { payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -65,11 +66,16 @@ function LineItemsTable({ items, onChange }) {
 
 function HistoryItem({ item, onView, onDelete }) {
   const date = new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const badge = item.critical_count > 0
-    ? { bg: '#fef2f2', color: '#b91c1c', text: `${item.critical_count} critical` }
-    : item.fail_count > 0
-      ? { bg: '#fff7ed', color: '#c2410c', text: `${item.fail_count} issue${item.fail_count === 1 ? '' : 's'}` }
-      : { bg: '#d1fae5', color: '#065f46', text: 'Clean' };
+  // "Not checked" comes first deliberately. A review whose checks fell over has no findings and a
+  // zero fail count, which is indistinguishable from a clean application by the numbers alone — and
+  // it used to read as "Clean", which is the one thing it certainly is not.
+  const badge = item.checks_ran === 0
+    ? { bg: '#f1f5f9', color: '#475569', text: 'Not checked' }
+    : item.critical_count > 0
+      ? { bg: '#fef2f2', color: '#b91c1c', text: `${item.critical_count} critical` }
+      : item.fail_count > 0
+        ? { bg: '#fff7ed', color: '#c2410c', text: `${item.fail_count} issue${item.fail_count === 1 ? '' : 's'}` }
+        : { bg: '#d1fae5', color: '#065f46', text: 'Clean' };
   return (
     <div className="card px-5 py-3.5 flex items-center justify-between cursor-pointer" onClick={() => onView(item.id)}>
       <div className="flex items-center gap-3 min-w-0">
@@ -122,11 +128,14 @@ function DeliveryMethodNote({ method }) {
 
 // Which contract this project's applications are measured against.
 //
-// A CHOOSER, and nothing else. Two things it deliberately does not do:
+// Choose the document, and attach one if it is not there yet.
 //
-// It does not UPLOAD. It used to carry its own "Executed Contract (PDF)" drop, so the same
-// agreement could be uploaded here and again in Shared Documents, and the two copies could
-// disagree about which one reviews used. Documents belong in Shared Documents, once.
+// The upload here is NOT a second home for contracts. It posts to Shared Documents, exactly as the
+// Shared Documents page does, and the file lands in one place owned by the project — which is what
+// an earlier version of this panel got wrong by carrying its own "Executed Contract (PDF)" drop
+// that stored a separate copy, so the two could disagree about which one reviews used. What is
+// fixed here is only the errand: being sent to another screen while holding the file is how a
+// review ends up run against no contract at all.
 //
 // It does not show what was READ out of the contract. A panel of tax status, exemption wording
 // and unallowable items sat above the review and read like findings, when it is only Coaster's
@@ -140,6 +149,7 @@ function DeliveryMethodNote({ method }) {
 function ContractPanel({ projectId, docs, deliveryMethod, otherIds, onOtherIds, onChange }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [uploading, setUploading] = useState(false);
 
   const choose = async (doc) => {
     setBusy(true); setError('');
@@ -150,6 +160,53 @@ function ContractPanel({ projectId, docs, deliveryMethod, otherIds, onOtherIds, 
       setError(err.response?.data?.error || 'Could not change which contract reviews use.');
     } finally { setBusy(false); }
   };
+
+  // Attaching the contract from here rather than sending the reviewer to Shared Documents.
+  //
+  // The link is still there and still right — a contract belongs to the project, not to this
+  // review. But being told to go and do something else, in another part of the app, at the moment
+  // you are holding the file, is how a review gets run without a contract "just this once". The
+  // upload lands in exactly the same place; it just does not cost the reviewer their place.
+  const attach = async (file, docType) => {
+    if (!file) return;
+    setUploading(true); setError('');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('doc_type', docType);
+      const added = await payAppReviewApi.addDocument(projectId, fd);
+      // First governing document on the project becomes the one reviews check against, so the
+      // common case is one upload and no second decision.
+      if (added?.id && !(docs || []).length) {
+        await payAppReviewApi.updateDocument(projectId, added.id, { is_primary: true });
+      }
+      onChange();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not add that document.');
+    } finally { setUploading(false); }
+  };
+
+  const UploadRow = ({ compact }) => (
+    <div className={compact ? 'mt-2' : 'mt-2.5'}>
+      <div className="flex items-center gap-2 flex-wrap">
+        {[['contract', 'Add a contract'], ['purchase-order', 'Add a purchase order']].map(([type, label]) => (
+          <label key={type}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer"
+            style={{ background: '#eff6ff', color: '#1d4ed8', opacity: uploading ? 0.5 : 1 }}>
+            <ArrowUpTrayIcon className="w-3 h-3" />
+            {uploading ? 'Adding…' : label}
+            <input type="file" accept=".pdf" className="hidden" disabled={uploading}
+              onChange={e => { attach(e.target.files?.[0], type); e.target.value = ''; }} />
+          </label>
+        ))}
+      </div>
+      <p className="text-[11px] text-gray-400 mt-1">
+        Added to{' '}
+        <Link to={`/project/${projectId}/shared-documents`} className="underline">Shared Documents</Link>,
+        so every review on this project can use it. Read once, on the first review that needs it.
+      </p>
+    </div>
+  );
 
   // Shown even with no project selected. Hiding it entirely made the whole idea undiscoverable —
   // a reviewer had no way to know reviews check against anything at all.
@@ -177,12 +234,11 @@ function ContractPanel({ projectId, docs, deliveryMethod, otherIds, onOtherIds, 
           </p>
           <p className="text-[11px] mt-1" style={{ color: '#9a3412' }}>
             The review still runs — the arithmetic, retainage and continuity checks do not need
-            one. Add a contract or a PO in{' '}
-            <Link to={`/project/${projectId}/shared-documents`} className="underline font-medium">
-              Shared Documents
-            </Link>{' '}
-            if you want the contract sum, retainage rate and tax rules checked too.
+            one. Add one to have the contract sum, retainage rate, tax rules and unallowable items
+            checked as well.
           </p>
+          <UploadRow compact />
+          {error && <p className="text-[11px] mt-1" style={{ color: '#b91c1c' }}>{error}</p>}
         </div>
       </div>
     );
@@ -212,10 +268,7 @@ function ContractPanel({ projectId, docs, deliveryMethod, otherIds, onOtherIds, 
           <option key={d.id} value={d.id}>{nameOf(d)}</option>
         ))}
       </select>
-      <p className="text-[11px] text-gray-400">
-        From this project's{' '}
-        <Link to={`/project/${projectId}/shared-documents`} className="underline">Shared Documents</Link>.
-      </p>
+      <UploadRow />
       {error && <p className="text-[11px]" style={{ color: '#b91c1c' }}>{error}</p>}
 
       {/* Only a CMAR package bills under more than one agreement. Ticked by default, because a
@@ -694,8 +747,10 @@ export default function PayAppReview() {
             <FileDrop file={currentFile} onChange={setCurrentFile} label="Current Pay Application (PDF) *" />
             <FileDrop file={previousFile} onChange={setPreviousFile} label="Previous Pay Application (PDF)" />
 
-            {contract && (
-              <div>
+            {/* Not gated on a contract being on file. It used to be, which meant a job running on a
+                purchase order alone could not hand Coaster the invoices it was asking for — while
+                the panel above said, correctly, that the review runs without a contract. */}
+            <div>
                 <label className="label">Extra Backup Documentation (PDF)</label>
                 <input
                   type="file" multiple accept=".pdf"
@@ -717,8 +772,7 @@ export default function PayAppReview() {
                     {backupRead.breakdowns ? `, ${backupRead.breakdowns} cost breakdown${backupRead.breakdowns === 1 ? '' : 's'}` : ''}.
                   </p>
                 )}
-              </div>
-            )}
+            </div>
 
             <button type="button" className="text-xs font-medium text-gray-500 underline" onClick={() => setShowOptional(o => !o)}>
               {showOptional ? 'Hide' : 'Show'} optional contract-level inputs

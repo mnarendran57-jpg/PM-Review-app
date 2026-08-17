@@ -629,37 +629,6 @@ router.post('/', upload.fields([
 
     const data = { current, previous, contract, retainagePolicy };
 
-    // Scope baseline for the in/out-of-contract comparison: the contract's schedule of
-    // values when one was extracted, else the project's FIRST pay application, which
-    // established the agreed schedule. The first app is never compared against itself.
-    let scopeBaseline = null;
-    if (contractTerms?.scheduleOfValues?.length) {
-      scopeBaseline = { source: 'contract', items: contractTerms.scheduleOfValues };
-    } else if (projectId) {
-      const firstReview = db.prepare(`
-        SELECT id, application_number, extracted_data FROM pay_app_reviews WHERE project_id = ?
-        ORDER BY application_number ASC, created_at ASC LIMIT 1
-      `).get(projectId);
-      // The baseline must verifiably predate the application under review — comparing
-      // an app against its own stored review proves nothing, so when either
-      // application number is unknown, skip rather than guess.
-      if (firstReview && firstReview.application_number != null
-        && current.summary.applicationNumber != null
-        && firstReview.application_number < current.summary.applicationNumber) {
-        const firstItems = JSON.parse(firstReview.extracted_data)?.current?.lineItems || [];
-        if (firstItems.length) {
-          scopeBaseline = {
-            source: 'first_app',
-            items: firstItems.map(li => ({ itemNo: li.itemNo, description: li.description, amount: li.c ?? null })),
-          };
-        }
-      }
-    }
-
-    // Advisory half: read the pay app (and any separate backup) against the contract's
-    // tax status and unallowable items, and compare billed lines to the agreed scope.
-    // Never let this sink the review — the math checks above are the load-bearing part
-    // and have already succeeded.
     // The prior application's certified figure, so Line 7 can be checked against the document
     // it should tie to rather than only for internal consistency, as the standard requires.
     let priorApplication = null;
@@ -699,7 +668,12 @@ router.post('/', upload.fields([
       console.error('Read verification failed (review continues):', err.message);
     }
 
+    // A crash here used to be logged and stepped over, and the review was stored anyway — with no
+    // findings, a zero fail count, and a green "Clean" badge in the history list. A run that fell
+    // over and an application with nothing wrong with it were indistinguishable at a glance, which
+    // makes every clean result on the page worth less. The failure is now carried on the review.
     let engineResult = null;
+    let engineError = null;
     try {
       engineResult = runEngines(
         { current, previous, contract, retainagePolicy, priorApplication }, contractTerms,
@@ -707,31 +681,16 @@ router.post('/', upload.fields([
           contractsPending: contracts.filter(c => c.termsStatus !== 'ready') });
       attachReadCheck(engineResult, readCheck);
     } catch (err) {
-      console.error('Pay app engines failed (review continues):', err.message);
+      console.error('Pay app engines failed:', err.stack || err.message);
+      engineError = err.message || 'The checks could not be run on this application.';
     }
 
-    // Kept only because stored reviews and the project dashboard already read this column.
-    // Everything in it now comes from the engines.
-    const engineTax = (engineResult?.findings || []).filter(f => f.id === 'S7');
-    const compliance = engineResult ? {
-      audit: null,
-      scopeComparison: null,
-      scopeSource: scopeBaseline?.source ?? null,
-      taxFindings: engineTax.map(f => ({
-        where: [f.where?.vendor, f.where?.ref].filter(Boolean).join(' — '),
-        description: f.where?.vendor || f.where?.ref,
-        amount: f.actual,
-        detail: f.detail,
-      })),
-      unallowableFindings: [],
-      backupCoverage: engineResult.notChecked.length ? engineResult.notChecked.join(' ') : null,
-      notes: null,
-      incomplete: false,
-    } : {
-      audit: null, scopeComparison: null, scopeSource: null, taxFindings: [],
-      unallowableFindings: [], backupCoverage: null,
-      notes: 'The review engines could not be run on this application.', incomplete: true,
-    };
+    // The figures the model read are still worth keeping when the checks fall over — they are what
+    // the PM corrects by hand and re-runs. So the review is still stored; it just does not claim to
+    // have been checked.
+    const compliance = engineError
+      ? { checksRan: false, error: engineError }
+      : { checksRan: true, error: null };
 
     const report = buildReportDoc({
       result: engineResult, data,
@@ -776,7 +735,9 @@ router.post('/', upload.fields([
       deliveryMethod
     );
 
-    res.json({ id: insertResult.lastInsertRowid, projectId, report, engineResult });
+    // engineError travels with the response so the page can say the checks did not run, rather
+    // than showing an empty results panel that looks like nothing was wrong.
+    res.json({ id: insertResult.lastInsertRowid, projectId, report, engineResult, engineError });
   } catch (err) {
     console.error('Pay app review error:', err);
     res.status(500).json({ error: err.message });
@@ -786,9 +747,13 @@ router.post('/', upload.fields([
 router.get('/', (req, res) => {
   const { search, project_name, project_id } = req.query;
   const scope = access.visibilityClause(req.user, req.orgId);
+  // engine_result comes back only as a flag, never as its contents: the list renders a badge per
+  // row, and a row whose checks never ran must not be able to show a clean one. Sending the whole
+  // engine output for every review on the project to draw a badge would be a great deal of JSON.
   let sql = `SELECT id, project_name, application_number, period_to, contract_sum_to_date,
              total_completed_to_date, current_payment_due, balance_to_finish,
-             critical_count, fail_count, created_by, created_at
+             critical_count, fail_count, created_by, created_at,
+             (engine_result IS NOT NULL) AS checks_ran
              FROM pay_app_reviews WHERE ${scope.sql}`;
   const params = [...scope.params];
   if (project_id) { sql += ' AND project_id = ?'; params.push(project_id); }
@@ -814,6 +779,21 @@ function storedReportDoc(row, extractedData, engineResult) {
 
 const NO_ENGINE_OUTPUT = 'This review was produced before the current review engines were in '
   + 'place, so there is no findings report for it. Re-running the application will produce one.';
+
+// A review with no findings report has two quite different causes and they must not share a
+// sentence. One is old and harmless; the other is a run that fell over on an application somebody
+// may be about to certify, and it has to say so.
+function noReportMessage(row) {
+  let compliance = null;
+  try { compliance = row.compliance_findings ? JSON.parse(row.compliance_findings) : null; } catch { /* old shape */ }
+  if (compliance && compliance.checksRan === false) {
+    return 'The checks could not be run on this application, so nothing here has been verified — '
+      + 'this is not a clean result. The figures read from the document were kept so they can be '
+      + 'corrected and the checks run again.'
+      + (compliance.error ? ` The error was: ${compliance.error}` : '');
+  }
+  return NO_ENGINE_OUTPUT;
+}
 
 router.get('/:id', (req, res) => {
   const row = visibleReview(req);
@@ -847,7 +827,7 @@ router.get('/:id/report.html', (req, res) => {
   const report = storedReportDoc(row, data, engineResult);
   if (!report) {
     return res.send('<!doctype html><meta charset="utf-8"><body style="font:15px/1.5 system-ui;'
-      + `color:#535b67;padding:32px;max-width:44em">${NO_ENGINE_OUTPUT}</body>`);
+      + `color:#535b67;padding:32px;max-width:44em">${noReportMessage(row)}</body>`);
   }
   res.send(buildReportHtml({ report }));
 });

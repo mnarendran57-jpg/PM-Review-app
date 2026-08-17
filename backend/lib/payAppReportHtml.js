@@ -46,20 +46,57 @@ function findingRow(f) {
       </div>`;
 }
 
-function findingSection(title, list, limit = 6) {
+// Every finding, always.
+//
+// This used to show six and then say "and 8 more of the same kind — see the full findings export".
+// On a clean application that is invisible; on a bad one it hides exactly the findings the reviewer
+// is being paid to catch, behind a sentence pointing at an export with no button. Precision is
+// short ENTRIES, not fewer of them: a pay application with fourteen real problems is a report with
+// fourteen short lines, and the reviewer decides what matters, not the renderer.
+function findingSection(title, list) {
   if (!list.length) return '';
-  const shown = list.slice(0, limit);
-  const hidden = list.length - shown.length;
   return `
     <section class="sec">
       <h2>${esc(title)} — ${list.length} item${list.length === 1 ? '' : 's'}</h2>
-      ${shown.map(findingRow).join('')}
-      ${hidden ? `<p class="more">and ${hidden} more of the same kind — see the full findings export.</p>` : ''}
+      ${list.map(findingRow).join('')}
+    </section>`;
+}
+
+// What to go and look at on site before certifying.
+//
+// It is not a check and never was: it answers "what should I see with my own eyes this period",
+// which no amount of arithmetic can settle. It has been in the PDF and the markdown from the start
+// and missing from the on-screen report — the one rendering anybody actually reads — while the page
+// header promised "math checks and a site verification checklist in one step".
+function checklistSection(items) {
+  if (!items || !items.length) return '';
+  return `
+    <section class="sec">
+      <h2>To verify on site this period</h2>
+      ${items.map(i => `
+        <label class="chk">
+          <input type="checkbox">
+          <span><b>${esc(i.description || String(i))}</b>${
+    i.isNew ? '<em class="new">new this period</em>' : ''}${
+    i.detail ? `<small>${esc(i.detail)}</small>` : ''}</span>
+          <span class="amt-sm">${i.amount == null ? '' : money(i.amount)}</span>
+        </label>`).join('')}
+      <p class="quiet">Nothing here is a finding. These are the lines whose billing moved this
+        period, so they are what a walk of the job should confirm before the cheque is signed.</p>
     </section>`;
 }
 
 function subMatchSection(match) {
-  if (!match || !match.rows.length) return '';
+  if (!match || !match.rows?.length) return '';
+  // The engine always builds totals alongside rows, so this is not for anything it produces. It is
+  // for reviews stored months ago and reopened: this report is re-rendered from whatever shape was
+  // saved that day, and a missing key there would throw a 500 on the reviewer's own record rather
+  // than show them the rows it does have.
+  const totals = match.totals || {
+    theyBilled: match.rows.reduce((a, r) => a + (Number(r.theyBilled) || 0), 0),
+    passedThrough: match.rows.reduce((a, r) => a + (Number(r.passedThrough) || 0), 0),
+    markup: match.rows.reduce((a, r) => a + (Number(r.markup) || 0), 0),
+  };
   const cell = (v, extra = '') => `<td>${money(v)}${extra}</td>`;
   const rows = match.rows.map(r => `
           <tr>
@@ -91,12 +128,12 @@ function subMatchSection(match) {
           <tbody>${rows}
             <tr class="total">
               <td>${match.rows.length} subcontract charge${match.rows.length === 1 ? '' : 's'}</td>
-              ${cell(match.totals.theyBilled)}
-              ${cell(match.totals.passedThrough)}
+              ${cell(totals.theyBilled)}
+              ${cell(totals.passedThrough)}
               <td>—</td><td>—</td>
-              <td>${Math.abs(match.totals.markup) < 0.005 ? money(0) : `<span class="flag">${money(match.totals.markup)}</span>`}</td>
-              <td class="${Math.abs(match.totals.markup) < 0.005 ? 'yes' : 'no'}">${
-  Math.abs(match.totals.markup) < 0.005 ? 'ties' : 'differs'}</td>
+              <td>${Math.abs(totals.markup) < 0.005 ? money(0) : `<span class="flag">${money(totals.markup)}</span>`}</td>
+              <td class="${Math.abs(totals.markup) < 0.005 ? 'yes' : 'no'}">${
+  Math.abs(totals.markup) < 0.005 ? 'ties' : 'differs'}</td>
             </tr>
           </tbody>
         </table>
@@ -117,6 +154,9 @@ function vendorRollupSection(rows) {
             <td>${r.lines.length ? r.lines.map(esc).join('<br>') : '—'}</td>
             <td>${r.theyBilled == null ? '—' : money(r.theyBilled)}</td>
             <td>${r.onSchedule == null ? '—' : money(r.onSchedule)}</td>
+            <td class="${r.exceeds ? 'no' : ''}">${r.difference == null ? '—' : money(r.difference)}${
+  r.exceeds ? '<span class="meta">billed above the sub</span>'
+    : r.short ? '<span class="meta">sub billed more</span>' : ''}</td>
             <td class="${r.status === 'ties exactly' ? 'yes' : 'no'}">${
   r.columnsCompared ? `${r.columnsMatched} of ${r.columnsCompared}<span class="meta">${esc(r.status)}</span>`
     : esc(r.status)}</td>
@@ -129,15 +169,20 @@ function vendorRollupSection(rows) {
         <table>
           <thead>
             <tr><th>Subcontractor</th><th>Lines carrying their scope</th><th>They billed</th>
-                <th>On the schedule</th><th>Columns agreeing</th></tr>
+                <th>Contractor billed</th><th>Difference</th><th>Columns agreeing</th></tr>
           </thead>
           <tbody>${body}</tbody>
         </table>
       </div>
-      <p class="quiet">Each subcontractor's own totals are added up against every schedule line
-        billing their work — contract sum, previously billed, this period, to date and retainage at
-        once. Columns agreeing on every count means the lines listed are that subcontract and
-        nothing is billed twice or left out. Anything less is named in the findings above.</p>
+      <p class="quiet"><b>Difference</b> is what the contractor billed the owner for this
+        subcontractor's work, less what the subcontractor billed the contractor for it. Positive is
+        the contractor's margin on that scope this period — which the fee rules above test against
+        the agreement — and it is the figure to check when the contract allows no markup on
+        subcontract work. Negative means the contractor has not passed through everything the sub
+        claimed, so expect it next period. Each subcontractor's totals are also matched column by
+        column: contract sum, previously billed, this period, to date and retainage. Agreement on
+        every count means the lines listed are that subcontract and nothing is billed twice or left
+        out; anything less is named in the findings above.</p>
     </section>`;
 }
 
@@ -344,6 +389,15 @@ function buildReportHtml({ report }) {
   .clean .n{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:19px;color:var(--ok)}
   .clean .l{font-size:12.5px;color:var(--ink-2);line-height:1.4}
   .quiet{font-size:13px;color:var(--ink-3);line-height:1.55;margin-top:12px}
+  .chk{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--rule)}
+  .chk:last-of-type{border-bottom:0}
+  .chk input{margin-top:3px;flex:0 0 auto;width:15px;height:15px;accent-color:var(--accent)}
+  .chk>span:first-of-type{flex:1 1 auto}
+  .chk b{display:block;font-size:14px;font-weight:600;color:var(--ink)}
+  .chk small{display:block;font-size:12px;color:var(--ink-3);line-height:1.5;margin-top:2px}
+  .chk .new{display:inline-block;font-style:normal;font-size:10px;font-weight:700;text-transform:uppercase;
+    letter-spacing:.04em;color:var(--review);background:var(--warn-wash);border-radius:4px;padding:1px 5px;margin-top:3px}
+  .amt-sm{flex:0 0 auto;font-variant-numeric:tabular-nums;font-size:13px;color:var(--ink-2);white-space:nowrap}
   .quiet b{color:var(--ink-2);font-weight:600}
   footer{border-top:1px solid var(--rule);padding-top:14px;font-size:12px;color:var(--ink-3)}
   @media (max-width:640px){.facts{grid-template-columns:repeat(2,1fr)}.find{grid-template-columns:1fr;gap:5px}.find .amt{text-align:left}}
@@ -367,16 +421,24 @@ function buildReportHtml({ report }) {
     <p>${esc(doc.headline)}</p>
   </div>
 
+  <!-- Ordered as the reviewer works, not as the engines run. What has to be resolved before a
+       cheque is signed, then what to confirm, then the subcontractor chain — which is where a CMAR
+       package hides its money — then tax and the agreements, then the observations that need no
+       action. Lien waivers last: they are a condition of paying safely rather than a question about
+       whether the arithmetic is right, and they were never the first thing anyone asked. -->
   ${findingSection('What to resolve', doc.resolve)}
   ${findingSection('To confirm', doc.confirm)}
-  ${findingSection('Noted, no action expected', doc.noted, 4)}
 
   ${subMatchSection(doc.subMatch)}
   ${vendorRollupSection(doc.vendorRollup)}
   ${taxSection(doc.tax, doc.taxToDeduct)}
   ${contractsSection(doc.contracts, doc.deliveryMethod)}
 
+  ${findingSection('Noted, no action expected', doc.noted)}
+
   ${waiverSection(doc.waivers)}
+
+  ${checklistSection(doc.checklist)}
 
   <section class="sec">
     <h2>Checked and clean</h2>
