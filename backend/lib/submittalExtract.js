@@ -1,5 +1,5 @@
 const { splitPdf, pageCount } = require('./pdfChunk');
-const { askForJson, FAST_MODEL } = require('./aiJson');
+const { askForJson } = require('./aiJson');
 const { REVIEW_ACTIONS } = require('./submittalLog');
 
 // A submittal package is a cover sheet followed by the actual content — often hundreds of
@@ -26,11 +26,6 @@ async function callClaude(pdfBuffer, prompt, tool, label) {
     tool,
     maxTokens: 2000,
     label,
-    // Copying fields off a cover sheet is transcription, not judgement: the number, the spec
-    // section, who sent it. Every value lands in a form the PM is looking at and can correct
-    // before anything is saved, so the cheaper model is the right tool — and it keeps the
-    // reviewing model's per-minute allowance free for the review itself.
-    model: FAST_MODEL,
   });
   return data;
 }
@@ -63,38 +58,6 @@ const SUBMITTAL_TOOL = {
         type: 'integer',
         description: 'The revision number if this is a resubmittal (Rev 1, Rev 2…), 0 for a '
           + 'first submission. Omit if not stated.',
-      },
-      // The whole point of reading the cover sheet before anything else: work out what this
-      // package has to be judged against, so the PM can hand over that one document instead of a
-      // thousand-page manual. A section number is worth more than a summary here.
-      needs: {
-        type: 'array',
-        description: 'The documents a reviewer would need in order to judge this submittal, most '
-          + 'important first. Normally the specification section it was submitted under, plus any '
-          + 'drawing sheet or standard it cites. Name each as printed — "23 05 93", "M-401", '
-          + '"AWWA C900" — because the PM will go and find it by that name.',
-        items: {
-          type: 'object',
-          properties: {
-            ref: {
-              type: 'string',
-              description: 'The section, sheet or standard number as printed. This is what the PM '
-                + 'searches for, so copy it exactly.',
-            },
-            title: { type: 'string', description: 'Its title, if the submittal gives one.' },
-            kind: {
-              type: 'string',
-              enum: ['specification', 'drawing', 'standard', 'contract', 'other'],
-              description: 'What kind of document holds it.',
-            },
-            why: {
-              type: 'string',
-              description: 'One short clause on what it would settle — "states the required '
-                + 'pressure rating", "lists what must be submitted".',
-            },
-          },
-          required: ['ref'],
-        },
       },
       specSection: {
         type: 'string',
@@ -137,16 +100,7 @@ Rules:
   number or a spec section, because a wrong one files it against the wrong work.
 - Dates must be YYYY-MM-DD. If a date is shown without a year, omit it.
 - "description" is what appears in the log, so keep it under about 80 characters and make it
-  read as a title, not a sentence.
-- "needs" is what makes this reading worth doing. Before anything can be judged, somebody has
-  to know WHICH documents to judge it against, and the package itself normally says: the
-  section it was submitted under, the sheets it references, the standards it claims to meet.
-  Name each one as printed. The PM will go and find it by that name, and a section number is
-  worth more to them than any amount of description.
-- Put the specification section it was submitted under first, where there is one. That is the
-  document that decides the outcome; everything else is supporting.
-- Do not pad the list with standards that merely appear on a manufacturer's data sheet unless
-  the submittal is claiming compliance with them.`;
+  read as a title, not a sentence.`;
 
 // Reads a contractor's submittal package so the log entry opens pre-filled. Everything it
 // returns is shown to the PM for confirmation before anything is saved — this is a first
@@ -160,9 +114,6 @@ async function extractSubmittal(pdfBuffer) {
     submittalNumber: trimmed(parsed.submittalNumber),
     revisionNumber: Number.isFinite(revision) && revision >= 0 ? Math.trunc(revision) : null,
     specSection: trimmed(parsed.specSection),
-    needs: Array.isArray(parsed.needs)
-      ? parsed.needs.filter(n => n && typeof n.ref === 'string' && n.ref.trim()).slice(0, 8)
-      : [],
     description: trimmed(parsed.description),
     vendor: trimmed(parsed.vendor),
     submittalType: trimmed(parsed.submittalType),

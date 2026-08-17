@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   PlusIcon, ArrowDownTrayIcon, TrashIcon, PaperClipIcon, SparklesIcon,
   PaperAirplaneIcon, ArrowUturnLeftIcon, InboxArrowDownIcon, ClockIcon,
@@ -31,32 +31,17 @@ const STATUS_FILTERS = [
   { key: 'closed', label: 'Closed' },
 ];
 
-const today = () => new Date().toISOString().slice(0, 10);
-
-// "23 05 93" belongs to Division 23. The division is how a project manual is filed and how a PM
-// finds anything in it, so it is worth saying out loud rather than leaving them to read it off
-// the first two digits.
-const DIVISIONS = {
-  '00': 'Procurement and Contracting', '01': 'General Requirements', '02': 'Existing Conditions',
-  '03': 'Concrete', '04': 'Masonry', '05': 'Metals', '06': 'Wood, Plastics and Composites',
-  '07': 'Thermal and Moisture Protection', '08': 'Openings', '09': 'Finishes', '10': 'Specialties',
-  '11': 'Equipment', '12': 'Furnishings', '13': 'Special Construction', '14': 'Conveying Equipment',
-  '21': 'Fire Suppression', '22': 'Plumbing', '23': 'HVAC', '25': 'Integrated Automation',
-  '26': 'Electrical', '27': 'Communications', '28': 'Electronic Safety and Security',
-  '31': 'Earthwork', '32': 'Exterior Improvements', '33': 'Utilities', '34': 'Transportation',
-  '35': 'Waterway and Marine', '40': 'Process Interconnections', '41': 'Material Processing',
-  '42': 'Process Heating and Cooling', '43': 'Process Gas and Liquid Handling',
-  '44': 'Pollution Control', '46': 'Water and Wastewater Equipment', '48': 'Electrical Power Generation',
+// The local calendar date, not the UTC one.
+//
+// toISOString() converts to UTC first, so anywhere west of Greenwich it starts returning
+// tomorrow's date partway through the evening — at 7pm in Texas it is already tomorrow in UTC.
+// A submittal logged after dinner was therefore dated a day ahead, which is visible on the log
+// and moves the response deadline it is measured against.
+const today = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-`
+    + `${String(now.getDate()).padStart(2, '0')}`;
 };
-
-// Only a specification section has a division; a drawing sheet or an ASTM standard does not.
-function divisionOf(need) {
-  if (need.kind && need.kind !== 'specification') return null;
-  const digits = String(need.ref || '').match(/^\s*(\d{2})[\s.-]?\d/);
-  if (!digits) return null;
-  const name = DIVISIONS[digits[1]];
-  return name ? `Division ${digits[1]} — ${name}` : `Division ${digits[1]}`;
-}
 
 // Dates are stored as plain YYYY-MM-DD with no zone. Splitting the string rather than
 // parsing it keeps the displayed day identical to the one that was typed in, which
@@ -114,9 +99,7 @@ function Field({ label, children, className = '' }) {
 const EMPTY = {
   submittal_number: '', spec_section: '', description: '', vendor: '',
   submittal_type: '', revision_number: 0, date_received: today(),
-  // No date_forwarded here: it comes from the sent question below, not from a form field.
-  // Kept in both, FormData carried two values under one key and the empty one won.
-  notes: '',
+  date_forwarded: '', notes: '',
 };
 
 // Reading the PDF is the intended way to fill this in, so the form asks for as little as
@@ -124,51 +107,6 @@ const EMPTY = {
 // Spec section, type, revision and dates are read off the submittal — they sit behind
 // "More details", already filled, for the times something needs correcting. Asking a PM to
 // type a CSI section by hand for every submittal is exactly the data entry this replaces.
-// The project's Shared Documents, to choose what this submittal is read against. The
-// specification is normally the one that matters; a memo cover never is.
-function SubmittalDocumentPicker({ projectId, selected, onChange }) {
-  const [docs, setDocs] = useState(undefined);
-
-  useEffect(() => {
-    if (!projectId) return;
-    payAppReviewApi.listDocuments(projectId)
-      .then(all => setDocs((all || []).filter(d => d.doc_type !== 'memo-cover')))
-      .catch(() => setDocs([]));
-  }, [projectId]);
-
-  const toggle = id => onChange(
-    selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id]);
-
-  if (docs === undefined) return <p className="text-xs text-gray-400">Loading shared documents…</p>;
-  if (docs.length === 0) {
-    return (
-      <p className="text-xs text-gray-500">
-        This project has no shared documents yet. Add the specification under Shared Documents,
-        then it can be chosen here.
-      </p>
-    );
-  }
-
-  return (
-    <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
-      {docs.map(doc => (
-        <label key={doc.id}
-          className="flex items-start gap-2.5 p-2 rounded-lg cursor-pointer transition-colors"
-          style={{ background: selected.includes(doc.id) ? '#eff6ff' : '#fff' }}>
-          <input type="checkbox" className="mt-0.5" checked={selected.includes(doc.id)}
-            onChange={() => toggle(doc.id)} />
-          <span className="min-w-0">
-            <span className="block text-[12px] font-semibold text-gray-800 truncate">
-              {doc.label || doc.file_name}
-            </span>
-            <span className="block text-[10px] text-gray-400">{doc.doc_type} · {doc.file_name}</span>
-          </span>
-        </label>
-      ))}
-    </div>
-  );
-}
-
 function NewSubmittalForm({ onSaved, onCancel }) {
   const { projectId } = useProject();
   const [file, setFile] = useState(null);
@@ -178,71 +116,10 @@ function NewSubmittalForm({ onSaved, onCancel }) {
   const [showDetails, setShowDetails] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-
-  // Whether the PM has already forwarded this to the A/E. Asked outright rather than left as a
-  // bare date field, because a blank date is ambiguous — it could mean "not sent" or "sent, but I
-  // didn't fill this in", and the response clock depends on which.
+  // 'no' until said otherwise: most submittals are logged as they arrive, before being sent on.
   const [sent, setSent] = useState('no');
-  const [sentDate, setSentDate] = useState(today());
-
-  // What the submittal itself cites, and which project documents to read it against.
-  const [needs, setNeeds] = useState([]);
-  const [documentIds, setDocumentIds] = useState([]);
-  // The document the PM went and fetched because the scan asked for it. Handed straight to the
-  // prediction — a project does not have to hold a spec section for a submittal to be checked
-  // against it.
-  const [referenceFiles, setReferenceFiles] = useState([]);
-  // The project's own documents are the secondary route, folded away: on a job with a full manual
-  // on file the list is long, and the named upload above is the answer nine times in ten.
-  const [showProjectDocs, setShowProjectDocs] = useState(false);
-
-  // The predicted review, run before the entry exists. Held here until the submittal is saved,
-  // at which point the token hands it to the new log entry.
-  const [preview, setPreview] = useState(null);
-  const [analysing, setAnalysing] = useState(false);
-  const [analysisError, setAnalysisError] = useState('');
 
   const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
-
-  // Read as soon as the package is attached, rather than behind a button. Naming the section it
-  // has to be judged against is the first thing a PM needs and the cheapest thing to produce —
-  // one call over the cover sheet — and asking them to press for it put the generic question
-  // ("upload something") in front of the specific answer ("upload 23 05 93").
-  // Guarded against a second run on the same file. React invokes an effect twice in development,
-  // and this one spends a request every time it runs — so the scan was paid for twice, and the
-  // wait doubled, on every attach while developing. The guard also covers a re-render that hands
-  // back the same File object.
-  const scanned = useRef(null);
-  useEffect(() => {
-    if (!file) { scanned.current = null; setNeeds([]); setReadNote(''); return; }
-    if (scanned.current === file) return;
-    scanned.current = file;
-    read();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file]);
-
-  // The package is the other half of the comparison, so there is nothing to predict without it.
-  const canAnalyse = !!file && (documentIds.length > 0 || referenceFiles.some(Boolean));
-
-  // fresh is set by "Run it again" only. A first run reuses any earlier reading of these exact
-  // documents — same package, same spec, same answer — which returns at once and costs nothing.
-  // Pressing "Run it again" means the PM doubted the answer, so that one is paid for.
-  const predict = async ({ fresh = false } = {}) => {
-    setAnalysing(true); setAnalysisError(''); setPreview(null);
-    try {
-      const fd = new FormData();
-      if (fresh) fd.append('fresh', '1');
-      fd.append('project_id', projectId);
-      fd.append('document_ids', JSON.stringify(documentIds));
-      ['submittal_number', 'description', 'spec_section', 'submittal_type', 'vendor', 'notes']
-        .forEach(k => fd.append(k, form[k] ?? ''));
-      fd.append('files', file);
-      for (const ref of referenceFiles) if (ref) fd.append('reference_files', ref);
-      setPreview(await submittalsApi.previewAnalysis(fd));
-    } catch (err) {
-      setAnalysisError(errorText(err, 'Could not predict the review. You can still log the submittal and try again from the entry.'));
-    } finally { setAnalysing(false); }
-  };
 
   const read = async () => {
     if (!file) return;
@@ -262,9 +139,6 @@ function NewSubmittalForm({ onSaved, onCancel }) {
         date_received: found.dateSubmitted || f.date_received,
         notes: found.notes || f.notes,
       }));
-      // What the submittal itself cites is worth showing: it is the strongest hint as to which
-      // shared documents to tick, and the PM knows their own set by these names.
-      setNeeds(found.needs || []);
       // Only the two fields that must be right are worth mentioning. Anything else the
       // cover sheet didn't show is simply left blank rather than turned into a chore.
       setReadNote(found.submittalNumber && found.description
@@ -281,12 +155,8 @@ function NewSubmittalForm({ onSaved, onCancel }) {
     try {
       const fd = new FormData();
       fd.append('project_id', projectId);
-      Object.entries(form)
-        .filter(([k]) => k !== 'date_forwarded')
-        .forEach(([k, v]) => fd.append(k, v ?? ''));
-      fd.append('date_forwarded', sent === 'yes' ? sentDate : '');
+      Object.entries(form).forEach(([k, v]) => fd.append(k, v ?? ''));
       if (file) fd.append('file', file);
-      if (preview?.token) fd.append('analysis_token', preview.token);
       onSaved(await submittalsApi.create(fd));
     } catch (err) {
       setError(errorText(err, 'Could not save this submittal.'));
@@ -297,11 +167,12 @@ function NewSubmittalForm({ onSaved, onCancel }) {
     <form onSubmit={save} className="space-y-5">
       <div className="p-4 rounded-xl" style={{ background: '#fafbfc', border: '1px solid #eef1f4' }}>
         <FileDrop file={file} onChange={f => { setFile(f); setReadNote(''); }} label="The submittal the contractor sent (PDF)" />
-        {reading && (
-          <p className="text-[11px] mt-2" style={{ color: '#1d4ed8' }}>
-            Reading the cover sheet — filling the form in and working out which specification this
-            has to be checked against.
-          </p>
+        {file && (
+          <button type="button" className="btn-secondary w-full justify-center py-1.5 text-sm mt-2"
+            onClick={read} disabled={reading}>
+            <SparklesIcon className="w-4 h-4" />
+            {reading ? 'Reading the cover sheet…' : 'Read it and fill in the form'}
+          </button>
         )}
         {readNote && <p className="text-[11px] mt-2" style={{ color: '#15803d' }}>{readNote}</p>}
         <p className="text-[11px] text-gray-400 mt-2">
@@ -322,193 +193,42 @@ function NewSubmittalForm({ onSaved, onCancel }) {
           <input className="input" required value={form.description} onChange={set('description')}
             placeholder="VAV boxes — product data" />
         </Field>
-      </div>
-
-      {/* Asked here rather than left to a date field, because the answer decides whether the
-          response clock has started. "Not yet" leaves the date open in the log. */}
-      <div className="p-4 rounded-xl" style={{ background: '#fafbfc', border: '1px solid #eef1f4' }}>
-        <label className="label">Has this submittal been sent to the A/E?</label>
-        <div className="flex gap-2">
-          {[['no', 'Not yet'], ['yes', 'Yes — sent']].map(([value, label]) => (
-            <button key={value} type="button" onClick={() => setSent(value)}
-              className="px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors"
-              style={sent === value
-                ? { background: '#2563eb', color: '#fff' }
-                : { background: '#fff', color: '#4b5563', border: '1px solid #e8edf2' }}>
-              {label}
-            </button>
-          ))}
-        </div>
-        {sent === 'yes' ? (
-          <div className="mt-3">
-            <Field label="Date sent">
-              <input className="input" type="date" value={sentDate} max={today()}
-                onChange={e => setSentDate(e.target.value)} />
-            </Field>
-            <p className="text-[11px] text-gray-400 mt-1">
-              The response due date is worked out from this, using the project's review window.
-            </p>
-          </div>
-        ) : (
-          <p className="text-[11px] text-gray-400 mt-2">
-            It will sit in the log as "Not yet sent". Fill the sent date in from the log's calendar
-            on the day you forward it, and the response clock starts then.
-          </p>
-        )}
-      </div>
-
-      {/* The prediction, before it goes out — which is the only time it is worth having. The
-          same step as the RFI log's: choose what it is read against, then read it. */}
-      <div className="p-4 rounded-xl space-y-4" style={{ background: '#f5f9ff', border: '1px solid #dbeafe' }}>
-        <div>
-          <p className="text-[13px] font-bold text-gray-900">What will the A/E say?</p>
-          <p className="text-[11px] text-gray-500 mt-0.5">
-            Optional. Reads the package against the specification and predicts the stamp, so a
-            missing certificate costs an email now rather than a resubmittal in three weeks.
-          </p>
-        </div>
-
-        {!file && (
-          <p className="text-[12px] text-gray-500">
-            Attach the contractor's package above. Coaster reads its cover sheet and names the
-            specification section it has to be checked against — so you fetch one section instead
-            of searching the manual.
-          </p>
-        )}
-
-        {file && reading && (
-          <p className="text-[12px]" style={{ color: '#1d4ed8' }}>
-            Reading the submittal to work out what it needs…
-          </p>
-        )}
-
-        {/* Nothing generic is asked for until there is something specific to ask FOR. A project
-            manual runs to dozens of divisions, and "upload what it should be checked against" put
-            the burden of identifying the right one back on the PM — which is the job this is
-            supposed to do for them. So the request is made per document, by name. */}
-        {file && !reading && needs.length === 0 && (
-          <div className="p-3 rounded-xl" style={{ background: '#fff7ed', border: '1px solid #fed7aa' }}>
-            <p className="text-[12px]" style={{ color: '#9a3412' }}>
-              The cover sheet did not name a specification section, so Coaster cannot say which
-              document this needs. Put the section number in "More details" below and scan again,
-              or pick the document yourself further down.
-            </p>
-            <button type="button" className="text-[11px] font-semibold mt-1.5"
-              style={{ color: '#9a3412' }} onClick={read} disabled={reading}>
-              Scan it again
-            </button>
-          </div>
-        )}
-
-        {needs.length > 0 && (
-          <>
-            <div>
-              <p className="text-[12px] font-bold text-gray-900">
-                Go and find {needs.length === 1 ? 'this document' : 'these documents'}, then upload
-                {needs.length === 1 ? ' it' : ' them'} here:
-              </p>
-              <p className="text-[11px] text-gray-500 mt-0.5">
-                Read from the submittal itself. The first one decides the outcome; the rest are
-                supporting. Upload only what you have — the prediction runs on whatever it is given
-                and says what it could not check.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              {needs.map((need, i) => {
-                const division = divisionOf(need);
-                const held = referenceFiles[i];
-                return (
-                  <div key={i} className="p-3 rounded-xl"
-                    style={{ background: '#fff', border: `1px solid ${held ? '#a7f3d0' : '#bfdbfe'}` }}>
-                    <div className="flex items-baseline gap-2 flex-wrap">
-                      <span className="text-[13px] font-bold" style={{ color: '#1d4ed8' }}>{need.ref}</span>
-                      {need.title && <span className="text-[12px] text-gray-700">{need.title}</span>}
-                      {i === 0 && (
-                        <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
-                          style={{ background: '#dbeafe', color: '#1d4ed8' }}>
-                          decides the outcome
-                        </span>
-                      )}
-                    </div>
-                    {division && (
-                      <p className="text-[11px] font-semibold text-gray-600 mt-0.5">{division}</p>
-                    )}
-                    {need.why && <p className="text-[11px] text-gray-400 mt-0.5">{need.why}</p>}
-
-                    <div className="mt-2">
-                      <input type="file" accept=".pdf"
-                        className="text-[11px] text-gray-500 w-full file:mr-2 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:text-[11px] file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 file:cursor-pointer"
-                        onChange={(e) => {
-                          const next = [...referenceFiles];
-                          next[i] = e.target.files?.[0] || undefined;
-                          setReferenceFiles(next);
-                        }} />
-                      {held && (
-                        <p className="text-[11px] mt-1" style={{ color: '#047857' }}>
-                          {held.name} — read for this prediction only, not filed in the project.
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div>
-              <button type="button" className="text-[11px] font-semibold text-gray-500 hover:text-gray-700"
-                onClick={() => setShowProjectDocs(v => !v)}>
-                {showProjectDocs ? 'Hide' : 'Already in the project?'}
-                <span className="font-normal text-gray-400 ml-1.5">tick it instead of uploading</span>
+        {/* Asked as a question rather than offered as a blank date box. A blank box does not say
+            whether the submittal is sitting on the PM's desk or sitting with the A/E, and those
+            are different states: one has a clock running against it and the other does not. */}
+        <Field label="Has it gone to the A/E yet?" className="col-span-2">
+          <div className="flex gap-2">
+            {[['yes', 'Yes'], ['no', 'Not yet']].map(([value, label]) => (
+              <button key={value} type="button"
+                className="px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors"
+                style={sent === value
+                  ? { background: '#1d4ed8', color: '#fff' }
+                  : { background: '#fff', color: '#6b7280', border: '1px solid #e8edf2' }}
+                onClick={() => {
+                  setSent(value);
+                  // Choosing "Yes" offers today, which is right almost every time and is one
+                  // less thing to type; choosing "Not yet" clears it, because a date left
+                  // behind would start the response clock on a submittal nobody has sent.
+                  setForm(f => ({ ...f, date_forwarded: value === 'yes' ? (f.date_forwarded || today()) : '' }));
+                }}>
+                {label}
               </button>
-              {showProjectDocs && (
-                <div className="mt-2">
-                  <SubmittalDocumentPicker projectId={projectId} selected={documentIds} onChange={setDocumentIds} />
-                </div>
-              )}
-            </div>
-          </>
-        )}
-
-        {(needs.length > 0 || documentIds.length > 0) && (
-          <div className="pt-1" style={{ borderTop: '1px solid #dbeafe' }}>
-            {!preview && (
-              <div className="pt-3">
-                <button type="button" className="btn-secondary w-full justify-center py-1.5 text-sm"
-                  onClick={predict} disabled={analysing || !canAnalyse}>
-                  <SparklesIcon className="w-4 h-4" />
-                  {analysing ? 'Reading it against the specification…' : 'Predict the review'}
-                </button>
-                <p className="text-[11px] text-gray-400 mt-1.5">
-                  {canAnalyse
-                    ? 'Seconds on one section; a minute or two on a full project manual.'
-                    : 'Upload at least one of the documents above, or tick one the project holds.'}
-                </p>
-              </div>
-            )}
-
-            {analysing && (
-              <p className="text-[11px] mt-2" style={{ color: '#1d4ed8' }}>
-                Reading the package against what you gave it. Leave this open.
-              </p>
-            )}
-
-            {analysisError && <p className="text-xs mt-2" style={{ color: '#b91c1c' }}>{analysisError}</p>}
-
-            {preview && (
-              <div className="pt-3">
-                <PredictionBody analysis={preview.analysis} />
-                <div className="flex items-center gap-3 mt-3">
-                  <button type="button" className="text-[12px] font-semibold text-gray-500 hover:text-gray-700"
-                    onClick={() => predict({ fresh: true })} disabled={analysing}>Run it again</button>
-                  <span className="text-[11px] text-gray-400">
-                    Saved with the submittal when you add it to the log.
-                  </span>
-                </div>
-              </div>
-            )}
+            ))}
           </div>
-        )}
+          {sent === 'yes' ? (
+            <div className="mt-2">
+              <input className="input" type="date" value={form.date_forwarded}
+                onChange={set('date_forwarded')} />
+              <p className="text-[11px] text-gray-400 mt-1">
+                The response clock starts on this date, using the project's review window.
+              </p>
+            </div>
+          ) : (
+            <p className="text-[11px] text-gray-400 mt-1">
+              Nothing is overdue until it goes out. Record the date from the log when you send it.
+            </p>
+          )}
+        </Field>
       </div>
 
       <div>
@@ -754,20 +474,190 @@ const ACTION_STYLE = {
   'For Record Only': { bg: '#f1f5f9', color: '#475569' },
 };
 
-// What a predicted review looks like on screen. One component, used both while the submittal
-// is being entered and on the entry afterwards, so the PM reads the same thing in both places.
-function PredictionBody({ analysis }) {
-  if (!analysis) return null;
-  return (
-    <div className="space-y-3">
-          <p className="text-[14px] font-semibold text-gray-900 leading-snug">{analysis.headline}</p>
+function PredictedReviewPanel({ record, onRan }) {
+  const { projectId } = useProject();
+  const [docs, setDocs] = useState([]);
+  const [chosen, setChosen] = useState(null);      // null until the user or the record decides
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
+  const [specFiles, setSpecFiles] = useState([]);
 
-          {analysis.deviations?.length > 0 && (
+  const stored = record.analysis;
+  const a = stored?.analysis;
+
+  // The project's Shared Documents — the specification is normally among them, and it is what a
+  // submittal is actually judged against.
+  useEffect(() => {
+    if (!projectId) return;
+    payAppReviewApi.listDocuments(projectId)
+      .then(all => setDocs(all.filter(d => d.doc_type !== 'memo-cover')))
+      .catch(() => setDocs([]));
+  }, [projectId]);
+
+  const selected = chosen ?? (record.documents || []).map(d => d.id);
+  const toggle = id => setChosen(
+    selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id]);
+
+  // The project's own specifications, which is what the review uses when nothing is ticked.
+  const projectSpecs = docs.filter(d => d.doc_type === 'specifications');
+
+  const run = async () => {
+    setRunning(true); setError('');
+    try {
+      const fd = new FormData();
+      // Sent only when the PM has actually chosen something. An empty list means "use the
+      // project's specification", which the review resolves for itself — sending an empty
+      // document_ids would instead be read as "the PM deselected everything".
+      if (chosen && chosen.length) fd.append('document_ids', chosen.join(','));
+      for (const f of specFiles) fd.append('spec_files', f);
+      const res = await submittalsApi.analyze(record.id, fd);
+      onRan(res.submittal);
+      setOpen(false);
+    } catch (err) {
+      setError(errorText(err, 'Could not predict the review.'));
+    } finally { setRunning(false); }
+  };
+
+  // What the review will read, said plainly before it is run, so the PM is never guessing.
+  const willRead = specFiles.length
+    ? `${specFiles.length} specification${specFiles.length === 1 ? '' : 's'} you attached below`
+    : chosen && chosen.length
+      ? `${chosen.length} document${chosen.length === 1 ? '' : 's'} you ticked below`
+      : projectSpecs.length
+        ? projectSpecs.map(d => d.label || d.file_name).join(', ')
+        : null;
+
+  const actionStyle = ACTION_STYLE[a?.likelyAction] || ACTION_STYLE['For Record Only'];
+
+  return (
+    <div className="p-4 rounded-xl" style={{ background: '#fff', border: '1px solid #eef1f4' }}>
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <DocumentMagnifyingGlassIcon className="w-4 h-4 flex-shrink-0" style={{ color: '#6366f1' }} />
+        <p className="text-[13px] font-bold text-gray-900">What the A/E is likely to say</p>
+        {a && (
+          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold ml-auto flex-shrink-0"
+            style={{ background: actionStyle.bg, color: actionStyle.color }}>
+            {a.likelyAction}
+          </span>
+        )}
+      </div>
+
+      {/* One button. The submittal names the section it was made under, the project holds the
+          specification, and the section is found inside it by number — so there is nothing for
+          the PM to choose, and asking them to choose was asking a question the project already
+          answers. Overriding it is still one click away, for the manual filed under the wrong
+          type or the section that has not been filed at all. */}
+      {!a && !open && (
+        <div className="space-y-2">
+          <p className="text-[12px] text-gray-600">
+            Read this submittal against the specification before it goes out — the deviations and
+            missing items it finds are the ones that would otherwise come back as a resubmittal.
+          </p>
+          {willRead ? (
+            <p className="text-[11px] text-gray-500">
+              Will look for {record.spec_section
+                ? <b>{record.spec_section}</b>
+                : 'the section this submittal cites'} in {willRead}.
+            </p>
+          ) : (
+            <p className="text-[12px]" style={{ color: '#b45309' }}>
+              No specification is filed on this project yet. Add it under Shared Documents, or
+              attach the section here.
+            </p>
+          )}
+          <div className="flex gap-2 flex-wrap items-center">
+            <button className="btn-primary" onClick={run} disabled={running}>
+              <SparklesIcon className="w-4 h-4" />
+              {running ? 'Finding the section…' : 'Predict the review'}
+            </button>
+            <button type="button" className="text-[11px] font-semibold text-gray-500 hover:text-gray-700"
+              onClick={() => setOpen(true)}>
+              Read it against something else
+            </button>
+          </div>
+        </div>
+      )}
+
+      {open && (
+        <div className="space-y-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+            Read it against
+          </p>
+          {docs.length === 0 && (
+            <p className="text-[12px] text-gray-500">
+              This project has no shared documents yet — attach the specification section below.
+            </p>
+          )}
+          {docs.map(d => (
+            <label key={d.id} className="flex items-start gap-2 cursor-pointer">
+              <input type="checkbox" className="mt-0.5" checked={selected.includes(d.id)}
+                onChange={() => toggle(d.id)} />
+              <span className="text-[12px] text-gray-700">
+                {d.label || d.file_name}
+                <span className="text-gray-400"> · {d.doc_type}</span>
+              </span>
+            </label>
+          ))}
+
+          <div className="pt-1">
+            <label className="label">…or attach the specification for this review only</label>
+            <input type="file" multiple accept=".pdf"
+              className="text-xs text-gray-500 w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 file:cursor-pointer"
+              onChange={e => setSpecFiles(Array.from(e.target.files || []))} />
+            <p className="text-[11px] text-gray-400 mt-1">
+              {specFiles.length
+                ? `${specFiles.length} attached — read for this prediction only, not filed in the project.`
+                : 'Used for this prediction only; it is not added to Shared Documents.'}
+            </p>
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <button className="btn-primary" onClick={run} disabled={running}>
+              <SparklesIcon className="w-4 h-4" />
+              {running ? 'Finding the section…' : a ? 'Run it again' : 'Predict the review'}
+            </button>
+            <button className="btn-secondary" onClick={() => setOpen(false)} disabled={running}>Cancel</button>
+          </div>
+          <p className="text-[11px] text-gray-400">
+            The section is found by its number in the manual's own text, so a long book costs no
+            more to read than the one section does.
+          </p>
+        </div>
+      )}
+
+      {error && <p className="text-xs mt-2" style={{ color: '#b91c1c' }}>{error}</p>}
+
+      {a && !open && (
+        <div className="space-y-3">
+          <p className="text-[14px] font-semibold text-gray-900 leading-snug">{a.headline}</p>
+
+          {/* Which section it actually landed on. A prediction is only worth reading if it was
+              measured against the right requirements, and that is a fact about the run, not a
+              judgement — so it is stated rather than left in a sources list further down. */}
+          {(stored?.sources || []).some(s => s.sections?.length || s.note) && (
+            <div className="text-[11px] text-gray-500 space-y-0.5">
+              {(stored.sources || []).map((s, i) => (
+                (s.sections?.length || s.note) ? (
+                  <p key={i}>
+                    {s.sections?.length ? (
+                      <>Read against <b className="text-gray-700">
+                        {s.sections.map(x => [x.sectionNumber, x.sectionTitle].filter(Boolean).join(' — ')).join('; ')}
+                      </b> in {s.label}.</>
+                    ) : null}
+                    {s.note ? <span className="text-gray-400"> {s.note}</span> : null}
+                  </p>
+                ) : null
+              ))}
+            </div>
+          )}
+
+          {a.deviations?.length > 0 && (
             <div className="space-y-2">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
                 Departs from the specification
               </p>
-              {analysis.deviations.map((d, i) => {
+              {a.deviations.map((d, i) => {
                 const st = SEVERITY_STYLE[d.severity] || SEVERITY_STYLE.minor;
                 return (
                   <div key={i} className="p-2.5 rounded-lg" style={{ background: st.bg, border: `1px solid ${st.border}` }}>
@@ -797,151 +687,43 @@ function PredictionBody({ analysis }) {
             </div>
           )}
 
-          {analysis.missingSubmittalItems?.length > 0 && (
+          {a.missingSubmittalItems?.length > 0 && (
             <div className="p-2.5 rounded-lg" style={{ background: '#fff7ed', border: '1px solid #fed7aa' }}>
               <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#c2410c' }}>
                 Required by the spec, not in this package
               </p>
               <ul className="list-disc pl-4 space-y-0.5">
-                {analysis.missingSubmittalItems.map((m, i) => <li key={i} className="text-[12px] text-gray-700">{m}</li>)}
+                {a.missingSubmittalItems.map((m, i) => <li key={i} className="text-[12px] text-gray-700">{m}</li>)}
               </ul>
             </div>
           )}
 
-          {analysis.fixBeforeSending?.length > 0 && (
+          {a.fixBeforeSending?.length > 0 && (
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Fix before sending</p>
               <ul className="list-disc pl-4 space-y-0.5">
-                {analysis.fixBeforeSending.map((f, i) => <li key={i} className="text-[12px] text-gray-700">{f}</li>)}
+                {a.fixBeforeSending.map((f, i) => <li key={i} className="text-[12px] text-gray-700">{f}</li>)}
               </ul>
             </div>
           )}
 
-          {analysis.coordinationNotes && (
-            <p className="text-[12px] text-gray-600">{analysis.coordinationNotes}</p>
+          {a.coordinationNotes && (
+            <p className="text-[12px] text-gray-600">{a.coordinationNotes}</p>
           )}
 
           <div className="flex items-center gap-3 flex-wrap pt-1" style={{ borderTop: '1px solid #eef1f4' }}>
             <span className="text-[11px] text-gray-400 pt-2">
-              Confidence: {analysis.confidence}{analysis.confidenceReason ? ` — ${analysis.confidenceReason}` : ''}
+              Confidence: {a.confidence}{a.confidenceReason ? ` — ${a.confidenceReason}` : ''}
             </span>
             <button className="text-[11px] text-gray-500 hover:text-gray-900 pt-2 ml-auto" onClick={() => setOpen(true)}>
               Run again
             </button>
           </div>
-          {analysis.missingInformation && (
-            <p className="text-[11px] text-gray-500">Not read: {analysis.missingInformation}</p>
+          {a.missingInformation && (
+            <p className="text-[11px] text-gray-500">Not read: {a.missingInformation}</p>
           )}
-    </div>
-  );
-}
-
-function PredictedReviewPanel({ record, onRan }) {
-  const { projectId } = useProject();
-  const [docs, setDocs] = useState([]);
-  const [chosen, setChosen] = useState(null);      // null until the user or the record decides
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState('');
-  const [open, setOpen] = useState(false);
-
-  const stored = record.analysis;
-  const a = stored?.analysis;
-
-  // The project's Shared Documents — the specification is normally among them, and it is what a
-  // submittal is actually judged against.
-  useEffect(() => {
-    if (!projectId) return;
-    payAppReviewApi.listDocuments(projectId)
-      .then(all => setDocs(all.filter(d => d.doc_type !== 'memo-cover')))
-      .catch(() => setDocs([]));
-  }, [projectId]);
-
-  const selected = chosen ?? (record.documents || []).map(d => d.id);
-  const toggle = id => setChosen(
-    selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id]);
-
-  const run = async () => {
-    setRunning(true); setError('');
-    try {
-      const fd = new FormData();
-      // Asking again for a prediction that already exists means the PM wants it re-read, not
-      // handed back. A first run reuses whatever the same spec produced before, free.
-      if (a) fd.append('fresh', '1');
-      fd.append('document_ids', selected.join(','));
-      const res = await submittalsApi.analyze(record.id, fd);
-      onRan(res.submittal);
-      setOpen(false);
-    } catch (err) {
-      setError(errorText(err, 'Could not predict the review.'));
-    } finally { setRunning(false); }
-  };
-
-  const actionStyle = ACTION_STYLE[a?.likelyAction] || ACTION_STYLE['For Record Only'];
-
-  return (
-    <div className="p-4 rounded-xl" style={{ background: '#fff', border: '1px solid #eef1f4' }}>
-      <div className="flex items-center gap-2 mb-2 flex-wrap">
-        <DocumentMagnifyingGlassIcon className="w-4 h-4 flex-shrink-0" style={{ color: '#6366f1' }} />
-        <p className="text-[13px] font-bold text-gray-900">What the A/E is likely to say</p>
-        {a && (
-          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold ml-auto flex-shrink-0"
-            style={{ background: actionStyle.bg, color: actionStyle.color }}>
-            {a.likelyAction}
-          </span>
-        )}
-      </div>
-
-      {!a && !open && (
-        <div className="space-y-2">
-          <p className="text-[12px] text-gray-600">
-            Read this submittal against the specification before it goes out — the deviations and
-            missing items it finds are the ones that would otherwise come back as a resubmittal.
-          </p>
-          <button className="btn-primary" onClick={() => setOpen(true)}>
-            <SparklesIcon className="w-4 h-4" /> Check it against the spec
-          </button>
         </div>
       )}
-
-      {(open || (!a && docs.length === 0)) && (
-        <div className="space-y-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-            Read it against
-          </p>
-          {docs.length === 0 && (
-            <p className="text-[12px]" style={{ color: '#b45309' }}>
-              This project has no shared documents yet. Upload the specification on the project's
-              Shared Documents page, then come back.
-            </p>
-          )}
-          {docs.map(d => (
-            <label key={d.id} className="flex items-start gap-2 cursor-pointer">
-              <input type="checkbox" className="mt-0.5" checked={selected.includes(d.id)}
-                onChange={() => toggle(d.id)} />
-              <span className="text-[12px] text-gray-700">
-                {d.label || d.file_name}
-                <span className="text-gray-400"> · {d.doc_type}</span>
-              </span>
-            </label>
-          ))}
-          <div className="flex gap-2 pt-1">
-            <button className="btn-primary" onClick={run} disabled={running || !selected.length}>
-              <SparklesIcon className="w-4 h-4" />
-              {running ? 'Reading the spec…' : a ? 'Run it again' : 'Predict the review'}
-            </button>
-            <button className="btn-secondary" onClick={() => setOpen(false)} disabled={running}>Cancel</button>
-          </div>
-          <p className="text-[11px] text-gray-400">
-            A project manual is searched for the section first, then only that section is read —
-            so this takes a minute or two on a long book.
-          </p>
-        </div>
-      )}
-
-      {error && <p className="text-xs mt-2" style={{ color: '#b91c1c' }}>{error}</p>}
-
-      {a && !open && <PredictionBody analysis={a} />}
-
     </div>
   );
 }
@@ -1187,7 +969,6 @@ function RevisionCard({ submittal, revision, isCurrent, onChanged }) {
       {revision.reviewed_by && (
         <p className="text-[11px] text-gray-500 mt-1">Reviewed by {revision.reviewed_by}</p>
       )}
-
       {/* Once the comparison exists it has already said what the A/E said, point by point and
           beside what the specification required. Leaving their raw comments open above it means
           reading the same review twice in two different shapes, which is the confusion this

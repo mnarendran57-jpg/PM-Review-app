@@ -284,14 +284,10 @@ function NewRfiForm({ onSaved, onCancel }) {
 
   const canAnalyse = !!form.discipline && (documentIds.length > 0 || !!file || extras.length > 0);
 
-  // fresh is set by "Run it again" only. A first run reuses any earlier reading of these exact
-  // drawings — same question, same sheets, same answer — which returns at once and costs
-  // nothing. Pressing "Run it again" means the PM doubted the answer, so that one is paid for.
-  const suggest = async ({ fresh = false } = {}) => {
+  const suggest = async () => {
     setAnalysing(true); setAnalysisError(''); setPreview(null);
     try {
       const fd = new FormData();
-      if (fresh) fd.append('fresh', '1');
       fd.append('project_id', projectId);
       fd.append('discipline', form.discipline);
       fd.append('rfi_number', form.rfi_number);
@@ -457,7 +453,7 @@ function NewRfiForm({ onSaved, onCancel }) {
               <AnswerBody analysis={preview.analysis} sources={preview.sources} />
               <div className="flex items-center gap-3 mt-3">
                 <button type="button" className="text-[12px] font-semibold text-gray-500 hover:text-gray-700"
-                  onClick={() => suggest({ fresh: true })} disabled={analysing}>Run it again</button>
+                  onClick={suggest} disabled={analysing}>Run it again</button>
                 <span className="text-[11px] text-gray-400">
                   Saved with the RFI when you add it to the log.
                 </span>
@@ -550,9 +546,6 @@ function AnalysisPanel({ rfi, onRan }) {
     setRunning(true); setError('');
     try {
       const fd = new FormData();
-      // Asking again for an answer that already exists means the PM wants it re-read, not
-      // handed back. A first run reuses whatever the same drawings produced before, free.
-      if (stored) fd.append('fresh', '1');
       fd.append('discipline', discipline);
       fd.append('document_ids', JSON.stringify(documentIds));
       await rfisApi.analyze(rfi.id, fd);

@@ -289,11 +289,6 @@ export const submittalsApi = {
   list: params => api.get('/submittals', { params }).then(r => r.data),
   get: id => api.get(`/submittals/${id}`).then(r => r.data),
   // Reads an uploaded submittal so the entry form opens pre-filled. Saves nothing.
-  // Predicts the A/E's review before the submittal is logged. LONG_AI_TIMEOUT because a project
-  // manual is searched before it is read, and the contractor's package is catalogued alongside.
-  previewAnalysis: formData => api.post('/submittals/preview-analysis', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }, timeout: LONG_AI_TIMEOUT,
-  }).then(r => r.data),
   extract: formData => api.post('/submittals/extract', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),

@@ -1,11 +1,10 @@
 const express = require('express');
-const crypto = require('crypto');
 const router = express.Router();
 const multer = require('multer');
 const db = require('../database');
 const access = require('../lib/access');
 const storage = require('../lib/storage');
-const { analyzeSubmittal, renderMarkdown: renderSubmittalMarkdown } = require('../lib/submittalAnalysis');
+const { analyzeSubmittal } = require('../lib/submittalAnalysis');
 const { compareToReview } = require('../lib/submittalComparison');
 const { requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../lib/plans');
@@ -20,19 +19,18 @@ const {
 router.use(requireOrg);
 router.use(requireFeature('submittal-log'));
 
-// One file per request on every route that takes one — a submittal, a response, an attachment.
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 200 * 1024 * 1024, files: 1 },
 });
 
-// The prediction is the exception: the contractor's package AND the specification it is judged
-// against arrive together, and the section may be handed over as several PDFs. A per-field cap
-// alone is not enough — multer counts files across the whole request, so the instance needs its
-// own ceiling or the second file is refused with "Too many files".
-const uploadForPrediction = multer({
+// The review takes the contractor's package and, optionally, the specification the PM has to
+// hand. That is two fields at once, and multer counts `files` across the WHOLE request rather
+// than per field — so the single-file limit above would reject the second upload with "Too many
+// files" no matter which field it arrived on.
+const uploadForAnalysis = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 200 * 1024 * 1024, files: 10 },
+  limits: { fileSize: 200 * 1024 * 1024, files: 8 },
 });
 
 // How long the A/E gets before this counts as overdue.
@@ -133,52 +131,15 @@ function arrivalDates(body) {
   return { received, forwarded };
 }
 
-// The prediction runs while the submittal is being entered, before there is a row to hang it
-// on. It waits here under a one-use token and is written against the entry the moment it is
-// created, so what the PM actually read is what ends up on the record — rather than a second,
-// differently-worded run of the same question.
-//
-// Memory only, and the same shape as the RFI log's, deliberately: the token is claimed seconds
-// after it is issued, and a restart in that window costs nothing but the prediction, which can
-// be re-run from the entry itself.
-const previews = new Map();
-const PREVIEW_TTL_MS = 60 * 60 * 1000;
-
-function stashPreview(req, payload) {
-  const now = Date.now();
-  for (const [key, held] of previews) if (held.expires <= now) previews.delete(key);
-  const token = crypto.randomBytes(18).toString('hex');
-  previews.set(token, { ...payload, userId: req.user.id, expires: now + PREVIEW_TTL_MS });
-  return token;
-}
-
-function claimPreview(req, token, projectId) {
-  const key = nullable(token);
-  if (!key) return null;
-  const held = previews.get(key);
-  if (!held) return null;
-  previews.delete(key);
-  const mine = held.userId === req.user.id && held.projectId === projectId;
-  return mine && held.expires > Date.now() ? held : null;
-}
-
 // --- The predicted review, and how it compared -----------------------------------------
 //
 // Mirrors the RFI log deliberately, down to the shape of the stored rows. The PM's question is
 // the same on both: "is this what the documents said, and if not, what does that change?" —
 // and answering it the same way in both places means one thing to learn rather than two.
 
-// Ids arrive as a JSON array from the form and as a comma-separated string from the panel on a
-// saved entry. Splitting a JSON array on commas yields "[3" and "7]", both NaN, both dropped —
-// so every ticked document was silently discarded and the prediction refused to run for want of
-// something to read. Both shapes are accepted, the way the RFI log already accepts them.
 const parseIdList = (raw) => {
   if (raw == null) return [];
-  let list = raw;
-  if (typeof list === 'string') {
-    try { list = JSON.parse(list); } catch { list = list.split(','); }
-  }
-  if (!Array.isArray(list)) return [];
+  const list = Array.isArray(raw) ? raw : String(raw).split(',');
   return list.map(v => Number(String(v).trim())).filter(n => Number.isInteger(n) && n > 0);
 };
 
@@ -217,6 +178,25 @@ async function loadDocumentBuffers(projectId, ids) {
     }
   }
   return out;
+}
+
+// The project's specifications, for a submittal nobody has chosen documents for.
+//
+// Choosing them by hand was busywork with one right answer: a submittal is judged against the
+// specification, the specification is filed under Shared Documents, and the PM knows which one
+// it is because they uploaded it. Asking them to tick it every time — and blocking the review
+// until they did — spent the PM's attention on a question the project already answers.
+//
+// Only genuine specifications are taken. A drawing set or a contract would be read as though it
+// were the governing text, and a review measured against the wrong document is worse than one
+// that says it could not find the right one.
+async function specificationsFor(projectId) {
+  const rows = db.prepare(`
+    SELECT id FROM project_contracts
+    WHERE project_id=? AND doc_type='specifications'
+    ORDER BY created_at ASC
+  `).all(projectId).map(r => r.id);
+  return loadDocumentBuffers(projectId, rows);
 }
 
 const latestAnalysis = (submittalId) => {
@@ -401,70 +381,6 @@ router.post('/extract', upload.single('file'), async (req, res) => {
   }
 });
 
-// Predicts the A/E's review while the submittal is still being entered, before it is logged.
-//
-// The same shape as the RFI log's preview, and for the same reason: a PM decides what to do with
-// a package by reading it against the specification, and that reading is most useful before the
-// package goes out. Nothing is written here — the result is held under a token and saved by
-// POST "/" below, so the prediction on the record is the one the PM actually saw.
-router.post('/preview-analysis', uploadForPrediction.fields([
-  { name: 'files', maxCount: 4 },
-  { name: 'reference_files', maxCount: 6 },
-]), async (req, res) => {
-  try {
-    const project = projectInScope(req, req.body.project_id);
-    if (!project) return res.status(404).json({ error: 'Project not found' });
-
-    // Two ways to supply what it is judged against, because the scan has just told the PM
-    // exactly which section it needs: tick it if the project already holds it, or hand that one
-    // document over here. Sending a spec section beats sending the manual it came from.
-    const stored = await loadDocumentBuffers(project.id, parseIdList(req.body.document_ids));
-    const handedOver = (req.files?.reference_files || [])
-      .map(f => ({ label: f.originalname, doc_type: 'specifications', buffer: f.buffer }));
-    const documents = [...stored, ...handedOver];
-    const submittalFiles = (req.files?.files || []).map(f => ({ label: f.originalname, buffer: f.buffer }));
-
-    if (documents.length === 0) {
-      return res.status(400).json({
-        error: 'Give it something to check against — tick a document the project already holds, '
-          + 'or upload the specification section the submittal was made under.',
-      });
-    }
-    if (submittalFiles.length === 0) {
-      return res.status(400).json({
-        error: 'Attach the contractor\'s package. Without it there is nothing to check against '
-          + 'the specification.',
-      });
-    }
-
-    const submittal = {
-      submittal_number: nullable(req.body.submittal_number) || '(not yet numbered)',
-      description: nullable(req.body.description) || '(no description given)',
-      spec_section: nullable(req.body.spec_section),
-      submittal_type: nullable(req.body.submittal_type),
-      vendor: nullable(req.body.vendor),
-      notes: nullable(req.body.notes),
-    };
-
-    // "Run it again" sends fresh=1. Anything else reuses the stored reading of these exact
-    // documents, which costs nothing and comes back instantly.
-    const { analysis, sources } = await analyzeSubmittal({
-      submittal, documents, submittalFiles, fresh: req.body.fresh === '1',
-    });
-    const token = stashPreview(req, {
-      projectId: project.id,
-      specSection: submittal.spec_section,
-      documentIds: parseIdList(req.body.document_ids),
-      analysis,
-      sources,
-    });
-    res.json({ token, analysis, sources });
-  } catch (err) {
-    console.error('Submittal preview analysis error:', err);
-    res.status(err.status === 429 ? 429 : err.status || 500).json({ error: friendlyAiError(err) });
-  }
-});
-
 // Enters a submittal into the log, creating its first revision at the same time. The two are
 // always created together: a submittal with no revision has no dates and no status, and
 // would render as a permanently blank row.
@@ -513,6 +429,8 @@ router.post('/', upload.single('file'), async (req, res) => {
       submittalId,
       Number.isFinite(revisionNumber) && revisionNumber >= 0 ? revisionNumber : 0,
       dateReceived, dateForwarded,
+      // project.id, not projectId — there is no such variable in this handler, and referencing
+      // it threw before a single submittal could be saved.
       nullable(req.body.date_response_due)
         || dueDateFor({ date_forwarded: dateForwarded }, reviewDays(project.id))
     );
@@ -521,28 +439,6 @@ router.post('/', upload.single('file'), async (req, res) => {
       await attachFile({
         submittalId, revisionId: revision.lastInsertRowid, kind: 'submittal', file: req.file,
       });
-    }
-
-    // A prediction the PM ran while entering this is written against the entry now, so what
-    // informed their judgement is what the record carries. The documents it read are remembered
-    // too, so re-running it later starts from the same choice.
-    const preview = claimPreview(req, req.body.analysis_token, project.id);
-    if (preview) {
-      setDocuments(submittalId, project.id, preview.documentIds);
-      db.prepare(`
-        INSERT INTO submittal_analyses (submittal_id, revision_id, spec_section, sources_json,
-          analysis_json, analysis_markdown, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        submittalId, revision.lastInsertRowid, preview.specSection || nullable(req.body.spec_section),
-        JSON.stringify(preview.sources), JSON.stringify(preview.analysis),
-        renderSubmittalMarkdown({
-          submittal: { submittal_number: submittalNumber, description },
-          analysis: preview.analysis,
-          sources: preview.sources,
-        }),
-        req.user.name || req.user.email
-      );
     }
 
     res.json(detail(
@@ -764,7 +660,10 @@ router.post('/:id/revisions/:revId/response', upload.single('file'), async (req,
 // Run before the submittal goes to the A/E, which is the whole point: a missing certificate
 // found today costs an email, and found after the stamp costs a resubmittal and three weeks.
 
-router.post('/:id/analysis', upload.array('files', 4), async (req, res) => {
+router.post('/:id/analysis', uploadForAnalysis.fields([
+  { name: 'files', maxCount: 4 },
+  { name: 'spec_files', maxCount: 4 },
+]), async (req, res) => {
   try {
     const submittal = visibleSubmittal(req);
     if (!submittal) return res.status(404).json({ error: 'Not found' });
@@ -783,30 +682,43 @@ router.post('/:id/analysis', upload.array('files', 4), async (req, res) => {
       .all(submittal.id).map(r => r.contract_id);
     const documents = await loadDocumentBuffers(submittal.project_id, chosenIds);
 
+    // The specification a PM has on their desk but has not filed yet. Read for this review only
+    // and not added to the project, because filing documents is the Shared Documents page's job
+    // and doing it as a side effect of a review would put copies there nobody chose to keep.
+    for (const f of (req.files?.spec_files || [])) {
+      documents.push({ label: f.originalname, doc_type: 'specifications', buffer: f.buffer });
+    }
+
+    // Nothing chosen and nothing handed over: use what the project already holds. The section
+    // inside it is found by number, so handing over a whole manual costs no more than handing
+    // over the one section would.
+    if (documents.length === 0) {
+      documents.push(...await specificationsFor(submittal.project_id));
+    }
+
     // The contractor's package: whatever was uploaded with this request, else what is already
     // stored against the open revision.
     const revisions = revisionsOf(submittal.id);
     const current = revisions[revisions.length - 1];
-    let submittalFiles = (req.files || []).map(f => ({ label: f.originalname, buffer: f.buffer }));
+    let submittalFiles = (req.files?.files || []).map(f => ({ label: f.originalname, buffer: f.buffer }));
     if (!submittalFiles.length) submittalFiles = await submittalFilesFor(submittal.id, current?.id);
     if (!submittalFiles.length) submittalFiles = await submittalFilesFor(submittal.id, null);
 
     if (documents.length === 0 && submittalFiles.length === 0) {
       return res.status(400).json({
-        error: 'There is nothing to read yet. Attach the contractor\'s submittal, or choose the '
-          + 'specification for it to be read against.',
+        error: 'There is nothing to read yet. Attach the contractor\'s submittal, and add the '
+          + 'specification to the project\'s Shared Documents.',
       });
     }
     if (documents.length === 0) {
       return res.status(400).json({
-        error: 'Choose the specification for this submittal to be read against — without it '
-          + 'there is nothing to check the package for compliance with.',
+        error: 'No specification is on this project yet. Upload it under Shared Documents — or '
+          + 'attach the section here — and the review will find the section this submittal was '
+          + 'made under.',
       });
     }
 
-    const { analysis, sources, markdown } = await analyzeSubmittal({
-      submittal, documents, submittalFiles, fresh: req.body.fresh === '1',
-    });
+    const { analysis, sources, markdown } = await analyzeSubmittal({ submittal, documents, submittalFiles });
 
     const saved = db.prepare(`
       INSERT INTO submittal_analyses (submittal_id, revision_id, spec_section, sources_json,

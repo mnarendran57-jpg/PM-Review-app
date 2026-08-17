@@ -1,6 +1,6 @@
 const { PDFDocument } = require('pdf-lib');
 const { pageCount } = require('./pdfChunk');
-const { askForJson, FAST_MODEL } = require('./aiJson');
+const { askForJson } = require('./aiJson');
 const { DISCIPLINE_SHEET_HINTS } = require('./rfiLog');
 
 // Predicts how the A/E is likely to answer an RFI, by reading it against the project
@@ -209,12 +209,6 @@ Rules:
     tool: SHEET_PICKER_TOOL,
     maxTokens: 1500,
     label: 'rfi sheet pick',
-    // Finding a section in a contents list is a lookup, not a judgement — and whichever pages
-    // it lands on are named back to the PM in the sources, so a bad pick is visible and can be
-    // corrected by choosing the document again. Measured against the reviewing model on a real
-    // drawing set it produced the same reasoning, the same page arithmetic and the same leading
-    // sheets, in a fifth of the time.
-    model: FAST_MODEL,
   });
   return {
     hasSheetIndex: parsed.hasSheetIndex === true,
@@ -395,9 +389,7 @@ function renderMarkdown({ rfi, discipline, analysis, sources }) {
 
 // documents: [{ label, doc_type, buffer }] — the Shared Documents the PM selected.
 // extraFiles: [{ label, buffer }] — anything attached to this RFI alone.
-// fresh: pay for a new reading rather than reusing the stored one. Set when the PM has asked
-// for this again, which they only do when they doubted the answer.
-async function analyzeRfi({ rfi, discipline, documents = [], extraFiles = [], fresh = false }) {
+async function analyzeRfi({ rfi, discipline, documents = [], extraFiles = [] }) {
   if (documents.length === 0 && extraFiles.length === 0) {
     throw new Error('Choose at least one document for the RFI to be read against.');
   }
@@ -423,7 +415,7 @@ async function analyzeRfi({ rfi, discipline, documents = [], extraFiles = [], fr
   });
 
   const { data: parsed } = await askForJson({
-    content, tool: ANSWER_TOOL, maxTokens: 3000, label: 'rfi analysis', fresh,
+    content, tool: ANSWER_TOOL, maxTokens: 3000, label: 'rfi analysis',
   });
 
   const analysis = {
