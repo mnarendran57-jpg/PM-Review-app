@@ -1,6 +1,7 @@
 const { PDFDocument } = require('pdf-lib');
 const { pageCount } = require('./pdfChunk');
 const { askForJson } = require('./aiJson');
+const { locateSheets, sheetsNamedIn } = require('./sheetLocator');
 const { DISCIPLINE_SHEET_HINTS } = require('./rfiLog');
 
 // Predicts how the A/E is likely to answer an RFI, by reading it against the project
@@ -66,6 +67,33 @@ const SHEET_PICKER_TOOL = {
       },
     },
     required: ['hasSheetIndex', 'relevantSheets'],
+  },
+};
+
+// Choosing between sheets that are already known by name.
+//
+// Once the index has been read out of the text layer, the question is no longer "search a
+// 200-sheet set" but "which of these titles answers a duct clearance question" — a list of a
+// few hundred tokens and no page images at all. The old route sent the front of the set as
+// images to have the index read aloud, then asked for page numbers to be inferred from it; this
+// asks only the part that needs judgement.
+const SHEET_CHOICE_TOOL = {
+  name: 'choose_relevant_sheets',
+  description: 'Choose which drawing sheets answer a contractor\'s question, from a list of sheets.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      sheetNumbers: {
+        type: 'array',
+        description: 'At most 4 sheet numbers, copied exactly from the list, most useful first. '
+          + 'Fewer is better: a plan and its detail beat six loosely related sheets. Empty if '
+          + 'none of them bear on the question — a wrong sheet produces a confident answer '
+          + 'drawn from the wrong drawing.',
+        items: { type: 'string' },
+      },
+      why: { type: 'string', description: 'One short sentence on what you expect to find there.' },
+    },
+    required: ['sheetNumbers'],
   },
 };
 
@@ -217,6 +245,42 @@ Rules:
 }
 
 // Decides what of one document reaches the answering call.
+// Which of a set's sheets bear on the question. One small text-only call.
+async function chooseSheets({ rfi, discipline, sheets }) {
+  const list = sheets.slice(0, 120)
+    .map(s => `  ${s.label}${s.title ? ` — ${s.title}` : ''}`).join('\n');
+
+  const prompt = `A contractor has raised an RFI and it has to be answered from the drawings.
+The set's own index is below, so the sheets are already known by name — the question is which of
+them the answer is on.
+
+THE RFI
+Subject: ${rfi.subject}
+Question: ${rfi.question || '(no question text was recorded — go by the subject)'}
+Discipline: ${discipline} — sheets for this trade usually carry the prefix ${DISCIPLINE_SHEET_HINTS[discipline] || 'any'}.
+
+THE SHEETS IN THIS SET
+${list}
+
+Choose with the choose_relevant_sheets tool. Prefer the sheet type that answers the question
+being asked: a dimension question needs a plan, a connection or assembly question needs a
+detail, a capacity question needs a schedule. Copy the numbers exactly as printed above.`;
+
+  const { data } = await askForJson({
+    content: [{ type: 'text', text: prompt }],
+    tool: SHEET_CHOICE_TOOL,
+    maxTokens: 400,
+    label: 'rfi sheet choice',
+  });
+  return Array.isArray(data.sheetNumbers) ? data.sheetNumbers : [];
+}
+
+// Decides what of one document reaches the answering call.
+//
+// Cheapest first, and the first two steps cost nothing. A drawing set is drafted, so every
+// sheet's number is in its own title block and therefore in the text layer: the map from sheet
+// number to PDF page is a search. That map is exact, where inferring a page from an index's
+// printed position is a guess that a bound cover sheet quietly breaks.
 async function selectFrom({ doc, rfi, discipline, budget }) {
   const totalPages = await pageCount(doc.buffer);
 
@@ -234,6 +298,83 @@ async function selectFrom({ doc, rfi, discipline, budget }) {
     };
   }
 
+  let located = null;
+  try {
+    located = await locateSheets(doc.buffer);
+  } catch (err) {
+    console.warn(`[rfi analysis] could not search ${doc.label}: ${err.message}`);
+  }
+
+  if (located?.index?.length) {
+    const known = new Set(located.index.map(s => s.key));
+    const byLabel = new Map(located.index.map(s => [s.key, s]));
+    const take = [];
+
+    // 1. Sheets the RFI names itself. A contractor who writes "see M-401" has already done
+    //    the locating, and there is nothing to pay for or to get wrong.
+    for (const s of sheetsNamedIn(`${rfi.subject || ''} ${rfi.question || ''}`, known)) {
+      if (located.pageOf.has(s.key)) take.push(byLabel.get(s.key));
+    }
+
+    // 2. Otherwise the titles are known, so one small call chooses among them.
+    if (!take.length) {
+      try {
+        const refs = await chooseSheets({ rfi, discipline, sheets: located.index });
+        for (const ref of refs) {
+          // A returned number may carry its title or a stray bracket, so it is reduced to the
+          // same shape the index keys use rather than compared literally.
+          const key = String(ref).toUpperCase().replace(/[^A-Z0-9.]/g, '');
+          // A returned "M-502 — VAV Box Schedules" reduces to a key with the title stuck on the
+          // end, so a returned key that STARTS WITH an index key is that sheet. The reverse is
+          // not safe and is deliberately not allowed: "M-5" is a prefix of M-501, M-502 and
+          // M-503, and resolving it to whichever comes first would read a confidently wrong
+          // drawing. An unmatched sheet is reported; a mismatched one is not detectable.
+          const hit = byLabel.get(key) || located.index.find(s => key.startsWith(s.key));
+          if (hit && located.pageOf.has(hit.key) && !take.includes(hit)) take.push(hit);
+        }
+        // Worth saying out loud: sheets were chosen and none of them could be tied to a page,
+        // which sends the whole read down the expensive fallback for no visible reason.
+        if (refs.length && !take.length) {
+          console.warn(`[rfi analysis] chose ${JSON.stringify(refs)} in ${doc.label} but matched `
+            + `none of ${located.index.length} indexed sheets`);
+        }
+      } catch (err) {
+        console.warn(`[rfi analysis] could not choose sheets in ${doc.label}: ${err.message}`);
+      }
+    }
+
+    if (take.length) {
+      const chosen = take.slice(0, 4);
+      const wanted = [];
+      for (const s of chosen) {
+        const page = located.pageOf.get(s.key);
+        // A window either side only where the page was inferred from index order rather than
+        // found on the sheet itself. An exact hit needs no hedging.
+        const slack = located.positional ? PAGE_WINDOW : 0;
+        for (let p = page - slack; p <= page + slack; p++) wanted.push(p);
+      }
+      const extracted = await extractPages(doc.buffer, wanted.slice(0, budget));
+      if (extracted) {
+        return {
+          label: doc.label,
+          docType: doc.doc_type,
+          buffer: extracted.buffer,
+          pagesUsed: extracted.pages.length,
+          wholeDocument: false,
+          sheets: chosen.map(s => ({
+            sheetNumber: s.label, sheetTitle: s.title,
+            estimatedPdfPage: located.pageOf.get(s.key),
+          })),
+          note: located.positional
+            ? 'Sheet pages were inferred from the index order, so a page either side of each '
+              + 'was read as well.'
+            : null,
+        };
+      }
+    }
+  }
+
+  // 3. No text layer to search — a scanned set. Fall back to reading the index as images.
   let picked = null;
   try {
     picked = await pickSheets({ doc, rfi, discipline, totalPages });

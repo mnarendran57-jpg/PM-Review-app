@@ -40,7 +40,17 @@ const DOC_TYPE_LABELS = {
   other: 'Other', reference: 'Other',
 };
 
-const today = () => new Date().toISOString().slice(0, 10);
+// The local calendar date, not the UTC one.
+//
+// toISOString() converts to UTC first, so anywhere west of Greenwich it starts returning
+// tomorrow's date partway through the evening — at 7pm in Texas it is already tomorrow in UTC.
+// An RFI logged after dinner was therefore dated a day ahead, which is visible on the log and
+// moves the response deadline it is measured against.
+const today = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-`
+    + `${String(now.getDate()).padStart(2, '0')}`;
+};
 
 function formatDate(value) {
   if (!value) return '—';
@@ -90,12 +100,17 @@ function Field({ label, children, className = '' }) {
 // The project's Shared Documents, ticked to say which ones this RFI should be read against.
 // Contracts and reference documents are shown together and labelled, because an RFI is just
 // as often answered by the specification as by a drawing.
-function DocumentPicker({ projectId, selected, onChange }) {
+function DocumentPicker({ projectId, selected, onChange, onLoaded }) {
   const [docs, setDocs] = useState(undefined);
 
   useEffect(() => {
     if (!projectId) return;
-    payAppReviewApi.listDocuments(projectId).then(setDocs).catch(() => setDocs([]));
+    payAppReviewApi.listDocuments(projectId)
+      .then(all => { setDocs(all); onLoaded?.(all); })
+      .catch(() => setDocs([]));
+    // onLoaded is a notification, not a dependency: including it would re-fetch the list every
+    // time the parent re-rendered with a fresh closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   const toggle = id => onChange(
@@ -261,6 +276,17 @@ function NewRfiForm({ onSaved, onCancel }) {
   const [extras, setExtras] = useState([]);
   const [form, setForm] = useState({ ...EMPTY });
   const [documentIds, setDocumentIds] = useState([]);
+  const [docFile, setDocFile] = useState(null);
+  // Ticks the project's drawings the first time the list arrives. An RFI is answered from the
+  // drawings, so starting from a blank list asked the PM to restate something the project
+  // already knows. Only ever a default: it runs once, and never over a choice already made.
+  const [preselected, setPreselected] = useState(false);
+  const preselectDrawings = (all) => {
+    if (preselected) return;
+    setPreselected(true);
+    const drawings = all.filter(d => d.doc_type === 'drawings').map(d => d.id);
+    if (drawings.length) setDocumentIds(prev => (prev.length ? prev : drawings));
+  };
   const [reading, setReading] = useState(false);
   const [readNote, setReadNote] = useState('');
   const [cited, setCited] = useState([]);
@@ -344,6 +370,8 @@ function NewRfiForm({ onSaved, onCancel }) {
       // to fill in from the calendar there on the day they send it.
       fd.append('date_forwarded', sent === 'yes' ? sentDate : '');
       if (preview?.token) fd.append('analysis_token', preview.token);
+      // A drawing set attached here is filed under Shared Documents and linked to this RFI.
+      if (docFile) fd.append('doc_file', docFile);
       // The RFI itself goes first; the backend treats the rest as supporting material.
       if (file) fd.append('files', file);
       for (const extra of extras) fd.append('files', extra);
@@ -405,14 +433,29 @@ function NewRfiForm({ onSaved, onCancel }) {
           </p>
         </Field>
 
+        {/* What the answer is drawn from. The drawings are ticked for you, because an RFI is
+            answered from the drawings and the project already says which those are — but it is
+            a tick, so it can be changed. */}
         <div>
           <label className="label">Which documents should it be checked against?</label>
           {cited.length > 0 && (
             <p className="text-[11px] mb-1.5" style={{ color: '#1d4ed8' }}>
-              The RFI itself cites {cited.join(', ')} — tick whichever document holds those.
+              The RFI itself cites {cited.join(', ')} — those sheets are found by number in
+              whichever document holds them.
             </p>
           )}
-          <DocumentPicker projectId={projectId} selected={documentIds} onChange={setDocumentIds} />
+          <DocumentPicker projectId={projectId} selected={documentIds} onChange={setDocumentIds}
+            onLoaded={preselectDrawings} />
+          <div className="mt-2">
+            <input type="file" accept=".pdf"
+              className="text-xs text-gray-500 w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 file:cursor-pointer"
+              onChange={e => setDocFile(e.target.files?.[0] || null)} />
+            <p className="text-[11px] text-gray-400 mt-1">
+              {docFile
+                ? `${docFile.name} — filed under Shared Documents as drawings, so you only upload it once.`
+                : 'Or attach the drawings if they are not filed yet — they will be added to Shared Documents.'}
+            </p>
+          </div>
         </div>
 
         <div>
@@ -570,29 +613,10 @@ function AnalysisPanel({ rfi, onRan }) {
         It is not an answer to the RFI and does not affect the log.
       </p>
 
-      {!stored && !editing && (
-        <div className="space-y-2">
-          <p className="text-[12px] text-gray-600">
-            {rfi.documents?.length
-              ? `Will be read against ${rfi.documents.map(docName).join(', ')}${rfi.discipline ? ` as a ${rfi.discipline.toLowerCase()} question` : ''}.`
-              : 'No documents are selected for this RFI yet.'}
-          </p>
-          <div className="flex gap-2">
-            <button className="btn-primary" onClick={run} disabled={running || !discipline}>
-              <SparklesIcon className="w-4 h-4" />
-              {running ? 'Reading the drawings…' : 'Suggest an answer'}
-            </button>
-            <button className="btn-secondary" onClick={() => setEditing(true)}>Change what it reads</button>
-          </div>
-          {!discipline && (
-            <p className="text-[11px]" style={{ color: '#c2410c' }}>
-              Choose what the RFI asks about first — it decides which drawings are read.
-            </p>
-          )}
-        </div>
-      )}
-
-      {editing && (
+      {/* Shown, not hidden. The PM is accountable for the answer being drawn from the right
+          drawings, and a choice folded behind "change what it reads" is a choice they cannot
+          check. It arrives filled in from the entry, so the common case is still one button. */}
+      {(!stored || editing) && (
         <div className="space-y-3">
           <Field label="What does this RFI ask about?">
             <select className="input" value={discipline} onChange={e => setDiscipline(e.target.value)}>
@@ -605,12 +629,30 @@ function AnalysisPanel({ rfi, onRan }) {
             <DocumentPicker projectId={projectId} selected={documentIds} onChange={setDocumentIds} />
           </div>
           <div className="flex gap-2">
-            <button className="btn-primary" onClick={run} disabled={running || !discipline}>
+            <button className="btn-primary" onClick={run}
+              disabled={running || !discipline || !documentIds.length}>
               <SparklesIcon className="w-4 h-4" />
-              {running ? 'Reading the drawings…' : stored ? 'Run it again' : 'Suggest an answer'}
+              {running ? 'Finding the sheets…' : stored ? 'Run it again' : 'Suggest an answer'}
             </button>
-            <button className="btn-secondary" onClick={() => setEditing(false)}>Cancel</button>
+            {stored && (
+              <button className="btn-secondary" onClick={() => setEditing(false)}>Cancel</button>
+            )}
           </div>
+          {!discipline ? (
+            <p className="text-[11px]" style={{ color: '#c2410c' }}>
+              Choose what the RFI asks about first — it decides which drawings are read.
+            </p>
+          ) : !documentIds.length ? (
+            <p className="text-[11px] text-gray-400">
+              Tick a document to run this. The RFI is logged either way — a suggested answer is
+              only worth having when there are drawings to read it against.
+            </p>
+          ) : (
+            <p className="text-[11px] text-gray-400">
+              Sheets are found by their number in the set's own text, so a long drawing set costs
+              no more to read than the few sheets the question turns on.
+            </p>
+          )}
         </div>
       )}
 
@@ -658,6 +700,39 @@ const VERDICTS = {
   },
 };
 
+// What each row of the comparison means, and the colour that says so before it is read.
+const POINT_STATUS = {
+  agreed: { label: 'Matches the documents', bg: '#f0fdf4', color: '#15803d', border: '#bbf7d0' },
+  differs: { label: 'Differs', bg: '#fef2f2', color: '#b91c1c', border: '#fecaca' },
+  new_information: { label: 'Not in the documents', bg: '#fff7ed', color: '#c2410c', border: '#fed7aa' },
+  unanswered: { label: 'Not answered', bg: '#f9fafb', color: '#6b7280', border: '#e5e7eb' },
+};
+
+// The rows to draw, whichever shape the stored comparison is in.
+//
+// Comparisons produced before this panel became a table were saved as four separate fields, and
+// those records are still on real RFIs. Rather than leave them rendering as a blank panel — or
+// keep both layouts alive — the old fields are folded into the same rows the table draws. Each
+// of them was already a status in all but name.
+function rowsOf(review) {
+  if (Array.isArray(review.points) && review.points.length) return review.points;
+
+  const rows = [];
+  for (const d of review.differences || []) {
+    rows.push({ point: d.point, documentsSaid: d.predicted, aeSaid: d.actual,
+      status: 'differs', note: d.whyItMatters });
+  }
+  if (review.newInformation) {
+    rows.push({ point: 'The A/E knew something the documents did not carry', documentsSaid: 'Silent',
+      aeSaid: review.newInformation, status: 'new_information', note: review.changeOrderRisk || null });
+  }
+  for (const a of review.agreements || []) {
+    rows.push({ point: a, documentsSaid: null, aeSaid: 'Answered as the documents showed',
+      status: 'agreed', note: null });
+  }
+  return rows;
+}
+
 function ResponseReviewPanel({ rfi, revision, onRan }) {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
@@ -674,6 +749,7 @@ function ResponseReviewPanel({ rfi, revision, onRan }) {
   };
 
   const v = VERDICTS[review?.verdict] || VERDICTS.not_comparable;
+  const rows = review ? rowsOf(review) : [];
 
   return (
     <div className="p-4 rounded-xl" style={{ background: '#fff', border: `1px solid ${review ? v.border : '#eef1f4'}` }}>
@@ -707,40 +783,49 @@ function ResponseReviewPanel({ rfi, revision, onRan }) {
           <p className="text-[14px] font-semibold text-gray-900 leading-snug">{review.headline}</p>
           <p className="text-[11px] text-gray-500">{v.blurb}</p>
 
-          {review.differences?.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-                Where it differs
-              </p>
-              {review.differences.map((d, i) => (
-                <div key={i} className="p-2.5 rounded-lg" style={{ background: '#fafbfc', border: '1px solid #eef1f4' }}>
-                  <p className="text-[12px] font-semibold text-gray-800 mb-1.5">{d.point}</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <p className="text-[10px] uppercase tracking-wider text-gray-400">Documents showed</p>
-                      <p className="text-[12px] text-gray-700">{d.predicted}</p>
+          {/* One table, ordered as the model ranked it — the rows worth money first. Two
+              columns side by side is the whole point: what the documents showed and what the
+              A/E answered are read against each other, which is the comparison the PM came
+              here to make. */}
+          {rows.length > 0 && (
+            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #eef1f4' }}>
+              <div className="hidden sm:grid grid-cols-[1fr_1fr_1fr] gap-px text-[10px] font-semibold uppercase tracking-wider text-gray-400"
+                style={{ background: '#f9fafb', borderBottom: '1px solid #eef1f4' }}>
+                <div className="px-2.5 py-1.5">Point</div>
+                <div className="px-2.5 py-1.5">The documents said</div>
+                <div className="px-2.5 py-1.5">The A/E answered</div>
+              </div>
+              {rows.map((p, i) => {
+                const st = POINT_STATUS[p.status] || POINT_STATUS.differs;
+                return (
+                  <div key={i} style={{ borderTop: i ? '1px solid #f3f4f6' : 'none', background: st.bg }}>
+                    <div className="sm:grid sm:grid-cols-[1fr_1fr_1fr]">
+                      <div className="px-2.5 py-2">
+                        <p className="text-[12px] font-semibold text-gray-900 leading-snug">{p.point}</p>
+                        <span className="inline-block text-[9px] font-bold uppercase tracking-wider mt-1 px-1.5 py-0.5 rounded"
+                          style={{ background: '#fff', color: st.color, border: `1px solid ${st.border}` }}>
+                          {st.label}
+                        </span>
+                      </div>
+                      {/* Labelled on a narrow screen, where the columns stack and the header
+                          scrolls away — an unlabelled value in a stack is unreadable. */}
+                      <div className="px-2.5 pb-2 sm:py-2">
+                        <span className="sm:hidden text-[9px] uppercase tracking-wider text-gray-400 block">The documents said</span>
+                        <p className="text-[12px] text-gray-700 leading-snug">{p.documentsSaid || '—'}</p>
+                      </div>
+                      <div className="px-2.5 pb-2 sm:py-2">
+                        <span className="sm:hidden text-[9px] uppercase tracking-wider text-gray-400 block">The A/E answered</span>
+                        <p className="text-[12px] leading-snug" style={{ color: st.color }}>{p.aeSaid}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-[10px] uppercase tracking-wider" style={{ color: '#b45309' }}>A/E directed</p>
-                      <p className="text-[12px] text-gray-700">{d.actual}</p>
-                    </div>
+                    {/* The one part of a row that is a sentence, kept out of the columns so the
+                        table stays scannable. */}
+                    {p.note && (
+                      <p className="text-[11px] text-gray-600 px-2.5 pb-2 sm:pl-2.5">{p.note}</p>
+                    )}
                   </div>
-                  {d.whyItMatters && (
-                    <p className="text-[11px] text-gray-600 mt-1.5 pt-1.5" style={{ borderTop: '1px solid #eef1f4' }}>
-                      {d.whyItMatters}
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {review.changeOrderRisk && (
-            <div className="p-2.5 rounded-lg" style={{ background: '#fff7ed', border: '1px solid #fed7aa' }}>
-              <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#c2410c' }}>
-                Change order or delay exposure
-              </p>
-              <p className="text-[12px] text-gray-700">{review.changeOrderRisk}</p>
+                );
+              })}
             </div>
           )}
 
@@ -751,19 +836,6 @@ function ResponseReviewPanel({ rfi, revision, onRan }) {
                 {review.actionsForPm.map((a, i) => <li key={i} className="text-[12px] text-gray-700">{a}</li>)}
               </ul>
             </div>
-          )}
-
-          {review.newInformation && (
-            <p className="text-[12px] text-gray-600">
-              <span className="font-semibold">The A/E knew something the documents didn't carry:</span>{' '}
-              {review.newInformation}
-            </p>
-          )}
-
-          {review.agreements?.length > 0 && (
-            <p className="text-[11px] text-gray-500">
-              Agrees on: {review.agreements.join(' · ')}
-            </p>
           )}
 
           <div className="flex gap-2 pt-1">
@@ -971,6 +1043,10 @@ function FollowUpForm({ rfi, onSaved, onCancel }) {
 // --- One RFI, opened -------------------------------------------------------------------------
 
 function RevisionCard({ rfi, revision, isCurrent }) {
+  // Whether this revision's answer has already been read against the prediction. Once it has,
+  // the comparison is the answer and everything it is derived from becomes background.
+  const compared = !!revision.responseReview;
+  const [showAnswer, setShowAnswer] = useState(false);
   const files = revision.files || [];
   return (
     <div className="p-4 rounded-xl" style={{
@@ -1012,11 +1088,29 @@ function RevisionCard({ rfi, revision, isCurrent }) {
 
       {revision.responded_by && <p className="text-[11px] text-gray-500 mt-1">Answered by {revision.responded_by}</p>}
 
+      {/* Once the comparison exists it has already said what the A/E said, point by point and
+          beside what the documents showed. Leaving their raw answer open above it means reading
+          the same reply twice in two different shapes, which is the confusion this folds away.
+          Still one click from here, because a paraphrase is not a quote and a PM arguing a
+          change order needs the words the A/E actually wrote. */}
       {revision.response_notes && (
-        <div className="mt-3 pt-3" style={{ borderTop: '1px solid #eef1f4' }}>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">The A/E's answer</p>
-          <p className="text-[12px] text-gray-700 whitespace-pre-wrap leading-relaxed">{revision.response_notes}</p>
-        </div>
+        compared && !showAnswer ? (
+          <button type="button" className="text-[11px] font-semibold text-gray-400 hover:text-gray-700 mt-2"
+            onClick={() => setShowAnswer(true)}>
+            Show the A/E's answer as it was written
+          </button>
+        ) : (
+          <div className="mt-3 pt-3" style={{ borderTop: '1px solid #eef1f4' }}>
+            <div className="flex items-baseline gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">The A/E's answer</p>
+              {compared && (
+                <button type="button" className="text-[10px] text-gray-400 hover:text-gray-700 ml-auto"
+                  onClick={() => setShowAnswer(false)}>Hide</button>
+              )}
+            </div>
+            <p className="text-[12px] text-gray-700 whitespace-pre-wrap leading-relaxed">{revision.response_notes}</p>
+          </div>
+        )
       )}
 
       {files.length > 0 && (
@@ -1044,6 +1138,7 @@ function RfiDetail({ id, onChanged, onDeleted }) {
   const [sub, setSub] = useState(null);
   const [busy, setBusy] = useState(false);
   const [sentDate, setSentDate] = useState(today());
+  const [showPrediction, setShowPrediction] = useState(false);
 
   const load = useCallback(() => {
     rfisApi.get(id).then(setRecord).catch(err => setError(errorText(err, 'Could not open this RFI.')));
@@ -1087,6 +1182,8 @@ function RfiDetail({ id, onChanged, onDeleted }) {
   if (!record) return <p className="text-sm text-gray-400">Loading…</p>;
 
   const current = record.revisions[record.revisions.length - 1];
+  // The comparison, once it exists, is what this page is for.
+  const compared = !!current?.responseReview;
 
   if (sub === 'response') {
     return <ResponseForm rfi={record} revision={current} onSaved={applyUpdate} onCancel={() => setSub(null)} />;
@@ -1162,7 +1259,25 @@ function RfiDetail({ id, onChanged, onDeleted }) {
         <ResponseReviewPanel rfi={record} revision={current} onRan={applyUpdate} />
       )}
 
-      <AnalysisPanel rfi={record} onRan={load} />
+      {/* The suggested answer earns its place right up until the A/E replies. After that it is
+          a forecast of something that has already happened, and the comparison above restates
+          every part of it that still matters — beside what the A/E actually said, which is the
+          only form in which it is now useful. Two panels both headed with a verdict, one
+          predicted and one real, is what made this page confusing to read. */}
+      {!compared ? (
+        <AnalysisPanel rfi={record} onRan={load} />
+      ) : showPrediction ? (
+        <div>
+          <button type="button" className="text-[11px] font-semibold text-gray-400 hover:text-gray-700 mb-1"
+            onClick={() => setShowPrediction(false)}>Hide what was predicted</button>
+          <AnalysisPanel rfi={record} onRan={load} />
+        </div>
+      ) : (
+        <button type="button" className="text-[11px] font-semibold text-gray-400 hover:text-gray-700"
+          onClick={() => setShowPrediction(true)}>
+          Show what Coaster predicted before the answer came back
+        </button>
+      )}
 
       <div>
         <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-2">

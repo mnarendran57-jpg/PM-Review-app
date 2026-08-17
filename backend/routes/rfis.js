@@ -19,6 +19,13 @@ const {
 router.use(requireOrg);
 router.use(requireFeature('rfi-log'));
 
+// The RFI's own attachments and, optionally, a drawing set to file. That is two fields at once,
+// and multer counts `files` across the WHOLE request rather than per field.
+const uploadWithDocument = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 200 * 1024 * 1024, files: 10 },
+});
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 200 * 1024 * 1024, files: 6 },
@@ -185,12 +192,17 @@ const touch = rfiId => db.prepare(`UPDATE rfis SET updated_at=datetime('now') WH
 // Document ids arrive as a JSON array from the form, but tolerate a bare comma-separated
 // string so a hand-made request is not silently ignored.
 function parseIdList(raw) {
+  if (raw == null) return [];
   let ids = raw;
   if (typeof ids === 'string') {
     try { ids = JSON.parse(ids); } catch { ids = ids.split(','); }
+    // A single id survives JSON.parse as a number rather than an array — "37" parses to 37,
+    // not [37]. Treating that as "not a list" would silently drop it, which is exactly how the
+    // submittal log lost a ticked document: one linked nothing while two linked both.
+    if (!Array.isArray(ids)) ids = [ids];
   }
   if (!Array.isArray(ids)) return [];
-  return ids.map(Number).filter(Number.isInteger);
+  return ids.map(v => Number(String(v).trim())).filter(n => Number.isInteger(n) && n > 0);
 }
 
 // The Shared Documents chosen for an RFI, replaced wholesale. Ids are checked against the
@@ -203,6 +215,26 @@ function setDocuments(rfiId, projectId, rawIds) {
   for (const id of parseIdList(rawIds)) {
     if (valid.get(id, projectId)) insert.run(rfiId, id);
   }
+}
+
+// Files a document the PM attached while logging an RFI, and returns its id.
+//
+// It goes into Shared Documents rather than being held against this one RFI, because a drawing
+// set is a project document that happens to have arrived here: the next RFI on the same trade is
+// answered from the same set, and a copy invisible outside this entry would be uploaded again.
+// Filed as drawings because that is what an RFI is usually answered from; the type can be
+// corrected on the Shared Documents page, and nothing here depends on it being right.
+async function fileDocument(projectId, file, createdBy) {
+  const { key } = await storage.storeFile('contract', file.buffer, file.mimetype, file.originalname);
+  return db.prepare(`
+    INSERT INTO project_contracts
+      (project_id, file_name, label, doc_type, is_primary, file_blob, file_key, terms,
+       created_by, terms_status)
+    VALUES (?, ?, ?, 'drawings', 0, ?, ?, '{}', ?, 'ready')
+  `).run(
+    projectId, file.originalname, file.originalname.replace(/\.pdf$/i, ''),
+    key ? Buffer.alloc(0) : file.buffer, key, createdBy || null,
+  ).lastInsertRowid;
 }
 
 // Pulls the bytes of the chosen Shared Documents. Scoped by project inside the query, so an
@@ -392,7 +424,10 @@ router.post('/preview-analysis', upload.array('files', 6), async (req, res) => {
 
 // Logs an RFI and its first revision together. The two are always created as a pair: an RFI
 // with no revision has no dates and no status, and would render as a permanently blank row.
-router.post('/', upload.array('files', 6), async (req, res) => {
+router.post('/', uploadWithDocument.fields([
+  { name: 'files', maxCount: 6 },
+  { name: 'doc_file', maxCount: 1 },
+]), async (req, res) => {
   try {
     const project = projectInScope(req, req.body.project_id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -438,7 +473,17 @@ router.post('/', upload.array('files', 6), async (req, res) => {
         || dueDateFor({ date_forwarded: dateForwarded }, reviewDays(project.id))
     );
 
-    setDocuments(rfiId, project.id, req.body.document_ids);
+    // What this RFI is read against, decided when it is logged. A drawing set attached here is
+    // filed under Shared Documents and then linked, so the next RFI on the same trade finds it
+    // in the list rather than needing it uploaded again.
+    const documentIds = parseIdList(req.body.document_ids);
+    const attached = req.files?.doc_file?.[0] || null;
+    if (attached) {
+      documentIds.push(await fileDocument(project.id, attached, req.user.name || req.user.email));
+    }
+    // The array itself, not a joined string — round-tripping ids through text is what dropped
+    // them in the submittal log, and nothing here needs them to be text.
+    setDocuments(rfiId, project.id, documentIds);
 
     // The suggested answer the PM was shown while entering this, if there was one. Its
     // markdown is re-rendered now that the RFI has a number, so an export does not carry the
@@ -460,7 +505,7 @@ router.post('/', upload.array('files', 6), async (req, res) => {
 
     // The first upload is the RFI itself; anything after it is supporting material the
     // contractor sent with it, which the analysis reads alongside the Shared Documents.
-    const files = req.files || [];
+    const files = req.files?.files || [];
     for (const [index, file] of files.entries()) {
       await attachFile({
         rfiId, revisionId: revision.lastInsertRowid,

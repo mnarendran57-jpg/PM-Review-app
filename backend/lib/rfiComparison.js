@@ -14,6 +14,11 @@ const { askForJson } = require('./aiJson');
 
 const VERDICTS = ['confirmed', 'partly_confirmed', 'contradicted', 'not_comparable'];
 
+// What each row of the comparison is. Four kinds, because there are exactly four ways an answer
+// can stand against the documents it was supposed to come from, and the PM does something
+// different about each.
+const STATUSES = ['agreed', 'differs', 'new_information', 'unanswered'];
+
 // Field order is load-bearing. A tool call is generated top to bottom, so when the verdict and
 // the headline came first the model would answer the whole question in the headline and then
 // return empty arrays behind it — a panel showing a finding with nothing under it. Enumerating
@@ -24,53 +29,68 @@ const COMPARISON_TOOL = {
   input_schema: {
     type: 'object',
     properties: {
-      agreements: {
+      // One array, not four.
+      //
+      // This was four separate fields — what agreed, what differed, what the A/E relied on that
+      // the drawings did not contain, and what it might cost — each written as prose and stacked
+      // down the panel. Everything a reader needed was there, and finding any of it meant
+      // reading all of it. But every entry is the same shape of fact: a point, what the
+      // documents showed, what the A/E answered. Written that way it is a table, read in one
+      // glance instead of four paragraphs, and the distinction the four fields carried survives
+      // as the status column that colours each row.
+      points: {
         type: 'array',
-        description: 'Points where the prediction and the A/E agree. Short phrases, not '
-          + 'sentences. Empty if they do not agree on anything substantive.',
-        items: { type: 'string' },
-      },
-      differences: {
-        type: 'array',
-        description: 'Each material difference, one entry per difference. Only real '
-          + 'differences of substance — not differences of wording, emphasis or detail that do '
-          + 'not change what gets built. If the verdict is "contradicted" or '
-          + '"partly_confirmed" this MUST contain at least one entry: the difference the '
-          + 'verdict is referring to. An empty list is only correct when the verdict is '
-          + '"confirmed" or "not_comparable".',
+        description: 'One row per point of substance, most consequential first. Together these '
+          + 'are the whole comparison — every difference and every agreement worth the PM\'s '
+          + 'attention, and nothing else. Omit anything you would include only for completeness.',
         items: {
           type: 'object',
           properties: {
-            point: { type: 'string', description: 'What the difference is about, in a few words.' },
-            predicted: { type: 'string', description: 'What the documents indicated.' },
-            actual: { type: 'string', description: 'What the A/E actually said.' },
-            whyItMatters: {
+            point: {
               type: 'string',
-              description: 'The practical consequence for the PM — what gets built differently, '
-                + 'costs more, or takes longer.',
+              description: 'What it is about: a noun phrase of 2 to 6 words, never a sentence. '
+                + '"Duct clearance at beam", "VAV box size", "Who bears the cost".',
+            },
+            documentsSaid: {
+              type: 'string',
+              description: 'What the drawings and documents showed, in AT MOST 12 words — the '
+                + 'value or the requirement itself, not a description of it. "10 feet 6 inches '
+                + 'to underside, 6 inch clearance" beats "the drawings indicated a clearance '
+                + 'requirement". Write "Silent" where they did not address it, and "Not in what '
+                + 'was read" where the governing sheet was never reached.',
+            },
+            aeSaid: {
+              type: 'string',
+              description: "What the A/E actually answered, in AT MOST 12 words. Their words "
+                + 'where they are short enough to use.',
+            },
+            status: {
+              type: 'string',
+              enum: STATUSES,
+              description: '"agreed" — the A/E answered what the documents showed. '
+                + '"differs" — the A/E answered differently from the documents. '
+                + '"new_information" — the A/E relied on something not in the documents at all: '
+                + 'a decision, a field condition, an intent never drawn. This is the row that is '
+                + 'usually worth money, because it is a change arriving as an answer. '
+                + '"unanswered" — the question, or part of it, was not addressed.',
+            },
+            note: {
+              type: 'string',
+              description: 'ONLY where there is a consequence in money or time — a change order, '
+                + 'a delay, a drawing to have revised, another trade affected. Say on whose '
+                + 'account where you can. At most 15 words. Omit it entirely on a row that just '
+                + 'records agreement; a note on every row is a note on none.',
             },
           },
-          required: ['point', 'predicted', 'actual'],
+          required: ['point', 'aeSaid', 'status'],
         },
-      },
-      newInformation: {
-        type: 'string',
-        description: 'Anything the A/E relied on that was not in the documents read — a '
-          + 'decision, a field condition, a revision, an intent not drawn. Omit if there is none.',
-      },
-      changeOrderRisk: {
-        type: 'string',
-        description: 'Plain English: does the gap between the documents and this answer look '
-          + 'like a change order or a delay claim, and on whose account? Omit if the answer '
-          + 'sits squarely within the contract documents.',
       },
       actionsForPm: {
         type: 'array',
-        description: 'What the PM should do now, given the difference. Specific and practical: '
-          + 'a drawing to have revised, a price to ask for, a position to take, a record to '
-          + 'make. Empty ONLY if the answer simply confirms the documents and needs nothing — '
-          + 'wherever there is a difference there is something to do, if only to record the '
-          + 'direction and get it priced.',
+        description: 'What the PM should do now, at most 4 entries, most urgent first. Each one '
+          + 'starts with a verb and runs to at most 12 words: "Price the duct transition before '
+          + 'fabrication." Empty ONLY if the answer simply confirms the documents and needs '
+          + 'nothing.',
         items: { type: 'string' },
       },
       // Last on purpose: both of these summarise the fields above, so they are written once
@@ -87,11 +107,12 @@ const COMPARISON_TOOL = {
       },
       headline: {
         type: 'string',
-        description: 'ONE sentence for the PM, summarising what you set out above: did the A/E '
-          + 'answer the way the documents suggested, and if not, what changed? No preamble.',
+        description: 'ONE sentence, at most 25 words, and it must say something the table does '
+          + 'not repeat: what the difference amounts to for this PM. No preamble, no restating '
+          + 'the answer — it is printed beside this line.',
       },
     },
-    required: ['differences', 'actionsForPm', 'verdict', 'headline'],
+    required: ['actionsForPm', 'verdict', 'headline'],
   },
 };
 
@@ -135,21 +156,28 @@ ${response.respondedBy ? `From: ${response.respondedBy}\n` : ''}${response.dateR
 ${response.notes || '(no written answer was recorded — go by the disposition alone)'}
 """
 
-Record your comparison with the record_response_comparison tool.
+Record your comparison as a TABLE, with the record_response_comparison tool. Every row is one
+point; the three columns are what it is about, what the documents showed, and what the A/E
+answered. The PM reads this at a glance between site visits, so write cells, not paragraphs.
 
 Rules:
 - The PM already knows what the A/E said. The value here is the gap: where the answer departs
   from what the contract documents showed, and what that costs them.
-- The headline summarises; the fields carry the detail. Never state a difference in the
-  headline that does not also appear as an entry in "differences" — the headline is one line
-  in a panel and the entries are what the PM reads, forwards and prices.
+- Length is a feature. A cell over a dozen words stops being scannable and becomes something to
+  read, which defeats the table. Give the value, not a description of the value: "10'-6" to
+  underside, 6 inch clearance" beats "the drawings indicated a clearance was required".
+- A short table beats a complete one. Rows the PM would not act on or forward do not earn their
+  line. If the A/E simply confirmed the documents, a couple of "agreed" rows and no note is the
+  right answer.
+- The headline summarises; the rows carry the detail. Never state a difference in the headline
+  that does not also appear as a row — the headline is one line in a panel and the rows are what
+  the PM reads, forwards and prices.
 - Only report differences of substance. A different way of phrasing the same instruction is
-  not a difference. If the A/E confirmed the documents, say so plainly and return no
-  differences — that is a useful and common answer.
-- Where the A/E has directed something the drawings do not show, say so directly. That is the
-  single most valuable thing on this page: work not in the contract documents is work somebody
-  has to pay for, and the PM needs to see it the day the answer arrives, not at the pay
-  application.
+  not a difference; that row is "agreed".
+- A row whose status is "new_information" is the most valuable thing on this page: work not in
+  the contract documents is work somebody has to pay for, and the PM needs to see it the day the
+  answer arrives, not at the pay application. Use it where the A/E relied on something the
+  documents do not carry, and put the consequence in that row's note.
 - Be careful about blame. Report what the documents showed and what the A/E directed. Whether
   that is a design change, a clarification or a contractor error is often a judgement the PM
   makes with information you do not have.
@@ -159,6 +187,18 @@ Rules:
   information the documents did not carry, say that rather than presenting it as a conflict.
 - Write for a reader who is not a specialist in this trade.`;
 }
+
+// How each row reads in a document, where colour cannot carry the meaning.
+const STATUS_LABEL = {
+  agreed: 'Matches the documents',
+  differs: 'Differs',
+  new_information: 'Not in the documents',
+  unanswered: 'Not answered',
+};
+
+// A pipe inside a cell would end the column early and shift every value after it one place
+// left — so a duct noted as "24x12 | 30x8 oval" would silently corrupt its own row.
+const cell = value => String(value ?? '—').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim() || '—';
 
 function renderMarkdown({ rfi, review, response }) {
   const VERDICT_LABEL = {
@@ -179,15 +219,19 @@ function renderMarkdown({ rfi, review, response }) {
   lines.push(review.headline || '');
   lines.push('');
 
-  if (review.differences?.length) {
-    lines.push('## Where the answer differs from the documents');
+  if (review.points?.length) {
+    lines.push('| | Point | The documents said | The A/E answered |');
+    lines.push('|---|---|---|---|');
+    for (const p of review.points) {
+      lines.push(`| ${STATUS_LABEL[p.status] || ''} | ${cell(p.point)} | ${cell(p.documentsSaid)} `
+        + `| ${cell(p.aeSaid)} |`);
+    }
     lines.push('');
-    for (const d of review.differences) {
-      lines.push(`### ${d.point}`);
-      lines.push('');
-      lines.push(`- **The documents showed:** ${d.predicted}`);
-      lines.push(`- **The A/E directed:** ${d.actual}`);
-      if (d.whyItMatters) lines.push(`- **Why it matters:** ${d.whyItMatters}`);
+    // Notes sit under the table rather than in a fifth column: they are the one part that is a
+    // sentence, and a column of sentences is what stops a table being scannable.
+    const noted = review.points.filter(p => p.note);
+    if (noted.length) {
+      for (const p of noted) lines.push(`- **${p.point}** — ${p.note}`);
       lines.push('');
     }
   } else {
@@ -195,24 +239,6 @@ function renderMarkdown({ rfi, review, response }) {
     lines.push('');
   }
 
-  if (review.agreements?.length) {
-    lines.push('## Where they agree');
-    lines.push('');
-    for (const a of review.agreements) lines.push(`- ${a}`);
-    lines.push('');
-  }
-  if (review.newInformation) {
-    lines.push('## Information the A/E had that the documents did not carry');
-    lines.push('');
-    lines.push(review.newInformation);
-    lines.push('');
-  }
-  if (review.changeOrderRisk) {
-    lines.push('## Change order or delay exposure');
-    lines.push('');
-    lines.push(review.changeOrderRisk);
-    lines.push('');
-  }
   if (review.actionsForPm?.length) {
     lines.push('## What to do now');
     lines.push('');
@@ -227,17 +253,19 @@ function renderMarkdown({ rfi, review, response }) {
 // the PM would have nothing to forward or price. It happens occasionally whatever the prompt
 // says, so it is checked rather than hoped for.
 const DEPARTURES = new Set(['contradicted', 'partly_confirmed']);
-const isSelfContradictory = data =>
-  DEPARTURES.has(data?.verdict) && !(Array.isArray(data.differences) && data.differences.length);
 
-const CORRECTION = `Your answer said the A/E departed from the documents but listed no entry in
-"differences". Those two cannot both be right. Call the tool again: either list each departure
-as its own entry in "differences" — with what the documents showed, what the A/E directed, and
-why it matters — or, if on reflection the A/E did confirm the documents, set the verdict to
-"confirmed".`;
+const isSelfContradictory = (data) => {
+  const rows = Array.isArray(data?.points) ? data.points : [];
+  return DEPARTURES.has(data?.verdict)
+    && !rows.some(p => p && (p.status === 'differs' || p.status === 'new_information'));
+};
 
-// analysis / sources: the stored prediction, as saved by lib/rfiAnalysis.
-// response: { action, notes, respondedBy, dateReturned } — the A/E's answer as logged.
+const CORRECTION = `Your verdict says the A/E departed from the documents, but no row you gave
+has status "differs" or "new_information". Those cannot both be right. Call the tool again:
+either give each departure its own row — what it is about, what the documents showed, what the
+A/E answered — or, if on reflection the answer sits within the documents, change the verdict to
+match.`;
+
 async function compareToResponse({ rfi, discipline, analysis, sources, response }) {
   const content = [{ type: 'text', text: buildPrompt({ rfi, discipline, analysis, sources, response }) }];
   const ask = blocks => askForJson({
@@ -264,14 +292,21 @@ async function compareToResponse({ rfi, discipline, analysis, sources, response 
   const review = {
     verdict: VERDICTS.includes(data.verdict) ? data.verdict : 'not_comparable',
     headline: data.headline || null,
-    agreements: Array.isArray(data.agreements) ? data.agreements.filter(Boolean) : [],
-    differences: Array.isArray(data.differences) ? data.differences.filter(d => d && d.point) : [],
-    newInformation: data.newInformation || null,
-    changeOrderRisk: data.changeOrderRisk || null,
+    points: (Array.isArray(data.points) ? data.points : [])
+      .filter(p => p && p.point && p.aeSaid)
+      .map(p => ({
+        point: p.point,
+        documentsSaid: p.documentsSaid || null,
+        aeSaid: p.aeSaid,
+        // An unrecognised status would render as an uncoloured row with no label, which reads
+        // as "nothing to see here" — the wrong default for a comparison.
+        status: STATUSES.includes(p.status) ? p.status : 'differs',
+        note: p.note || null,
+      })),
     actionsForPm: Array.isArray(data.actionsForPm) ? data.actionsForPm.filter(Boolean) : [],
   };
 
   return { review, markdown: renderMarkdown({ rfi, review, response }) };
 }
 
-module.exports = { compareToResponse, VERDICTS };
+module.exports = { compareToResponse, VERDICTS, STATUSES, STATUS_LABEL };

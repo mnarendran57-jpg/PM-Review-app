@@ -289,6 +289,11 @@ export const submittalsApi = {
   list: params => api.get('/submittals', { params }).then(r => r.data),
   get: id => api.get(`/submittals/${id}`).then(r => r.data),
   // Reads an uploaded submittal so the entry form opens pre-filled. Saves nothing.
+  // Predicts the review before the submittal is logged. LONG_AI_TIMEOUT because the governing
+  // section has to be found in the specification before it can be read.
+  previewAnalysis: formData => api.post('/submittals/preview-analysis', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: LONG_AI_TIMEOUT,
+  }).then(r => r.data),
   extract: formData => api.post('/submittals/extract', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
   }).then(r => r.data),
