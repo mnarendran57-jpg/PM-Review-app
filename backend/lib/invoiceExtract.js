@@ -79,11 +79,21 @@ const INVOICE_TOOL = {
 //    invoiceChecks.js (that math is done in code, not by the model)
 //  - "observations": judgment calls only the model can make (whether a reimbursable
 //    line has backup among the uploads, whether pricing looks reasonable). Advisory.
-function buildPrompt({ fileCount, contractTerms }) {
+// canSeeInvoice: false when this pass starts past page 1, so the primary invoice cannot be among
+// the pages in front of the model. It then has no business reporting line items at all.
+function buildPrompt({ fileCount, contractTerms, canSeeInvoice = true }) {
   return `You are reviewing a vendor's invoice on behalf of the owner's project manager.
 ${fileCount > 1
   ? `${fileCount} documents were uploaded. ONE of them is the vendor's primary invoice — the document that requests payment. The others are backup documentation (subcontractor invoices, receipts, material tickets) that support "reimbursable" cost lines on the primary invoice.`
-  : 'One document was uploaded: the vendor\'s invoice.'}
+  : `One PDF was uploaded, and it almost certainly contains MORE than the invoice. A vendor binds
+its invoice together with the backup that supports it: subcontractor invoices, delivery tickets,
+filing-fee receipts, petty-cash slips. The invoice is at the FRONT — usually page 1, occasionally
+the first two or three. Everything after it is backup.
+
+Getting this distinction right is the most important thing here. Treating the whole upload as "the
+invoice" is what made an earlier review read a delivery company's own invoice, bound in as backup
+on a later page, as another line on the vendor's invoice — and then report that the invoice did not
+add up, short by exactly that amount, on an invoice that added up perfectly.`}
 
 ${contractTerms ? `The executed contract's relevant terms (already verified by the PM):
 ${JSON.stringify(contractTerms, null, 2)}
@@ -97,14 +107,27 @@ Record what you find with the record_invoice_review tool.
 Rules:
 - Dollar amounts are plain numbers (no "$", no commas). Rates are decimals (8.25% -> 0.0825).
 - If a field cannot be found with confidence, omit it. Never invent a number.
-- Read line items from the PRIMARY invoice only. Do not turn backup receipts into their own line items — instead use them to decide each reimbursable line's "hasBackup".
-- Every priced line on the primary invoice must appear in "lineItems" — do not merge rows.
+- Read line items from the PRIMARY invoice only. Do not turn backup receipts into their own line
+  items — instead use them to decide each reimbursable line's "hasBackup".
+- A backup document's own total is NOT a line item, however plainly it is printed. A bound-in
+  delivery or subcontractor invoice totalling $1,058.50 belongs in the "hasBackup" reasoning for
+  whichever reimbursable line it supports, never in "lineItems".
+- Your line items must add up to the invoice's own printed total. If they do not, you have either
+  missed a line or included something that is not on the invoice — and on a package with backup
+  bound in, the second is far more likely. Re-read the invoice's own summary block before reporting
+  a total that disagrees with it.
+- Every priced line on the primary invoice must appear in "lineItems" — do not merge rows.${canSeeInvoice ? '' : `
+- IMPORTANT: these pages begin PAST the front of the document, so the primary invoice is NOT among
+  them. Return an EMPTY "lineItems" array. Read these pages only for what they support, and leave
+  the invoice's own figures to the pass that can actually see them.`}
 - In "observations", write plain English for a reader who is not in construction. No IDs,
   no jargon. Ground every concern in something visible in the documents.`;
 }
 
-const TOO_MANY_LINE_ITEMS = 'This invoice has more itemised detail than one response can hold. '
-  + 'Try uploading it without its largest backup attachment.';
+// Deliberately does not suggest removing an attachment. How much backup a vendor binds in must never
+// decide whether the review works, and pdfChunk already halves a pass whose answer overflows.
+const TOO_MANY_LINE_ITEMS = 'This invoice carries more itemised detail than one reply can hold. '
+  + 'It is being read in smaller passes instead.';
 
 // Single Claude call: the invoice PDF(s) + the contract's stored terms as text. The
 // contract PDF itself is deliberately NOT re-sent — its terms were extracted once at
@@ -144,7 +167,14 @@ async function analyzeInvoices({ invoiceBuffers, contractTerms }) {
   const readOne = async (buffer, context) => {
     const content = [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
-      { type: 'text', text: buildPrompt({ fileCount: 1, contractTerms }) + partNotice(context) },
+      { type: 'text', text: buildPrompt({
+        fileCount: 1,
+        contractTerms,
+        // Only the pass that includes page 1 can be looking at the invoice itself. Without this,
+        // every later pass over backup pages dutifully reported those documents as line items, and
+        // mergeExtracted concatenated them onto the invoice.
+        canSeeInvoice: (context?.startPage ?? 1) <= 1,
+      }) + partNotice(context) },
     ];
     return callWithRetry(content);
   };
