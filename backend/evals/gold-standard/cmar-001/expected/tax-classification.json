@@ -1,0 +1,83 @@
+{
+  "_note": "Aldine ISD is a Texas school district. The same vendor appears on this package both correctly exempt and charging tax, which makes this the case that proves 'tax > 0 = error' is the wrong rule and so is ignoring it.",
+
+  "projectTaxStatus": {
+    "owner": "Aldine Independent School District",
+    "ownerType": "Texas public school district",
+    "expectedExempt": true,
+    "confirmedFromContract": false,
+    "note": "NOT YET VERIFIED against the A133. A school district is exempt as a matter of course, but the contract governs how the exemption is administered — whether the contractor purchases on the owner's exemption certificate, and how tax on services and rentals is treated. Until that is extracted, every classification below is TAX_RULE_NOT_DETERMINED rather than a finding.",
+    "verified": false
+  },
+
+  "documents": [
+    {
+      "vendor": "The Home Depot", "sourcePage": 52,
+      "subtotal": 39.88, "salesTax": 0.00, "total": 39.88,
+      "printedOnReceipt": "TAX EXEMPT",
+      "purchaseKind": "material",
+      "expected": "TAX_EXEMPT",
+      "note": "Correct handling, and the reason the taxed receipts below cannot be excused as unavoidable — the exemption was demonstrably usable at this vendor.",
+      "verified": true
+    },
+    {
+      "vendor": "The Home Depot", "sourcePage": 53,
+      "subtotal": 74.78, "salesTax": 0.00, "total": 74.78,
+      "printedOnReceipt": "TAX EXEMPT",
+      "purchaseKind": "material",
+      "expected": "TAX_EXEMPT",
+      "verified": true
+    },
+    {
+      "vendor": "The Home Depot", "sourcePage": 29,
+      "subtotal": 19.97, "salesTax": 1.65, "total": 21.62,
+      "purchaseKind": "material",
+      "expected": "POTENTIAL_IMPROPER_TAX",
+      "note": "Same vendor, same project, tax charged. Pages 52 and 53 show the exemption being applied at this vendor, so this reads as the certificate not being presented.",
+      "verified": true
+    },
+    {
+      "vendor": "The Home Depot", "sourcePage": 30,
+      "subtotal": 109.84, "salesTax": 9.06, "total": 118.90,
+      "purchaseKind": "material",
+      "expected": "POTENTIAL_IMPROPER_TAX",
+      "verified": true
+    },
+    {
+      "vendor": "White Cap, L.P.", "sourcePage": 25,
+      "subtotal": 391.21, "salesTax": 27.33, "total": 418.54,
+      "purchaseKind": "material",
+      "expected": "POTENTIAL_IMPROPER_TAX",
+      "note": "The invoice itself prints an exemption contact address, which supports the exemption being available and unused.",
+      "verified": true
+    },
+    {
+      "vendor": "Jet Sanitation Services", "sourcePage": 31,
+      "subtotal": 1091.13, "salesTax": 90.02, "taxRate": 0.0825, "total": 1181.15,
+      "purchaseKind": "service",
+      "description": "Portable toilets, 2 units, 23 Jun - 20 Jul 2026",
+      "expected": "TAX_REQUIRES_SUPPORT",
+      "note": "DELIBERATELY NOT the same answer as the material purchases. This is a service or rental, taxed differently in Texas from materials incorporated into the work, and the exemption may not reach it. Classifying this alongside the Home Depot receipts would be wrong in the direction that costs the contractor money they are owed.",
+      "verified": true
+    }
+  ],
+
+  "totals": {
+    "materialTaxPotentiallyImproper": 38.04,
+    "materialTaxPotentiallyImproperDetail": "1.65 + 9.06 + 27.33",
+    "serviceTaxRequiringSupport": 90.02,
+    "note": "Small money on its own. It matters because it is the same question every month across a multi-year job, and because the pattern — the exemption applied on some purchases and not others by the same buyer at the same vendor — is the finding, not the $38."
+  },
+
+  "expectedFindings": [
+    { "ruleCode": "TAX", "status": "REVIEW", "severity": "LOW", "affectedVendor": "The Home Depot", "reportedAmount": 10.71, "note": "Tax charged on two receipts where two others from the same vendor were correctly exempt." },
+    { "ruleCode": "TAX", "status": "REVIEW", "severity": "LOW", "affectedVendor": "White Cap, L.P.", "reportedAmount": 27.33 },
+    { "ruleCode": "TAX", "status": "REVIEW", "severity": "INFO", "affectedVendor": "Jet Sanitation Services", "reportedAmount": 90.02, "note": "Service tax — needs the contract's treatment before it can be called improper." }
+  ],
+
+  "mustNotDo": [
+    "Report the exempt Home Depot receipts as findings. They are the correct behaviour and reporting them trains the PM to ignore this section.",
+    "Total all tax on the package and present one number. Materials and services are different questions with different answers.",
+    "Call any of this improper before the contract's tax treatment has actually been read."
+  ]
+}

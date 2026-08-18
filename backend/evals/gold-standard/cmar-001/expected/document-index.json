@@ -1,0 +1,50 @@
+{
+  "_note": "What the segmentation stage should produce from the 67-page package. Page ranges are 1-based and inclusive. Read off the pages themselves; the boundaries between backup documents are the part most worth checking.",
+  "totalPages": 67,
+  "documents": [
+    { "type": "PRIME_G702", "startPage": 1, "endPage": 1, "company": "Bartlett Cocke General Contractors, LLC", "applicationNumber": 7, "periodTo": "2026-07-31", "verified": true },
+    { "type": "PRIME_G703", "startPage": 2, "endPage": 5, "company": "Bartlett Cocke General Contractors, LLC", "applicationNumber": 7, "verified": true },
+
+    { "type": "SUBCONTRACTOR_G702", "startPage": 6, "endPage": 6, "company": "Integrated Demolition and Remediation Inc.", "verified": true },
+    { "type": "SUBCONTRACTOR_G703", "startPage": 7, "endPage": 9, "company": "Integrated Demolition and Remediation Inc.", "verified": true },
+    { "type": "SUBCONTRACTOR_G702", "startPage": 10, "endPage": 10, "company": "Greenrise Technologies LLC", "verified": true },
+    { "type": "SUBCONTRACTOR_G703", "startPage": 11, "endPage": 11, "company": "Greenrise Technologies LLC", "verified": true },
+    { "type": "SUBCONTRACTOR_G702", "startPage": 12, "endPage": 12, "company": "Greenscape Associates", "verified": true },
+    { "type": "SUBCONTRACTOR_G703", "startPage": 13, "endPage": 13, "company": "Greenscape Associates", "verified": true },
+    { "type": "SUBCONTRACTOR_G702", "startPage": 14, "endPage": 14, "company": "Sendero Industries, L.L.C.", "verified": true },
+    { "type": "SUBCONTRACTOR_G703", "startPage": 15, "endPage": 15, "company": "Sendero Industries, L.L.C.", "verified": true },
+
+    { "type": "JOB_COST_REPORT", "startPage": 16, "endPage": 24, "company": "BC General Contractors LLC", "reportDate": "2026-08-03", "note": "9-page transaction report, the General Conditions backup", "verified": true },
+
+    { "type": "INVOICE", "startPage": 25, "endPage": 25, "company": "White Cap, L.P.", "verified": true },
+    { "type": "OTHER", "startPage": 26, "endPage": 28, "company": null, "note": "No text layer — scanned. Type not yet determined.", "verified": false },
+    { "type": "RECEIPT", "startPage": 29, "endPage": 29, "company": "The Home Depot", "verified": true },
+    { "type": "RECEIPT", "startPage": 30, "endPage": 30, "company": "The Home Depot", "verified": true },
+    { "type": "INVOICE", "startPage": 31, "endPage": 31, "company": "Jet Sanitation Services", "verified": true },
+    { "type": "INVOICE", "startPage": 32, "endPage": 32, "company": "Bartlett Cocke LP", "note": "Intercompany contract invoice", "verified": false },
+    { "type": "INVOICE", "startPage": 33, "endPage": 35, "company": null, "note": "Three invoices, one per page, same remit-to in Philadelphia PA", "verified": false },
+    { "type": "INVOICE", "startPage": 36, "endPage": 37, "company": "Satellite Shelters, Inc.", "verified": true },
+    { "type": "INVOICE", "startPage": 38, "endPage": 39, "company": "United Rentals", "verified": true },
+    { "type": "OTHER", "startPage": 40, "endPage": 41, "company": null, "note": "No text layer — scanned.", "verified": false },
+
+    { "type": "JOB_COST_REPORT", "startPage": 42, "endPage": 45, "company": "BC General Contractors LLC", "reportDate": "2026-08-03", "note": "Four single-page transaction reports", "verified": true },
+    { "type": "INVOICE", "startPage": 46, "endPage": 47, "company": null, "verified": false },
+    { "type": "OTHER", "startPage": 48, "endPage": 48, "company": null, "note": "No text layer — scanned.", "verified": false },
+    { "type": "JOB_COST_REPORT", "startPage": 49, "endPage": 51, "company": "BC General Contractors LLC", "reportDate": "2026-08-03", "verified": true },
+    { "type": "RECEIPT", "startPage": 52, "endPage": 52, "company": "The Home Depot", "verified": true },
+    { "type": "RECEIPT", "startPage": 53, "endPage": 53, "company": "The Home Depot", "verified": true },
+    { "type": "INVOICE", "startPage": 54, "endPage": 54, "company": null, "verified": false },
+    { "type": "OTHER", "startPage": 55, "endPage": 55, "company": null, "note": "No text layer — scanned.", "verified": false },
+
+    { "type": "JOB_COST_REPORT", "startPage": 56, "endPage": 61, "company": "BC General Contractors LLC", "reportDate": "2026-06-24", "note": "PRIOR PERIOD. A June report inside a July application — the prior-period-cost case, and it must not be assumed a duplicate.", "verified": true },
+    { "type": "JOB_COST_REPORT", "startPage": 62, "endPage": 67, "company": "BC General Contractors LLC", "reportDate": "2026-08-03", "verified": true }
+  ],
+
+  "expectations": {
+    "_note": "What a correct segmentation must get right, beyond the ranges above.",
+    "mustNotMergeSubApplications": "Pages 6-15 are FOUR separate applications, not one 10-page document. Merging them makes every reconciliation below impossible.",
+    "mustSeparateG702FromG703": "Each subcontractor's G702 and its continuation sheet are distinct documents with distinct extraction schemas.",
+    "mustFlagPagesWithoutText": [26, 27, 28, 40, 41, 48, 55],
+    "mustNotClassifyScannedPagesByGuess": "A page with no text layer must be read as an image or reported as undetermined. It must never be given a type on the basis of the pages either side of it."
+  }
+}

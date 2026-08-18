@@ -1,0 +1,107 @@
+{
+  "_note": "The heart of this case. Four subcontractors, all four reconciling exactly, none of them one-to-one with a single SOV line. The expected result is four PASSes and no variance. Any variance reported here is a false positive and a failure of the case.",
+  "retainageRate": 0.05,
+
+  "_theTrap": {
+    "note": "A subcontractor's G702 'AMOUNT CERTIFIED' is the payment due — NET of retainage. The prime's G703 'THIS APPLICATION' column is GROSS. The reconciliation must compare like with like or every subcontractor on this project shows a false variance equal to 5% of their billing.",
+    "wrongComparison": "certified 161705.20 vs gc gross 170216.00 -> phantom variance of 8510.80",
+    "rightComparison": "gc gross 170216.00 * 0.95 = 161705.20 -> variance 0.00"
+  },
+
+  "subcontractors": [
+    {
+      "name": "Sendero Industries, L.L.C.",
+      "sovAlias": "Sendero",
+      "sourcePages": [14, 15],
+      "amountCertified": 161705.20,
+      "grossThisPeriod": 170216.00,
+      "retainageThisPeriod": 8510.80,
+      "relationship": "ONE_TO_ONE",
+      "primeLines": [
+        { "description": "Earthwork (Building Pad) - Sendero", "gmp": "GMP 2", "division": "31", "thisApplication": 170216.00 }
+      ],
+      "expected": { "status": "MATCH", "variance": 0.00 },
+      "verified": true
+    },
+    {
+      "name": "Integrated Demolition and Remediation Inc.",
+      "sovAlias": "IDR",
+      "sourcePages": [6, 7, 8, 9],
+      "amountCertified": 34898.25,
+      "grossThisPeriod": 36735.00,
+      "retainageThisPeriod": 1836.75,
+      "relationship": "ONE_TO_MANY",
+      "note": "THE HARD ONE. Four prime lines, drawing on three separate allowances, and the same change event (CPR 010) appears three times — once under each allowance it draws from. Matching on name alone finds an acronym; matching on amount alone finds nothing, because no single line equals the certified figure.",
+      "primeLines": [
+        { "description": "AEA 11 CPR 010 - Unforseen Asbestos - Underground Pipe (IDR)", "thisApplication": 18046.00, "fundedBy": "GMP 1 Allowance #1 - Assistance with Removal of Loose Furniture" },
+        { "description": "AEA 08 CPR 009 - Additional Pier Removal (IDR)", "thisApplication": 7040.00, "fundedBy": "GMP 1 Allowance #2 - Unknown Deep Foundation Removal" },
+        { "description": "AEA 11 CPR 010 - Unforseen Asbestos - Underground Pipe (IDR)", "thisApplication": 6393.00, "fundedBy": "GMP 1 Allowance #2 - Unknown Deep Foundation Removal" },
+        { "description": "AEA 11 CPR 010 - Unforseen Asbestos - Underground Pipe (IDR)", "thisApplication": 5256.00, "fundedBy": "GMP 1 Allowance #3 - Unforeseen Asbestos" }
+      ],
+      "expected": { "status": "MATCH", "variance": 0.00, "sumCheck": "18046 + 7040 + 6393 + 5256 = 36735.00; * 0.95 = 34898.25" },
+      "verified": true
+    },
+    {
+      "name": "Greenscape Associates",
+      "sovAlias": "GreenScape",
+      "sourcePages": [12, 13],
+      "amountCertified": 7410.95,
+      "grossThisPeriod": 7801.00,
+      "retainageThisPeriod": 390.05,
+      "relationship": "ONE_TO_MANY",
+      "note": "Base scope and an allowance-funded change event, which is the ordinary CMAR shape rather than an exception.",
+      "primeLines": [
+        { "description": "Tree Protection - GreenScape", "gmp": "GMP 1", "division": "32", "thisApplication": 6400.00 },
+        { "description": "AEA 02 CPR 002 - Tree Trimming & Arborist Inspections (GreenScape)", "thisApplication": 1401.00, "fundedBy": "GMP 1 Allowance #4 - Tree Trimming / Arborist" }
+      ],
+      "expected": { "status": "MATCH", "variance": 0.00 },
+      "verified": true
+    },
+    {
+      "name": "GREENRISE TECHNOLOGIES LLC FKA CONSTRUCTION ECO SERVICES II LLC",
+      "sovAlias": "Greenrise",
+      "sourcePages": [10, 11],
+      "amountCertified": 1064.00,
+      "grossThisPeriod": 1120.00,
+      "retainageThisPeriod": 56.00,
+      "relationship": "ONE_TO_ONE",
+      "note": "The legal name carries a former name. Matching must survive 'FKA' and must not treat the two names as two companies.",
+      "primeLines": [
+        { "description": "Erosion Controls - Greenrise", "gmp": "GMP 1", "division": "31", "thisApplication": 1120.00 }
+      ],
+      "expected": { "status": "MATCH", "variance": 0.00 },
+      "verified": true
+    }
+  ],
+
+  "aliasing": {
+    "_note": "What name matching has to survive on this one project. Every pairing below is real.",
+    "pairs": [
+      { "sov": "IDR", "application": "Integrated Demolition and Remediation Inc.", "kind": "acronym" },
+      { "sov": "GreenScape", "application": "Greenscape Associates", "kind": "case and suffix" },
+      { "sov": "Greenrise", "application": "GREENRISE TECHNOLOGIES LLC FKA CONSTRUCTION ECO SERVICES II LLC", "kind": "former name and legal suffix" },
+      { "sov": "Sendero", "application": "Sendero Industries, L.L.C.", "kind": "legal suffix" },
+      { "sov": "BCGC Self-Perform", "application": null, "kind": "self-perform — no subcontractor application exists and none should be expected" }
+    ]
+  },
+
+  "selfPerform": {
+    "_note": "Lines billed by the contractor itself. They have no subcontractor application and must NOT be reported as unmatched subcontractor billing.",
+    "lines": [
+      "BC-31.92 Roadway Mud & Dust Control - BCGC Self-Perform",
+      "BC-31.91 Weekly SWPPP Maintenenance - BCGC Self-Perform",
+      "BC-32.91 Watering, Protection Maintenance, Tree Foliage - BCGC Self-Perform",
+      "BC-32.91 Tree Protection and Tree Watering - BCGC Self-Perform",
+      "AEA 06 CPR 007 - Relocate Fence (BCGC)",
+      "AEA 03 CPR 003 - Site Surveillance Cameras (BCGC)"
+    ],
+    "expected": { "status": "NOT_APPLICABLE", "note": "Self-perform is reviewed against job-cost backup, not against a subcontractor application." },
+    "verified": true
+  },
+
+  "expectedFindings": [
+    { "ruleCode": "SUB_TO_PRIME_CURRENT_RECONCILIATION", "status": "PASS", "count": 4, "note": "All four reconcile to 0.00 once retainage basis is aligned." },
+    { "ruleCode": "UNMATCHED_SUB_BILLING", "status": "PASS", "note": "No subcontractor billed anything the prime did not carry." },
+    { "ruleCode": "UNMATCHED_GC_BILLING", "status": "REVIEW", "note": "Prime lines billed this period with no subcontractor application behind them are self-perform and pass-through. They need job-cost backup, not an application — see general-conditions.json.", "verified": false }
+  ]
+}

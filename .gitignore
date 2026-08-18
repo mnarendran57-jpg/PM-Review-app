@@ -23,3 +23,5 @@ dist/
 # OS cruft
 .DS_Store
 Thumbs.db
+# Gold-standard source documents are real project financials — never committed.
+backend/evals/gold-standard/*/source/

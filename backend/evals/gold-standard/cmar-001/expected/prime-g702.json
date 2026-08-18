@@ -1,0 +1,72 @@
+{
+  "_note": "Page 1. Every figure read off the certificate and every relationship between them recalculated. This application's arithmetic is CORRECT — the expected result is that no G702 math finding is raised.",
+  "sourcePage": 1,
+  "verified": true,
+
+  "header": {
+    "owner": "Aldine Independent School District",
+    "project": "Carver High School Rebuild",
+    "contractor": "Bartlett Cocke General Contractors, LLC",
+    "architect": "Stantec Architecture, Inc.",
+    "applicationNumber": 7,
+    "periodTo": "2026-07-31",
+    "contractFor": "Aldine Independent School District - Carver High School Rebuild - GMP 01 & GMP 02"
+  },
+
+  "lines": {
+    "line1_originalContractSum": 16408051.00,
+    "line2_netChangeByChangeOrders": 0.00,
+    "line3_contractSumToDate": 16408051.00,
+    "line4_totalCompletedAndStored": 1927263.16,
+    "line5a_retainageCompletedWork": 96363.16,
+    "line5a_rate": 0.05,
+    "line5b_retainageStoredMaterials": 0.00,
+    "line5b_rate": 0.05,
+    "line5_totalRetainage": 96363.16,
+    "line6_totalEarnedLessRetainage": 1830900.00,
+    "line7_lessPreviousCertificates": 1467480.00,
+    "line8_currentPaymentDue": 363420.00,
+    "line9_balanceToFinishPlusRetainage": 14577151.00
+  },
+
+  "recalculations": {
+    "_note": "Each of these must be computed in code and must agree with the stated figure. All five do.",
+    "contractSumToDate": { "formula": "line1 + line2", "expected": 16408051.00, "agrees": true },
+    "retainage": { "formula": "line4 * 0.05", "expected": 96363.158, "stated": 96363.16, "agrees": true, "note": "Half-cent rounding. Tolerance must accept this." },
+    "earnedLessRetainage": { "formula": "line4 - line5", "expected": 1830900.00, "agrees": true },
+    "currentPaymentDue": { "formula": "line6 - line7", "expected": 363420.00, "agrees": true },
+    "balanceToFinish": { "formula": "line3 - line6", "expected": 14577151.00, "agrees": true }
+  },
+
+  "tiesToG703": {
+    "_note": "The G702 must agree with the continuation sheet, but only where the two actually measure the same thing.",
+    "line4_equals_g703_completedAndStoredTotal": { "g702": 1927263.16, "g703": 1927263.16, "agrees": true },
+    "line5_equals_g703_retainageTotal": { "g702": 96363.16, "g703": 96363.16, "agrees": true },
+    "line9_versus_g703_balanceColumn": {
+      "g702": 14577151.00,
+      "g703": 14480787.84,
+      "difference": 96363.16,
+      "agrees": true,
+      "note": "THESE ARE NOT THE SAME FIGURE AND MUST NOT BE COMPARED DIRECTLY. Line 9 is balance to finish PLUS retainage; the G703 column is current value less completed. They differ by exactly the retainage, which is the proof they are both right. A reviewer that reports a $96,363.16 variance here has failed this case."
+    }
+  },
+
+  "signature": {
+    "contractorSignedBy": "Jared Rheinlander, Project Manager",
+    "contractorSignaturePresent": false,
+    "notaryBlockPresent": true,
+    "notaryCompleted": false,
+    "notaryCommissionExpiry": null,
+    "architectCertifiedAmount": null,
+    "expectedStatus": "MISSING",
+    "note": "The state, county, notary name and commission expiry are all blank, and no amount is certified by the architect. This is a DRAFT — the filename says so. Expected finding is that execution is incomplete, at INFO or LOW severity given the draft status, never PASS.",
+    "verified": true
+  },
+
+  "expectedFindings": [
+    { "ruleCode": "G702_MATH", "status": "PASS", "note": "All five relationships recalculate exactly." },
+    { "ruleCode": "CONTRACT_TOTAL", "status": "PASS", "note": "Line 3 equals line 1 plus line 2, and line 2 is zero." },
+    { "ruleCode": "RETAINAGE", "status": "PASS", "note": "5% of completed work, no retainage on stored materials because there are none." },
+    { "ruleCode": "NOTARY", "status": "MISSING", "severity": "LOW", "note": "Notary block blank on a draft application." }
+  ]
+}
