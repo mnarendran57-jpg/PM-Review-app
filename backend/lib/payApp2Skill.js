@@ -683,20 +683,29 @@ function checkContractTerms(cur, profile, f) {
   // fails to use the exemption certificate absorbs the tax without reimbursement — so tax billed to
   // an exempt owner is non-reimbursable regardless of whether the contractor actually paid it.
   //
-  // Tax is rarely a labelled line; it is folded into a material cost. This check only catches an
-  // identifiable amount, and the INFO finding exists to prompt the manual look.
+  // CITE THE CLAUSE, NOT THE INFERENCE. Whether an owner is exempt can be guessed from its name —
+  // a school district, a city — and that guess tells you nothing about the billing rule. Without
+  // the clause, the honest report is "we did not find it", which is actionable. The alternative,
+  // "confirm no tax is embedded, including on rented equipment", is a worry dressed as a finding,
+  // and it implies the contract was read and found ambiguous when it was never read at all.
   if (profile.owner_tax_exempt) {
     const tax = cur.tax_billed;
     const cite = profile.citations?.owner_tax_exempt;
+    const rule = profile.tax_rule_summary;
     if (tax && num(tax) > TOL) {
       f.add(CRITICAL, 'TAX_BILLED_TO_EXEMPT_OWNER',
-        `Sales/use tax of ${money(num(tax))} billed to a tax-exempt owner. Under the contract the `
-        + 'contractor absorbs tax it failed to avoid via the exemption certificate.',
+        `Sales/use tax of ${money(num(tax))} is billed to a tax-exempt owner. Not reimbursable — the `
+        + 'contractor absorbs tax it failed to avoid with the exemption certificate.',
         { expected: 0, found: num(tax), delta: num(tax), location: 'tax line', citation: cite });
+    } else if (!cite) {
+      f.add(MEDIUM, 'TAX_CLAUSE_NOT_LOCATED',
+        "Owner is tax-exempt, but the contract's tax clause was not located, so the billing rule is "
+        + 'unverified. Locate it before relying on this review for tax.');
     } else {
-      f.add(INFO, 'TAX_EXEMPT_OWNER',
-        'Owner is tax-exempt. Confirm no sales/use tax is embedded in line items, including on '
-        + 'rented or leased equipment.', { citation: cite });
+      // The title already says no tax is billed, so the message is the RULE and nothing else —
+      // repeating the fact in both halves wastes the one sentence a reader is most likely to read.
+      f.add(INFO, 'TAX_EXEMPT_OWNER', rule || 'Tax is not reimbursable by this owner.',
+        { citation: cite });
     }
   }
 
@@ -904,15 +913,21 @@ function toContractProfile(contractTerms, contracts) {
     retainage_exempt_items: null,
     owner_tax_exempt: t.taxExempt === true,
     tax_exemption_scope: t.taxExemptBasis || null,
-    // Whether the contractor absorbs tax it failed to avoid is the sentence that decides the
-    // finding, so it is carried verbatim from the clause rather than paraphrased.
-    tax_failure_consequence: taxItem?.basis || null,
+    // The operative rule in a sentence, carried verbatim so it can be quoted straight into a
+    // report. It comes from the CLAUSE — the contract term about taxes — and from nowhere else.
+    tax_rule_summary: taxItem?.basis || null,
     stored_materials_require_offsite_consent: null,
     g702_all_blanks_required: null,
     citations: {
       contract_sum: primary?.label ? `${primary.label} (contract on file)` : null,
       retainage_rate: null,
-      owner_tax_exempt: t.taxExemptBasis || taxItem?.basis || null,
+      // ONLY the tax clause counts as a citation here. `taxExemptBasis` is how the contract read
+      // concluded the owner is exempt, and on a real agreement it came back as "Owner is Aldine
+      // Independent School District … per Section 1.1.8 and signature block" — an inference from
+      // who the owner is, which says nothing about the billing rule. Accepting it as the citation
+      // made the review look as though it had read a tax clause it had never found, and made the
+      // "clause not located" finding unreachable.
+      owner_tax_exempt: taxItem?.basis || null,
       stored_materials: null,
       g702_requirements: null,
     },
@@ -1126,7 +1141,7 @@ ${JSON.stringify({
     retainage_rate: profile.retainage_rate,
     owner_tax_exempt: profile.owner_tax_exempt,
     tax_exemption_scope: profile.tax_exemption_scope,
-    tax_failure_consequence: profile.tax_failure_consequence,
+    tax_rule_summary: profile.tax_rule_summary,
   }, null, 2)}
 ` : '\nNo contract was available. Record what you see and leave every conclusion to the report.\n'}
 Where a page is too poor to read, say so. A gap you flag is recoverable; a guess presented as a
@@ -1302,7 +1317,8 @@ const TITLES = {
   NO_CONTRACT_PROFILE: 'No contract was available, so nothing was checked against one',
   CONTRACT_SUM_MISMATCH: 'The contract sum on the cover sheet is not the executed contract sum',
   TAX_BILLED_TO_EXEMPT_OWNER: 'Sales tax was billed to an owner that does not pay it',
-  TAX_EXEMPT_OWNER: 'The owner is tax-exempt — check for tax buried in the line items',
+  TAX_EXEMPT_OWNER: 'No tax is billed on this application, and the owner does not pay it',
+  TAX_CLAUSE_NOT_LOCATED: "The contract's tax clause was not found, so the tax rule is unverified",
   STORED_MATERIALS_BACKUP: 'Stored materials need a bill of sale behind them',
   G702_INCOMPLETE: 'The cover sheet has blanks the contract requires filled',
   G702_UNSIGNED: 'The cover sheet is not signed',
@@ -1315,7 +1331,6 @@ const TITLES = {
   NOTARY_COMMISSION_EXPIRED: "The notary's commission had expired",
   NOTARY_NO_ID: "The notary's ID number could not be read",
   NOTARY_DATE_UNPARSED: 'The notary dates could not be read',
-  EMBEDDED_TAX: 'Tax may be buried in the line items',
 };
 
 // HOW A FINDING REACHES THE PAGE. Every rendering — screen, PDF, Markdown — takes the FIRST
@@ -1481,14 +1496,15 @@ async function reviewPayApp({
 
   const findings = kept.map(toAppFinding);
 
-  const et = reading?.embeddedTax;
-  if (profile?.owner_tax_exempt && et?.whereItCouldHide) {
-    findings.push({
-      id: 'EMBEDDED_TAX', severity: SEVERITY.NOTE, skillSeverity: INFO, check: 'EMBEDDED_TAX',
-      title: TITLES.EMBEDDED_TAX,
-      detail: `${TITLES.EMBEDDED_TAX}. ${et.whereItCouldHide} Verifying this needs backup the pay `
-        + 'application does not include, so it is recorded as an exposure rather than an amount.',
-    });
+  // ONE SUBJECT, ONE ENTRY. There used to be a second tax entry here, built from where the model
+  // thought tax might be hiding. Two notes about tax is one note, and that one was the weaker of
+  // the pair: "tax may be buried in the line items" names no figure, cites no clause, and sends the
+  // reader to the same place the tax finding above already sends them. Where it says something
+  // specific about the package it now rides on that finding instead of competing with it.
+  const hiding = profile?.owner_tax_exempt ? reading?.embeddedTax?.whereItCouldHide : null;
+  if (hiding) {
+    const taxEntry = findings.find(x => /^TAX_/.test(x.check));
+    if (taxEntry) taxEntry.detail += ` Where it could be hiding: ${hiding}`;
   }
 
   // PROGRESS JUDGMENTS GO ON THE SITE CHECKLIST, NOT IN THE FINDINGS LIST. A line jumping 5% to 85%

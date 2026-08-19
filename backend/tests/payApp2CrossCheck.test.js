@@ -211,6 +211,65 @@ const checks = r => r.findings.map(f => f.check);
       'a scheduled value that differs only because last month was misread is not a change order finding');
   });
 
+  // TAX: CITE THE CLAUSE, NEVER THE INFERENCE.
+  //
+  // Whether an owner is exempt can be guessed from its name. That guess says nothing about the
+  // billing rule, and a review built on it produces hedging language that reads as though nobody
+  // checked. So there are three distinct outcomes, and which one appears depends on whether the
+  // contract's tax CLAUSE was actually found.
+  const terms = (extra = {}) => ({
+    party: 'HTX Industries, LLC', taxExempt: true,
+    taxExemptBasis: 'Owner is Houston Community College System, a public college district',
+    originalContractSum: null, retainageRate: null, unallowableItems: [], ...extra,
+  });
+  const TAX_CLAUSE = {
+    item: 'Taxes from which Owner is exempt',
+    basis: 'Supp. Cond. Art. 6 (p.46): exemption covers purchase, rental and lease; a contractor '
+      + 'who does not use the certificate absorbs the tax and Owner does not reimburse it.',
+  };
+
+  await test('a tax-exempt owner with no clause found says the clause was not found', async () => {
+    const r = await run(application(), { contractTerms: terms(), contracts: [] });
+    assert.ok(checks(r).includes('TAX_CLAUSE_NOT_LOCATED'),
+      'the honest answer is that the clause was not located');
+    assert.ok(!checks(r).includes('TAX_EXEMPT_OWNER'),
+      'a reminder implies the contract was read and found ambiguous when it was never read');
+    const f = r.findings.find(x => x.check === 'TAX_CLAUSE_NOT_LOCATED');
+    assert.ok(!/confirm no sales/i.test(f.detail), 'no vague worry in place of a rule');
+  });
+
+  await test('the owner-identity sentence is not accepted as a tax citation', async () => {
+    // taxExemptBasis names WHO the owner is. That is an inference, not the billing rule.
+    const r = await run(application(), { contractTerms: terms(), contracts: [] });
+    const f = r.findings.find(x => x.check === 'TAX_CLAUSE_NOT_LOCATED');
+    assert.ok(f, 'without a clause the review must say so');
+    assert.ok(!/Houston Community College/.test(f.detail),
+      'who the owner is must never be presented as the clause that governs tax');
+  });
+
+  await test('with the clause found and no tax billed, the rule itself is quoted', async () => {
+    const r = await run(application(), {
+      contractTerms: terms({ unallowableItems: [TAX_CLAUSE] }), contracts: [],
+    });
+    assert.ok(checks(r).includes('TAX_EXEMPT_OWNER'));
+    const f = r.findings.find(x => x.check === 'TAX_EXEMPT_OWNER');
+    assert.match(f.detail, /absorbs the tax/, 'the operative rule must be quotable from the report');
+    assert.match(f.detail, /Supp\. Cond\. Art\. 6/, 'and it must carry its citation');
+  });
+
+  await test('tax actually billed to an exempt owner is critical, and said once', async () => {
+    const app = application();
+    app.taxes = [{ vendor: 'White Cap', amount: 27.33 }, { vendor: 'Quill', amount: 18.28 }];
+    const r = await run(app, {
+      contractTerms: terms({ unallowableItems: [TAX_CLAUSE] }), contracts: [],
+    });
+    const taxEntries = r.findings.filter(x => /^TAX_/.test(x.check));
+    assert.strictEqual(taxEntries.length, 1, 'one subject, one entry — two notes about tax is one note');
+    assert.strictEqual(taxEntries[0].check, 'TAX_BILLED_TO_EXEMPT_OWNER');
+    assert.strictEqual(taxEntries[0].severity, 'critical');
+    assert.strictEqual(taxEntries[0].actual, 45.61, 'the amount is summed in code, not by the model');
+  });
+
   console.log(failures ? `\n${failures} failing` : '\nall passing');
   process.exit(failures ? 1 : 0);
 })();
