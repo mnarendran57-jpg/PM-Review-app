@@ -270,6 +270,55 @@ const checks = r => r.findings.map(f => f.check);
     assert.strictEqual(taxEntries[0].actual, 45.61, 'the amount is summed in code, not by the model');
   });
 
+  // COLUMN ORDER IS NOT STANDARD BETWEEN FORMS.
+  //
+  // Some continuation sheets print "% (G / C)" then "Balance to Finish (C - G)"; others reverse
+  // exactly those two. A reading that maps by position transposes them on the second kind, and
+  // nothing else here catches it — the cross-check derives the scheduled value from G+H and from
+  // G/pct, and with the columns swapped both derivations are nonsense, so they disagree, no
+  // consensus forms, and no cell is ever flagged.
+  const transposed = () => {
+    const app = application();
+    app.lineItems = app.lineItems.map(li => ({ ...li, h: li.pctComplete, pctComplete: li.h }));
+    app.lineItems.push(
+      { ...line('4', 'Controls', 40000, 0, 10000, 10000, 0, 0), h: 25, pctComplete: 30000 },
+      { ...line('5', 'Balancing', 20000, 0, 5000, 5000, 0, 0), h: 25, pctComplete: 15000 },
+    );
+    return app;
+  };
+
+  await test('columns read the wrong way round are caught, not blamed on the contractor', async () => {
+    const r = await run(transposed());
+    assert.ok(checks(r).includes('COLUMNS_TRANSPOSED'), 'the transposition must be reported');
+    const f = r.findings.find(x => x.check === 'COLUMNS_TRANSPOSED');
+    assert.strictEqual(f.severity, 'material');
+    assert.match(f.detail, /fault in the reading, not a finding about the contractor/);
+  });
+
+  await test('the row failures a transposition causes are named as its symptoms', async () => {
+    const r = await run(transposed());
+    const symptoms = r.findings.filter(x => x.check === 'G703_ROW_H' || x.check === 'G703_ROW_PCT');
+    assert.ok(symptoms.length, 'a transposition does fail the row checks');
+    for (const s of symptoms) {
+      assert.match(s.detail, /wrong way round/,
+        'every row failure must point at the one cause rather than read as its own problem');
+    }
+  });
+
+  await test('a correctly read schedule is never accused of transposing its columns', async () => {
+    const r = await run(application());
+    assert.ok(!checks(r).includes('COLUMNS_TRANSPOSED'));
+  });
+
+  await test('a nearly-finished line with a small balance is not mistaken for a transposition', async () => {
+    const app = application();
+    // Real schedules carry lines with almost nothing left on them. That is not a swapped column.
+    app.lineItems = app.lineItems.map(li => ({ ...li, h: 50, pctComplete: 99 }));
+    const r = await run(app);
+    assert.ok(!checks(r).includes('COLUMNS_TRANSPOSED'),
+      'small balances alone must not trigger it — the percentages here are still percentages');
+  });
+
   console.log(failures ? `\n${failures} failing` : '\nall passing');
   process.exit(failures ? 1 : 0);
 })();

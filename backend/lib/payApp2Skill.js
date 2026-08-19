@@ -321,6 +321,49 @@ function checkG703Rows(cur, f) {
   }
 }
 
+// --- has the reading put the columns in the right fields? ----------------------------------------
+//
+// Continuation sheets do not agree on column order. One layout prints "% (G / C)" then "Balance to
+// Finish (C - G)"; another prints them the other way round. A reading that maps by position rather
+// than by header text transposes the two on the second kind, and NOTHING ELSE HERE CATCHES IT.
+//
+// The cross-check can't: it derives the scheduled value from G+H and from G/pct, and with the two
+// swapped both derivations are nonsense, so they disagree with each other, no consensus forms, and
+// no cell is ever flagged. The row checks can't either — they just fail on every line at once and
+// blame the contractor for it.
+//
+// So this is checked directly, on what the figures LOOK like. A percent-complete column holds
+// numbers between roughly zero and a hundred; a balance-to-finish column holds dollars. When the
+// percentages are in the thousands and the balances are all under a hundred, across most of a
+// schedule, the two columns have been read the wrong way round.
+//
+// Deliberately hard to trigger: a real schedule can carry a nearly-finished line with $50 left on
+// it, so this needs a sample and a strong majority before it will say anything.
+const MIN_ROWS_TO_JUDGE = 5;
+const LOOKS_LIKE_MONEY = 200;   // a percent complete never runs to the hundreds
+const LOOKS_LIKE_PERCENT = 100; // a balance to finish rarely sits under a hundred dollars
+
+function transposedRows(cur) {
+  const rows = (cur.g703?.line_items || [])
+    .filter(r => present(r.pct_complete) && present(r.balance_to_finish));
+  if (rows.length < MIN_ROWS_TO_JUDGE) return null;
+  const swapped = rows.filter(r => num(r.pct_complete) > LOOKS_LIKE_MONEY
+    && Math.abs(num(r.balance_to_finish)) <= LOOKS_LIKE_PERCENT);
+  return swapped.length >= rows.length * 0.6 ? { swapped: swapped.length, of: rows.length } : null;
+}
+
+function checkColumnOrientation(cur, f) {
+  const t = transposedRows(cur);
+  if (!t) return;
+  f.add(HIGH, 'COLUMNS_TRANSPOSED',
+    `On ${t.swapped} of ${t.of} schedule lines the percent-complete column holds what looks like a `
+    + 'dollar amount and the balance-to-finish column holds what looks like a percentage. These two '
+    + 'columns appear to have been read the wrong way round — on this form the balance to finish '
+    + 'sits to the right of the percentage. Nothing below can be relied on until the reading is '
+    + 'corrected; this is a fault in the reading, not a finding about the contractor.',
+    { location: 'Schedule column headers' });
+}
+
 // --- G703 column footing -----------------------------------------------------------------------
 
 const FOOTING_COLUMNS = [
@@ -795,6 +838,9 @@ function checkLienWaiver(cur, f) {
 
 function validate(cur, prior, profile, { priorSupplied = false } = {}) {
   const f = new Findings();
+  // First, because if the columns went into the wrong fields then every check after this is
+  // measuring the wrong figures and the report needs to say so once rather than fail on every line.
+  checkColumnOrientation(cur, f);
   checkG702Internal(cur, f);
   checkG702ToG703(cur, f);
   checkG703Rows(cur, f);
@@ -1094,7 +1140,12 @@ function rereadRequest(suspects) {
     + `    transcribed as ${money(s.stated)}; the form's own arithmetic indicates `
     + `${money(s.consensus)}. ${s.note}`
   ));
-  return 'RE-READ THESE CELLS FIRST. Each disagrees with what the rest of the form says it should '
+  return 'FIND EACH CELL BY ITS COLUMN HEADER, not by counting columns across the row. Continuation '
+    + 'sheets do not agree on column order — some print the percentage before the balance to finish '
+    + 'and some after — so locate the header that matches the cell named below and read the figure '
+    + 'underneath it. A figure read from the neighbouring column looks perfectly plausible and is '
+    + 'the one mistake this step exists to prevent.\n\n'
+    + 'RE-READ THESE CELLS FIRST. Each disagrees with what the rest of the form says it should '
     + 'be, which means EITHER the transcription is wrong OR the form is inconsistent. Only a second '
     + 'reading of the page can tell those apart, and every finding below depends on knowing which '
     + 'it is.\n\nReturn one cellReadings entry per cell, with "ref" set to the bracketed tag '
@@ -1208,6 +1259,17 @@ function applyRereads(cur, suspects, readings) {
 const ROW_CHECK_COLUMN = { G703_ROW_G: 'G', G703_ROW_H: 'H' };
 
 function groupByRootCause(items) {
+  // A transposed pair of columns fails the balance and percentage checks on every line at once.
+  // Those are one problem with many symptoms, and the symptoms point at the contractor while the
+  // problem is in the reading.
+  if (items.some(it => it.check === 'COLUMNS_TRANSPOSED')) {
+    for (const it of items) {
+      if (it.check === 'G703_ROW_H' || it.check === 'G703_ROW_PCT') {
+        it.rootCause = 'the percentage and balance columns being read the wrong way round';
+      }
+    }
+  }
+
   const columnsWithRowFailures = new Set(
     items.filter(it => ROW_CHECK_COLUMN[it.check]).map(it => ROW_CHECK_COLUMN[it.check]),
   );
@@ -1286,6 +1348,7 @@ const TITLES = {
   G702_LINE9: 'The balance to finish does not add up',
   G702_G703_TIE: 'The cover sheet and the schedule disagree on the total billed',
   G702_G703_TIE_SKIPPED: 'The schedule total was not captured, so the cover sheet tie was not checked',
+  COLUMNS_TRANSPOSED: 'The percentage and balance columns look like they were read the wrong way round',
   G703_ROW_G: 'A schedule line does not add across',
   G703_ROW_H: "A schedule line's balance does not follow from its own figures",
   G703_ROW_PCT: 'A percentage complete does not match the figures beside it',

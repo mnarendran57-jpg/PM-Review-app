@@ -8,12 +8,57 @@ const { askForJson } = require('./aiJson');
 // Declared as a tool schema rather than described in the prompt: a continuation-sheet
 // description like '6" CW piping' would otherwise end the JSON string on the inch mark and
 // lose the whole extraction. See lib/aiJson.js.
+// MAP BY HEADER TEXT, NEVER BY COLUMN LETTER OR POSITION.
+//
+// These field names are letters because the AIA form's own columns are lettered, and that made
+// them look like positions. They are not: they are the six quantities a continuation sheet
+// carries, and different form versions print them in different orders.
+//
+// One real G703 labels the seventh column "% (G / C)" and the eighth "Balance to Finish (C - G)" —
+// the reverse of the usual arrangement. Read positionally, the percentage lands in `h` and the
+// balance in `pctComplete`, and every check downstream then compares a percentage against a dollar
+// amount. Nothing about that failure announces itself: the numbers are real, they are simply in
+// the wrong fields.
+//
+// So each field below says what the column MEANS and what it is likely to be CALLED, and the
+// prompt tells the reader to find the header row before transcribing anything.
 const COLUMN_ROW = extra => ({
   type: 'object',
   properties: {
     ...extra,
-    c: { type: 'number' }, d: { type: 'number' }, e: { type: 'number' },
-    f: { type: 'number' }, g: { type: 'number' }, h: { type: 'number' },
+    c: {
+      type: 'number',
+      description: 'SCHEDULED VALUE — the full value allotted to this line. Headed "Scheduled '
+        + 'Value" or "Contract Amount". Usually column C.',
+    },
+    d: {
+      type: 'number',
+      description: 'WORK COMPLETED FROM PREVIOUS APPLICATION — billed before this period. Headed '
+        + '"From Previous Application", "Previous Applications" or "Prior". Usually column D.',
+    },
+    e: {
+      type: 'number',
+      description: 'WORK COMPLETED THIS PERIOD — billed in this period alone. Headed "This '
+        + 'Period". Usually column E.',
+    },
+    f: {
+      type: 'number',
+      description: 'MATERIALS PRESENTLY STORED, not already in the previous or this-period '
+        + 'columns. Headed "Materials Presently Stored" or "Stored Materials". Usually column F.',
+    },
+    g: {
+      type: 'number',
+      description: 'TOTAL COMPLETED AND STORED TO DATE — the running total. Headed "Total '
+        + 'Completed and Stored to Date". Usually column G.',
+    },
+    h: {
+      type: 'number',
+      description: 'BALANCE TO FINISH — the DOLLAR amount left on this line, scheduled value minus '
+        + 'total to date. Headed "Balance to Finish", often with "(C - G)" beside it. This is a '
+        + 'dollar amount and NEVER a percentage. On some forms it is printed in column I, to the '
+        + 'RIGHT of the percentage column — take it from wherever the "Balance to Finish" header '
+        + 'sits, not from the eighth column.',
+    },
   },
 });
 
@@ -62,11 +107,14 @@ function payAppShape(withSubBreakdowns) {
           description: { type: 'string' },
           pctComplete: {
             type: 'number',
-            description: 'The %(G/C) column as printed, a number like 65 for 65%.',
+            description: 'PERCENT COMPLETE — headed "%" or "% (G / C)". A number like 65 for 65%, '
+              + 'never a dollar amount. On some forms this sits in column H, to the LEFT of the '
+              + 'balance to finish — take it from wherever the "%" header sits.',
           },
           retainage: {
             type: 'number',
-            description: 'The per-line retainage column I amount, if a variable rate is used.',
+            description: 'PER-LINE RETAINAGE, where the sheet prints a retainage column, headed '
+              + '"Retainage". Omit where the form has no such column.',
           },
         }),
       },
@@ -510,6 +558,8 @@ ${hasPrevious
     : 'You are given ONE document: the CURRENT pay application. No previous application was supplied.'}
 
 Extract every field exactly as it appears — do not compute, correct, or round anything, just transcribe the numbers. Be thorough: process every page of the continuation sheet and include every line item, even if there are many. Do not summarize, skip, or truncate line items to save space.
+
+READ THE CONTINUATION SHEET'S HEADER ROW BEFORE YOU TRANSCRIBE A SINGLE FIGURE, and map every column by what its header SAYS — never by its position in the row or by the letter you expect it to carry. Column order is not standard between form versions. One common layout prints "% (G / C)" in the seventh column and "Balance to Finish (C - G)" in the eighth; another reverses exactly those two. Read positionally on the second kind and every percentage is recorded as a dollar balance and every balance as a percentage, which no later check can detect, because both figures are real and only their labels were swapped. If the header row is illegible on a page, say so by omitting the fields rather than guessing from position.
 
 Lines 1-9 on the summary/cover sheet are almost always printed explicitly somewhere on the page — look carefully for all of them, even if the exact wording or layout differs slightly from a standard AIA G702 form (for example "Total Earned to Date" or "Total Completed to Date" both mean the same thing as Line 4; "Amount Due This Application" or "Current Payment Due" both mean Line 8; "Balance to Finish" or "Remaining Balance" both mean Line 9). Only omit a line if it truly does not appear anywhere on the page — do not give up early on these nine fields, they matter more than any other field on the document.
 
