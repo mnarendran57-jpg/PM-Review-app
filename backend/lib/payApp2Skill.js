@@ -93,6 +93,17 @@ class Findings {
   count(sev) { return this.items.filter(f => f.severity === sev).length; }
 }
 
+// Where a finding sits, said once. A schedule whose item numbers ARE descriptions ("GMP 2 Work
+// Remaining to be Procured") otherwise prints the same phrase twice with a dash between it, which
+// reads as a transcription fault in a document whose whole job is to look precise.
+function rowLocation(row) {
+  const itemNo = String(row.item_no ?? '').trim();
+  const desc = String(row.description || '').trim().slice(0, 60);
+  if (!itemNo) return desc ? `Schedule line — ${desc}` : 'Schedule line';
+  if (!desc || desc.toLowerCase() === itemNo.toLowerCase()) return `Schedule line ${itemNo}`;
+  return `Schedule line ${itemNo} — ${desc}`;
+}
+
 // --- G703 row-level ----------------------------------------------------------------------------
 
 // Run against every line item. These are the checks that catch errors surviving total-level
@@ -101,7 +112,7 @@ class Findings {
 // only the row sees it.
 function checkG703Rows(cur, f) {
   for (const row of cur.g703?.line_items || []) {
-    const loc = `G703 item ${row.item_no ?? '?'} — ${String(row.description || '').slice(0, 45)}`;
+    const loc = rowLocation(row);
     const C = num(row.scheduled_value);
     const D = num(row.prior_completed);
     const E = num(row.this_period);
@@ -182,7 +193,7 @@ function checkG703Footing(cur, f) {
     const computed = rows.reduce((s, r) => s + num(r[key]), 0);
     if (!close(stated, computed)) {
       f.add(HIGH, 'G703_FOOTING', `Column ${col} rows do not sum to the stated total.`,
-        { expected: computed, found: stated, delta: stated - computed, location: `G703 column ${col} total` });
+        { expected: computed, found: stated, delta: stated - computed, location: `Schedule column ${col} total` });
     }
   }
 }
@@ -194,7 +205,7 @@ function checkContingencyAndCredits(cur, f) {
   const credits = rows.filter(r => num(r.scheduled_value) < 0);
 
   for (const r of credits) {
-    const loc = `G703 item ${r.item_no ?? '?'} — ${String(r.description || '').slice(0, 45)}`;
+    const loc = rowLocation(r);
     const C = num(r.scheduled_value);
     const G = num(r.total_to_date);
     if (G > TOL) {
@@ -217,7 +228,7 @@ function checkContingencyAndCredits(cur, f) {
     const drawn = num(cont.drawn_to_date);
     if (authorized && drawn - authorized > TOL) {
       f.add(CRITICAL, 'CONTINGENCY_EXCEEDED', 'Contingency drawn exceeds the authorized allowance.',
-        { expected: authorized, found: drawn, delta: drawn - authorized, location: 'G703 contingency' });
+        { expected: authorized, found: drawn, delta: drawn - authorized, location: 'Contingency on the schedule' });
     } else if (authorized) {
       f.add(INFO, 'CONTINGENCY_STATUS',
         `Contingency: ${money(drawn)} drawn of ${money(authorized)} authorized (${money(authorized - drawn)} remaining).`);
@@ -258,7 +269,7 @@ function checkG702Internal(cur, f) {
   for (const [key, label, exp, got] of lines) {
     if (!close(exp, got)) {
       f.add(HIGH, `G702_${key.toUpperCase()}`, label,
-        { expected: exp, found: got, delta: got - exp, location: `G702 ${key}` });
+        { expected: exp, found: got, delta: got - exp, location: `Cover sheet ${key.replace('line', 'line ')}` });
     }
   }
 }
@@ -277,7 +288,7 @@ function checkG702ToG703(cur, f) {
   const G = num(totals.total_to_date);
   if (!close(L4, G)) {
     f.add(CRITICAL, 'G702_G703_TIE', 'G702 Line 4 must equal the G703 column G grand total.',
-      { expected: G, found: L4, delta: L4 - G, location: 'G702 line 4 / G703 column G' });
+      { expected: G, found: L4, delta: L4 - G, location: 'Cover sheet line 4 against the schedule total' });
   }
 }
 
@@ -311,7 +322,7 @@ function checkRetainage(cur, contract, f) {
     const exp = completed * rate;
     if (!close(L5a, exp)) {
       f.add(CRITICAL, 'RETAINAGE_COMPLETED', `Retainage on completed work must be ${ratePct} of (D+E).`,
-        { expected: exp, found: L5a, delta: L5a - exp, location: 'G702 line 5a', citation: cite });
+        { expected: exp, found: L5a, delta: L5a - exp, location: 'Cover sheet line 5a', citation: cite });
     }
   }
 
@@ -320,7 +331,7 @@ function checkRetainage(cur, contract, f) {
     const exp = stored * rate;
     if (!close(L5b, exp)) {
       f.add(HIGH, 'RETAINAGE_STORED', `Retainage on stored material must be ${ratePct} of F.`,
-        { expected: exp, found: L5b, delta: L5b - exp, location: 'G702 line 5b', citation: cite });
+        { expected: exp, found: L5b, delta: L5b - exp, location: 'Cover sheet line 5b', citation: cite });
     }
   }
 
@@ -334,7 +345,7 @@ function checkRetainage(cur, contract, f) {
     if (Math.abs(eff - rate) > 0.001) {
       f.add(HIGH, 'RETAINAGE_EFFECTIVE_RATE',
         `Total retainage is ${(eff * 100).toFixed(2)}% of Line 4; contract specifies ${ratePct}.`,
-        { expected: L4 * rate, found: L5, delta: L5 - L4 * rate, location: 'G702 line 5', citation: cite });
+        { expected: L4 * rate, found: L5, delta: L5 - L4 * rate, location: 'Cover sheet line 5', citation: cite });
     }
   }
 
@@ -363,7 +374,7 @@ function checkRetainageAdjustedSum(cur, contract, f) {
     f.add(HIGH, 'RETAINAGE_ADJUSTED_SUM',
       `Sum of this-period billings x ${(1 - rate).toFixed(2)} does not equal Line 8. This usually `
       + 'means a line moved without the cover sheet following, or retainage was applied unevenly.',
-      { expected: periodNet, found: L8, delta: L8 - periodNet, location: 'G703 column E -> G702 line 8' });
+      { expected: periodNet, found: L8, delta: L8 - periodNet, location: 'Schedule column E against cover sheet line 8' });
   }
 }
 
@@ -393,7 +404,7 @@ function checkContinuity(cur, prior, f) {
   const curRows = cur.g703?.line_items || [];
 
   for (const r of curRows) {
-    const loc = `G703 item ${r.item_no ?? '?'} — ${String(r.description || '').slice(0, 45)}`;
+    const loc = rowLocation(r);
     const p = priRows.get(rowKey(r));
     if (!p) {
       // MEDIUM rather than HIGH: new lines are routine on projects with active change orders. This
@@ -428,7 +439,7 @@ function checkContinuity(cur, prior, f) {
     if (curKeys.has(k)) continue;
     if (Math.abs(num(p.total_to_date)) > TOL) {
       f.add(HIGH, 'DROPPED_LINE_ITEM', 'Line item billed in the prior application is absent here.',
-        { expected: num(p.total_to_date), location: `prior G703 item ${p.item_no ?? '?'}` });
+        { expected: num(p.total_to_date), location: `Last month's ${rowLocation(p)}` });
     }
   }
 }
@@ -441,7 +452,7 @@ function checkLine7(cur, prior, f) {
   const pL6 = num(priorL6);
   if (!close(L7, pL6)) {
     f.add(CRITICAL, 'LINE7_CONTINUITY', "Line 7 must equal the prior application's Line 6.",
-      { expected: pL6, found: L7, delta: L7 - pL6, location: 'G702 line 7' });
+      { expected: pL6, found: L7, delta: L7 - pL6, location: 'Cover sheet line 7' });
   }
 }
 
@@ -460,7 +471,7 @@ function checkContractTerms(cur, contract, f) {
     const L1 = num(cur.g702.line1_original_contract_sum);
     if (!close(num(cs), L1)) {
       f.add(CRITICAL, 'CONTRACT_SUM_MISMATCH', 'G702 Line 1 does not match the executed contract sum.',
-        { expected: num(cs), found: L1, delta: L1 - num(cs), location: 'G702 line 1',
+        { expected: num(cs), found: L1, delta: L1 - num(cs), location: 'Cover sheet line 1',
           citation: contract.citations?.contract_sum });
     }
   }
@@ -972,26 +983,48 @@ const TITLES = {
   DOCUMENTS: 'What was in the package',
 };
 
+// HOW A FINDING REACHES THE PAGE, and why the order inside `detail` is load-bearing.
+//
+// Every rendering of this review — the screen, the PDF on letterhead, the Markdown export — is
+// built by payAppReportDoc, which takes the FIRST SENTENCE of `detail` as the finding's headline
+// and sets the rest underneath. Nothing reads `title`. So a detail that opens with the validator's
+// own wording puts "Column H must equal C-G." in bold on a document that goes to an owner, and the
+// plain-English title never appears anywhere.
+//
+// The first sentence is therefore the title, and the auditor's statement of the rule follows it.
+// The reader who stops at the headline learns what is wrong; the one who reads on learns the rule
+// it breaks and by how much.
 function toAppFinding(item) {
-  const detailParts = [item.message];
-  if (item.location) detailParts.push(`Location: ${item.location}.`);
+  const title = TITLES[item.check] || item.check;
+  const parts = [`${title.replace(/[.\s]+$/, '')}.`];
+
+  // The rule, in the auditor's words, only where it says something the title has not. Repeating
+  // "the notary seal is missing" as "Notary seal or stamp is not present" is two sentences for one
+  // fact, and a report padded that way stops being read closely.
+  const letters = t => String(t || '').replace(/[^a-z]/gi, '').toLowerCase();
+  if (item.message && letters(item.message) !== letters(title)) parts.push(item.message);
+
   if (isNum(item.expected) && isNum(item.found)) {
-    detailParts.push(`Expected ${money(item.expected)}, found ${money(item.found)}`
+    parts.push(`Expected ${money(item.expected)}, found ${money(item.found)}`
       + (isNum(item.delta) ? `, a difference of ${money(item.delta)}.` : '.'));
   }
-  if (item.citation) detailParts.push(`Contract: ${item.citation}`);
+  if (item.citation) parts.push(`Contract: ${item.citation}`);
   if (item.rootCause) {
-    detailParts.push(`This is likely a consequence of ${item.rootCause} rather than a separate problem.`);
+    parts.push(`This is likely a consequence of ${item.rootCause} rather than a separate problem.`);
   }
 
   return {
     id: item.check,
     severity: APP_SEVERITY[item.severity] || SEVERITY.NOTE,
-    title: TITLES[item.check] || item.check,
-    detail: detailParts.join(' '),
+    title,
+    detail: parts.join(' '),
     expected: isNum(item.expected) ? item.expected : undefined,
     actual: isNum(item.found) ? item.found : undefined,
     difference: isNum(item.delta) ? item.delta : undefined,
+    // The report renderer prints the location on its own line from this object rather than from
+    // prose. Passing it as `where` is what moves "Location: …" out of the middle of a sentence and
+    // into the place every other module puts it.
+    where: item.location ? { description: item.location } : undefined,
     // The skill's own grade, kept so a report can print CRITICAL / HIGH / MEDIUM / LOW / INFO as
     // the skill grades them rather than only this app's three levels.
     skillSeverity: item.severity,
@@ -1110,8 +1143,9 @@ async function reviewPayApp({ current, previous, contractTerms, contracts, deliv
     findings.push({
       id: 'PLAUSIBILITY', severity: SEVERITY.NOTE, skillSeverity: MEDIUM, check: 'PLAUSIBILITY',
       title: TITLES.PLAUSIBILITY,
-      detail: `${p.location}: ${p.observation} The arithmetic on this line is fine — this is a `
-        + 'judgement about the progress it claims, worth putting to the contractor.',
+      detail: `${TITLES.PLAUSIBILITY}. ${p.observation} The arithmetic on this line is fine — this `
+        + 'is a judgement about the progress it claims, worth putting to the contractor.',
+      where: p.location ? { description: p.location } : undefined,
       location: p.location,
     });
   }
@@ -1120,8 +1154,9 @@ async function reviewPayApp({ current, previous, contractTerms, contracts, deliv
     findings.push({
       id: 'EMBEDDED_TAX', severity: SEVERITY.NOTE, skillSeverity: INFO, check: 'EMBEDDED_TAX',
       title: TITLES.EMBEDDED_TAX,
-      detail: `${et.whereItCouldHide}${et.note ? ` ${et.note}` : ''} Verifying this needs backup the `
-        + 'pay application does not include, so it is recorded as an exposure rather than an amount.',
+      detail: `${TITLES.EMBEDDED_TAX}. ${et.whereItCouldHide}${et.note ? ` ${et.note}` : ''} `
+        + 'Verifying this needs backup the pay application does not include, so it is recorded as '
+        + 'an exposure rather than an amount.',
     });
   }
 

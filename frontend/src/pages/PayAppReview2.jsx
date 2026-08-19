@@ -1,13 +1,18 @@
-// PAY APP REVIEWER 2 — the same reviewer, with the review taken out.
+// PAY APP REVIEWER 2 — the same reviewer, running the CSP review.
 //
 // A copy of PayAppReview.jsx talking to /api/pay-app-review-2, which keeps its reviews in a table of
 // its own. The interface is deliberately identical: the point is to change what happens BEHIND it,
 // not what the PM does.
 //
-// The review logic lives in backend/lib/payApp2Skill.js and is currently empty, so a run here stores
-// the extraction and reports plainly that nothing was checked. It shares Shared Documents with the
-// real module on purpose — the same contract and the same pay application, reviewed a different way,
-// is the comparison worth making.
+// The review logic lives in backend/lib/payApp2Skill.js — the CSP pay application skill, covering a
+// single prime billing against a stipulated sum. It shares Shared Documents with the real module on
+// purpose: the same contract and the same pay application, reviewed a different way, is the
+// comparison worth making.
+//
+// Every api call on this page must go through payAppReview2Api, including the ones made by shared
+// components on its behalf. A review id from this module means nothing to the live module's routes,
+// and the failure is quiet — a 404 that renders as "the report could not be loaded" above a review
+// that ran perfectly well.
 
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
@@ -913,7 +918,7 @@ export default function PayAppReview2() {
                   <button className="btn-secondary px-3 py-1.5" onClick={reset}>New</button>
                 </div>
               </div>
-              <PayAppFindingsReport reviewId={result.id} />
+              <PayAppFindingsReport reviewId={result.id} api={payAppReview2Api} />
             </>
           )}
 
@@ -934,7 +939,7 @@ export default function PayAppReview2() {
                   <button className="btn-secondary px-3 py-1.5" onClick={() => setViewing(null)}>Close</button>
                 </div>
               </div>
-              <PayAppFindingsReport reviewId={viewing.id} />
+              <PayAppFindingsReport reviewId={viewing.id} api={payAppReview2Api} />
             </>
           )}
 

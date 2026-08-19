@@ -10,7 +10,13 @@ import { payAppReviewApi } from '../api';
 //
 // The frame grows to fit its content instead of scrolling, so the report reads as part of the
 // page rather than as a window onto a separate one.
-export default function PayAppFindingsReport({ reviewId }) {
+//
+// WHICH module's review this is has to come from the caller. The component used to reach for
+// payAppReviewApi directly, which was invisible while one module used it and wrong the moment a
+// second did: the sandbox rendered its own review id against the live module's route, got a 404
+// because no such review exists in that table, and showed "The report could not be loaded" over a
+// review that had been produced perfectly well.
+export default function PayAppFindingsReport({ reviewId, api = payAppReviewApi }) {
   const [html, setHtml] = useState(null);
   const [error, setError] = useState(null);
   const [height, setHeight] = useState(600);
@@ -20,7 +26,7 @@ export default function PayAppFindingsReport({ reviewId }) {
     let live = true;
     setHtml(null);
     setError(null);
-    payAppReviewApi.reportHtml(reviewId)
+    api.reportHtml(reviewId)
       .then(doc => { if (live) setHtml(doc); })
       .catch(err => {
         if (live) setError(err.friendlyMessage || err.response?.data?.error || 'The report could not be loaded.');
