@@ -1,5 +1,6 @@
 const { splitPdf, analyzeInPasses, partNotice, mergeExtracted } = require('./pdfChunk');
-const { normalizeOrientation } = require('./pdfNormalize');
+const { inspectOrientation } = require('./pdfNormalize');
+const { readTextPages } = require('./pdfTextLayer');
 const { askForJson } = require('./aiJson');
 
 // One pay-application's worth of fields (used for both "current" and "previous" below).
@@ -597,40 +598,68 @@ const TOO_MANY_LINE_ITEMS = 'One page of this pay application carries more line 
 //
 // One automatic retry after a short wait — this account's rate limit window is narrow
 // (requests/min), so a brief pause often clears it without bothering the user.
-async function callClaudeWithRetry(content, hasPrevious) {
+async function callClaudeWithRetry(content, hasPrevious, { fast = true } = {}) {
   const { data } = await askForJson({
     content,
     tool: payAppTool(hasPrevious),
     // 5,356 tokens of schema, re-sent on every pass of a document read in passes.
     cacheTool: true,
     maxTokens: 20000,
-    label: 'pay app extract',
+    label: `pay app extract${fast ? '' : ' (scanned)'}`,
     // The big one, and pure transcription: the figures printed on a G702 and a G703. This is where
-    // the time went — tens of thousands of tokens of typing — and it is the call with a safety net
-    // under it, because payAppVerifyRead reconciles every line against the page's own text layer.
-    fast: true,
+    // the time went — tens of thousands of tokens of typing.
+    //
+    // THE FAST MODEL IS USED HERE BECAUSE THERE IS A NET UNDER IT: payAppVerifyRead reconciles
+    // every line against the page's own text layer. On a SCANNED application there is no text
+    // layer, so that net does not exist, and the fast model was left transcribing a photograph
+    // with nothing checking it.
+    //
+    // It does not fail quietly. Handed a scanned, rotated G702 it returned a complete pay
+    // application for a different project — "Greystone Cottage", a contract sum of $475,000 —
+    // where the careful model, given the same file, read the project, the application number and
+    // the $437,000 correctly. A blank or marginal page produces fiction rather than an error, so
+    // the model that reads it has to be the one that can.
+    fast,
     truncatedMessage: TOO_MANY_LINE_ITEMS,
   });
   return data;
 }
 
+// Does this document carry a text layer worth reconciling against? A born-digital pay application
+// does; a scan does not, and the difference decides which model reads it. Cheap and local: no AI
+// call, and a document that cannot be opened is treated as a scan, which is the safer default.
+const TEXT_LAYER_MIN_CHARS = 200;
+
+async function hasTextLayer(buffer) {
+  try {
+    const pages = await readTextPages(buffer);
+    const chars = pages.reduce((n, p) => n + String(p.text || '').trim().length, 0);
+    return chars >= TEXT_LAYER_MIN_CHARS;
+  } catch {
+    return false;
+  }
+}
+
 async function analyzePayApps(currentRaw, previousRaw) {
-  // ORIENTATION FIRST, ON BOTH DOCUMENTS, BEFORE A SINGLE FIGURE IS READ.
-  //
-  // The two applications in one review frequently disagree about it. A real pair on this project
-  // had the current application upright and the previous one carrying /Rotate 270 on every page,
-  // and a sideways G703 is where transcription errors begin. The previous one matters more: its
-  // errors come back as continuity failures blamed on this month's application.
-  const cur = await normalizeOrientation(currentRaw, 'current pay application');
-  const pri = previousRaw
-    ? await normalizeOrientation(previousRaw, 'previous pay application')
-    : { buffer: null, rotated: [], sidewaysSuspects: [] };
-  const currentBuffer = cur.buffer;
-  const previousBuffer = pri.buffer;
+  // ORIENTATION IS INSPECTED, NOT CORRECTED. The reader already honours a page's declared
+  // rotation, and rewriting the page to "help" destroyed a real scanned application — see
+  // lib/pdfNormalize.js. What is worth knowing is a page scanned sideways that never says so,
+  // which no transform can fix and which the report should mention.
+  const currentBuffer = currentRaw;
+  const previousBuffer = previousRaw;
   const orientation = {
-    current: { rotated: cur.rotated, sidewaysSuspects: cur.sidewaysSuspects },
-    previous: previousRaw ? { rotated: pri.rotated, sidewaysSuspects: pri.sidewaysSuspects } : null,
+    current: await inspectOrientation(currentRaw, 'current pay application'),
+    previous: previousRaw ? await inspectOrientation(previousRaw, 'previous pay application') : null,
   };
+
+  // Which model reads which document. A scan has no text layer, so nothing downstream can check
+  // its transcription, and the careful model reads it instead of the fast one.
+  const [currentIsDigital, previousIsDigital] = await Promise.all([
+    hasTextLayer(currentBuffer),
+    previousBuffer ? hasTextLayer(previousBuffer) : Promise.resolve(true),
+  ]);
+  if (!currentIsDigital) console.log('[pay app extract] current application is a scan — reading it carefully');
+  if (previousBuffer && !previousIsDigital) console.log('[pay app extract] previous application is a scan — reading it carefully');
 
   // Only the current document's page count decides anything now; analyzeInPasses splits whatever
   // it is given, so pre-splitting the previous one was a PDF parse whose answer nothing read.
@@ -639,12 +668,12 @@ async function analyzePayApps(currentRaw, previousRaw) {
   // A pay app long enough to need splitting (usually a big continuation sheet or attached
   // backup) is read one document at a time, in page-range passes. Header values come from
   // whichever pass shows them; continuation-sheet line items concatenate in page order.
-  const readOne = async (buffer, context) => {
+  const readOne = fast => async (buffer, context) => {
     const content = [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
       { type: 'text', text: buildPrompt(false) + partNotice(context) },
     ];
-    return (await callClaudeWithRetry(content, false)).current;
+    return (await callClaudeWithRetry(content, false, { fast })).current;
   };
 
   // The two applications are read at the same time. They have nothing to do with each other until
@@ -652,8 +681,10 @@ async function analyzePayApps(currentRaw, previousRaw) {
   // no reason beyond the per-minute allowance that used to make it necessary.
   const inPasses = async () => {
     const [current, previous] = await Promise.all([
-      analyzeInPasses(currentBuffer, readOne),
-      previousBuffer ? analyzeInPasses(previousBuffer, readOne) : Promise.resolve(null),
+      analyzeInPasses(currentBuffer, readOne(currentIsDigital)),
+      previousBuffer
+        ? analyzeInPasses(previousBuffer, readOne(previousIsDigital))
+        : Promise.resolve(null),
     ]);
     return { current, previous, orientation };
   };
@@ -685,7 +716,7 @@ async function analyzePayApps(currentRaw, previousRaw) {
     ];
 
     try {
-      const parsed = await callClaudeWithRetry(content, false);
+      const parsed = await callClaudeWithRetry(content, false, { fast: currentIsDigital });
       return { current: parsed.current, previous: null, orientation };
     } catch (err) {
       if (!err?.truncated) throw err;

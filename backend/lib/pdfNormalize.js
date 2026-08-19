@@ -1,79 +1,61 @@
-const { PDFDocument, degrees } = require('pdf-lib');
+const { PDFDocument } = require('pdf-lib');
 
-// ORIENTATION, FIXED ON EVERY DOCUMENT BEFORE ANY OF IT IS READ.
+// ORIENTATION: LOOKED AT, NOT REWRITTEN.
 //
-// Scanned pay applications routinely arrive rotated, and the two applications in one review
-// frequently disagree: a real pair on this project had the current application upright and the
-// previous one carrying /Rotate 270 on every page.
+// This module used to turn rotated pages upright by re-drawing each one through pdf-lib's
+// embedPage with a rotation transform. That was a mistake, and an expensive one to have shipped:
+// it corrupted the very document it was meant to rescue.
 //
-// A rotated PREVIOUS application does more damage than a rotated current one, which is why this
-// runs on everything rather than on the document in front of the reader. An error in the current
-// reading surfaces as a finding against a figure someone can check on the page. An error in the
-// previous reading surfaces as a continuity failure blamed on THIS month's application, sending the
-// reviewer to hunt for a problem that is not there — and one badly-read prior produces dozens of
-// them at once.
+// The evidence. A real previous pay application carrying /Rotate 270 on both pages, scanned and
+// JBIG2-compressed, was read correctly as it arrived — right project, right application number,
+// right contract sum of $437,000. The same document after being "normalized" here came back as a
+// different project entirely, with a contract sum of $3,250,000 that appears nowhere on it. The
+// re-drawn page did not carry its image through intact, and a page that renders as nothing does
+// not produce an error: it produces a confident, plausible, invented pay application.
 //
-// What this does and does not fix. A page whose /Rotate says 90 or 270 is baked upright here, so
-// everything downstream sees it the way a person holding the paper would. A page scanned sideways
-// with /Rotate 0 — where the IMAGE is rotated and the page never says so — cannot be corrected
-// without re-rendering it, and is reported instead of silently accepted.
+// The reason the rewrite was never needed is simpler still. THE READER ALREADY HONOURS /Rotate.
+// A page marked 270 is presented to it the way a person holding the paper would see it, so there
+// was nothing to correct. The skill's instruction to normalize orientation is written for a
+// pipeline that rasterises pages itself; here that job is already done, correctly, upstream.
+//
+// What remains is worth keeping, because it is the part that could never be fixed by rewriting: a
+// page scanned sideways with /Rotate 0 — where the IMAGE is rotated and the file never says so —
+// is invisible to both the reader and to any transform, and the only useful thing to do with it is
+// tell somebody.
 
-const QUARTER_TURNS = new Set([90, 180, 270]);
+// A continuation sheet is wider than it is tall on almost every form, so landscape alone proves
+// nothing. This is why the suspicion is reported and never acted on: it is also the shape a
+// sideways scan has, and only a person looking at the page can tell the two apart.
+const LANDSCAPE_RATIO = 1.2;
 
-// Draw the original page onto a fresh one, transformed so the declared rotation becomes part of the
-// geometry. pdf-lib's embedPage ignores /Rotate, which is exactly what makes this possible: the
-// content arrives unrotated and the rotation is applied here, once, permanently.
-function place(target, embedded, angle, width, height) {
-  if (angle === 90) return target.drawPage(embedded, { x: width, y: 0, rotate: degrees(90) });
-  if (angle === 180) return target.drawPage(embedded, { x: width, y: height, rotate: degrees(180) });
-  if (angle === 270) return target.drawPage(embedded, { x: 0, y: height, rotate: degrees(270) });
-  return target.drawPage(embedded, { x: 0, y: 0 });
-}
-
-// Returns the buffer unchanged when nothing needed turning, so an already-upright document costs
-// one parse and no rewrite.
-async function normalizeOrientation(buffer, label = 'document') {
+async function inspectOrientation(buffer, label = 'document') {
   let source;
   try {
     source = await PDFDocument.load(buffer, { ignoreEncryption: true });
   } catch (err) {
-    // A document this cannot open is not a document this should discard. Hand it back untouched
-    // and let the reader fail on it with its own error rather than one from here.
-    return { buffer, rotated: [], unreadable: err.message, sidewaysSuspects: [] };
+    // A document this cannot open is not a document to discard. Hand it back untouched and let the
+    // reader fail on it with its own error rather than one from here.
+    return { rotated: [], sidewaysSuspects: [], unreadable: err.message };
   }
 
-  const pages = source.getPages();
   const rotated = [];
   const sidewaysSuspects = [];
-
-  pages.forEach((page, i) => {
+  source.getPages().forEach((page, i) => {
     const angle = ((page.getRotation().angle % 360) + 360) % 360;
-    if (QUARTER_TURNS.has(angle)) rotated.push({ page: i + 1, angle });
-    else if (angle === 0) {
-      // A continuation sheet is wider than it is tall on almost every form, so landscape alone
-      // proves nothing. This is recorded, not acted on: it is the shape a sideways scan would also
-      // have, and only a person looking at the page can tell the two apart.
-      const { width, height } = page.getSize();
-      if (width > height * 1.2) sidewaysSuspects.push({ page: i + 1 });
+    if (angle !== 0) {
+      // Recorded so a reader can see it was considered, not because anything is done about it.
+      rotated.push({ page: i + 1, angle });
+      return;
     }
+    const { width, height } = page.getSize();
+    if (width > height * LANDSCAPE_RATIO) sidewaysSuspects.push({ page: i + 1 });
   });
 
-  if (!rotated.length) return { buffer, rotated: [], sidewaysSuspects };
-
-  const out = await PDFDocument.create();
-  for (const page of pages) {
-    const angle = ((page.getRotation().angle % 360) + 360) % 360;
-    const { width, height } = page.getSize();
-    const swap = angle === 90 || angle === 270;
-    const target = out.addPage([swap ? height : width, swap ? width : height]);
-    // eslint-disable-next-line no-await-in-loop -- embedPage is per page and must keep page order
-    const embedded = await out.embedPage(page);
-    place(target, embedded, angle, target.getSize().width, target.getSize().height);
+  if (rotated.length) {
+    console.log(`[orientation] ${label}: ${rotated.length} page(s) carry a rotation `
+      + `(${rotated.map(r => `p${r.page} ${r.angle}°`).join(', ')}); the reader applies it.`);
   }
-
-  console.log(`[orientation] ${label}: turned ${rotated.length} page(s) upright `
-    + `(${rotated.map(r => `p${r.page} ${r.angle}°`).join(', ')})`);
-  return { buffer: Buffer.from(await out.save()), rotated, sidewaysSuspects };
+  return { rotated, sidewaysSuspects };
 }
 
-module.exports = { normalizeOrientation };
+module.exports = { inspectOrientation };
