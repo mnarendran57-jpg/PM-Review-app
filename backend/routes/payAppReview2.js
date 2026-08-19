@@ -732,6 +732,12 @@ async function runPayAppReview(req, currentFile) {
         // from — the only witness that a file was ever attached is the form saying so.
         previousSupplied: !!(req.body.previous || previousReviewId
           || req.body.previous_uploaded === 'true'),
+        // WHICH stored reading this review consumed. A prior application held in the project store
+        // was read once, when it was current and someone was looking at it, and reusing that
+        // reading is the arrangement to prefer — the cheapest way to read a document badly is to
+        // read it twice. The cost is that a chain forms, so a review has to record the link it used:
+        // if that earlier application is ever corrected, everything downstream of it is stale.
+        previousReviewId,
         contractTerms,
         contracts: contracts.filter(c => c.termsStatus === 'ready'),
         deliveryMethod,

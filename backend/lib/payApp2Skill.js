@@ -339,28 +339,47 @@ function checkG703Rows(cur, f) {
 //
 // Deliberately hard to trigger: a real schedule can carry a nearly-finished line with $50 left on
 // it, so this needs a sample and a strong majority before it will say anything.
-const MIN_ROWS_TO_JUDGE = 5;
-const LOOKS_LIKE_MONEY = 200;   // a percent complete never runs to the hundreds
-const LOOKS_LIKE_PERCENT = 100; // a balance to finish rarely sits under a hundred dollars
+// The two columns are judged INDEPENDENTLY rather than row by row. A transposed sheet does not
+// necessarily show both symptoms on the same line — a line at 0% complete has a balance equal to
+// its scheduled value and a percentage of zero, so it looks normal from either side — and requiring
+// both on one row let real transpositions through.
+const MIN_VALUES_TO_JUDGE = 3;
+const LOOKS_LIKE_MONEY = 200;   // a percent complete does not run into the hundreds
+const LOOKS_LIKE_PERCENT = 100; // a balance to finish on a job of any size runs into the thousands
 
 function transposedRows(cur) {
-  const rows = (cur.g703?.line_items || [])
-    .filter(r => present(r.pct_complete) && present(r.balance_to_finish));
-  if (rows.length < MIN_ROWS_TO_JUDGE) return null;
-  const swapped = rows.filter(r => num(r.pct_complete) > LOOKS_LIKE_MONEY
-    && Math.abs(num(r.balance_to_finish)) <= LOOKS_LIKE_PERCENT);
-  return swapped.length >= rows.length * 0.6 ? { swapped: swapped.length, of: rows.length } : null;
+  const rows = cur.g703?.line_items || [];
+  const pcts = rows.filter(r => present(r.pct_complete)).map(r => Math.abs(num(r.pct_complete)));
+  const bals = rows.filter(r => present(r.balance_to_finish))
+    .map(r => Math.abs(num(r.balance_to_finish)));
+  if (pcts.length < MIN_VALUES_TO_JUDGE || bals.length < MIN_VALUES_TO_JUDGE) return null;
+
+  const pctLooksLikeMoney = pcts.filter(v => v > LOOKS_LIKE_MONEY).length
+    >= Math.max(2, Math.floor(pcts.length / 3));
+  const balLooksLikePercent = bals.filter(v => v <= LOOKS_LIKE_PERCENT).length
+    >= Math.max(2, Math.floor(bals.length / 2));
+  if (!pctLooksLikeMoney || !balLooksLikePercent) return null;
+
+  return {
+    swapped: bals.filter(v => v <= LOOKS_LIKE_PERCENT).length,
+    of: bals.length,
+    pctSample: pcts.slice(0, 4),
+    balSample: bals.slice(0, 4),
+  };
 }
 
 function checkColumnOrientation(cur, f) {
   const t = transposedRows(cur);
   if (!t) return;
   f.add(HIGH, 'COLUMNS_TRANSPOSED',
-    `On ${t.swapped} of ${t.of} schedule lines the percent-complete column holds what looks like a `
-    + 'dollar amount and the balance-to-finish column holds what looks like a percentage. These two '
-    + 'columns appear to have been read the wrong way round — on this form the balance to finish '
-    + 'sits to the right of the percentage. Nothing below can be relied on until the reading is '
-    + 'corrected; this is a fault in the reading, not a finding about the contractor.',
+    'The percent-complete column holds what look like dollar amounts and the balance-to-finish '
+    + `column holds what look like percentages (percentages read as ${t.pctSample.join(', ')}; `
+    + `balances read as ${t.balSample.join(', ')} on ${t.swapped} of ${t.of} lines). These two `
+    + 'columns appear to have been read the wrong way round. Some forms label the seventh column '
+    + '"% (G/C)" and the eighth "Balance to Finish", which is the reverse of the usual arrangement, '
+    + 'and a reading that maps by column position transposes them on every line. The schedule must '
+    + 'be re-read by header text before anything below it can be relied on. This is a fault in the '
+    + 'reading, not a finding about the contractor.',
     { location: 'Schedule column headers' });
 }
 
@@ -623,6 +642,13 @@ function checkContinuity(cur, prior, f, { supplied = false } = {}) {
       f.add(HIGH, 'PRIOR_EMPTY',
         'A previous pay application was supplied but nothing could be read from it, so continuity '
         + 'was NOT checked. This is a fault in the reading, not a finding about the contractor.');
+    } else if (cur.application_number === 1) {
+      // The one case where having no prior is correct rather than a gap. Column D should be absent
+      // or zero on every line and Line 7 zero, and saying "continuity was skipped" about a first
+      // application invites someone to go looking for a document that does not exist.
+      f.add(INFO, 'NO_PRIOR',
+        'This is Application 1, so there is no prior application to compare against. Nothing is '
+        + 'missing.');
     } else {
       f.add(INFO, 'NO_PRIOR', 'No prior pay application supplied; continuity checks skipped.');
     }
@@ -644,9 +670,69 @@ function checkContinuity(cur, prior, f, { supplied = false } = {}) {
       + 'gap is weaker evidence — confirm no intervening application is missing.');
   }
 
+  const priorRows = prior.g703?.line_items || [];
   const priRows = new Map();
-  for (const r of prior.g703?.line_items || []) priRows.set(rowKey(r), r);
+  for (const r of priorRows) priRows.set(rowKey(r), r);
   const curRows = cur.g703?.line_items || [];
+
+  // BEFORE COMPARING ANYTHING, ASK WHETHER THE TWO SCHEDULES ARE THE SAME SCHEDULE.
+  //
+  // A schedule of values is stable between applications: the same lines in the same order, changed
+  // only by an approved change order. So a handful of continuity failures is a finding about the
+  // contractor, and a large fraction of them is a finding about the extraction. Fourteen scheduled
+  // values that all changed at once is not fourteen unapproved change orders; it is two documents
+  // that were never aligned to each other.
+  //
+  // This is not hypothetical here. A run comparing two readings of the SAME package produced
+  // fourteen drifts, nine column-D mismatches, thirty-two new lines and sixteen dropped ones —
+  // seventy-one findings, every one of them an artefact of two independent readings disagreeing.
+  // A reviewer given one accurate "these do not line up" is far better served than one handed
+  // seventy plausible dollar deltas to disprove individually.
+  const matched = curRows.filter(r => priRows.has(rowKey(r))).length;
+  if (curRows.length && matched === 0) {
+    f.add(HIGH, 'PRIOR_NO_MATCH',
+      `None of the ${curRows.length} line items matched any of the ${priRows.size} lines in the `
+      + 'previous application. The two schedules were most likely read with different item '
+      + 'numbering. Continuity was NOT checked.');
+    return;
+  }
+
+  if (matched) {
+    const bothPresent = (a, b) => present(a) && present(b);
+    const drift = curRows.filter((r) => {
+      const p = priRows.get(rowKey(r));
+      return p && bothPresent(r.scheduled_value, p.scheduled_value)
+        && !close(num(r.scheduled_value), num(p.scheduled_value));
+    }).length;
+    const dMismatch = curRows.filter((r) => {
+      const p = priRows.get(rowKey(r));
+      return p && present(r.prior_completed)
+        && !close(num(r.prior_completed), num(p.total_to_date));
+    }).length;
+
+    // A proportion alone is not enough on a short schedule: one approved change order on a
+    // three-line schedule is 33% and would be dismissed as a misalignment, hiding the very finding
+    // the check exists to protect. So it takes a large SHARE and a meaningful NUMBER of lines
+    // before it will refuse to compare — below that, a difference is a finding about the
+    // contractor and is reported line by line.
+    const MANY_LINES = 3;
+    const misaligned = (n) => n >= MANY_LINES && n / matched > 0.30;
+    if (misaligned(drift) || misaligned(dMismatch)) {
+      const countNote = curRows.length !== priorRows.length
+        ? `The current application has ${curRows.length} schedule lines and the previous has `
+          + `${priorRows.length}. `
+        : '';
+      f.add(HIGH, 'SCHEDULES_NOT_ALIGNED',
+        `${countNote}${drift} of ${matched} matched lines show a different scheduled value and `
+        + `${dMismatch} show a previously-billed figure that does not follow from the previous `
+        + "application's total. A schedule of values does not change on that many lines at once, so "
+        + 'the two applications are almost certainly misaligned — most often because one was scanned '
+        + 'rotated, lost a row, or was read with its columns transposed. Continuity was NOT checked. '
+        + 'Re-read the previous application, confirm it has the same number of schedule lines as the '
+        + 'current one, then run this again.');
+      return;
+    }
+  }
 
   for (const r of curRows) {
     const loc = rowLocation(r);
@@ -689,8 +775,21 @@ function checkContinuity(cur, prior, f, { supplied = false } = {}) {
   }
 }
 
+// Line 7 references the prior application's Line 6. If the prior could not be aligned or read, its
+// Line 6 is not a trustworthy reference point either, and comparing against it manufactures a
+// CRITICAL finding out of a bad reading. Stand down and say so instead.
+const PRIOR_UNRELIABLE = new Set([
+  'SCHEDULES_NOT_ALIGNED', 'PRIOR_NO_MATCH', 'PRIOR_EMPTY', 'PRIOR_NO_SCHEDULE',
+]);
+
 function checkLine7(cur, prior, f) {
   if (!prior) return;
+  if (f.items.some(x => PRIOR_UNRELIABLE.has(x.check))) {
+    f.add(INFO, 'LINE7_NOT_CHECKED',
+      "Previous payments were not checked against the prior application's Line 6, because the prior "
+      + 'application could not be read reliably.');
+    return;
+  }
   const priorL6 = prior.g702?.line6_total_earned_less_retainage;
   if (!present(priorL6)) return;
   const L7 = num(cur.g702?.line7_less_previous_certificates);
@@ -1369,6 +1468,9 @@ const TITLES = {
   RETAINAGE_ADJUSTED_SUM: 'The schedule and the amount requested do not tie through retainage',
   RETAINAGE_EXEMPT_ITEMS: 'Some items are exempt from retainage under the contract',
   NO_PRIOR: 'No previous application was supplied',
+  PRIOR_NO_MATCH: 'None of the schedule lines matched the previous application',
+  SCHEDULES_NOT_ALIGNED: 'This schedule and last month’s do not line up, so nothing was compared',
+  LINE7_NOT_CHECKED: 'Previous payments were not checked, because last month’s reading is unreliable',
   PRIOR_EMPTY: 'The previous application could not be read, so nothing was compared against it',
   PRIOR_NO_SCHEDULE: 'The previous application had no schedule lines to compare against',
   SEQUENCE_GAP: 'An application number appears to be missing',
@@ -1455,7 +1557,8 @@ function buildHeadline({ cur, counts, rec, note }) {
 }
 
 async function reviewPayApp({
-  current, previous, previousSupplied, contractTerms, contracts, deliveryMethod, files,
+  current, previous, previousSupplied, previousReviewId,
+  contractTerms, contracts, deliveryMethod, files,
 }) {
   const cur = toExtraction(current);
   if (!cur) return null;
@@ -1642,6 +1745,13 @@ async function reviewPayApp({
   } else if (!(prior.g703?.line_items || []).length) {
     notChecked.push('Continuity against the previous application — it was read but produced no '
       + 'schedule lines, so re-billing and silent reversals were NOT checked.');
+  } else if (kept.some(i => PRIOR_UNRELIABLE.has(i.check))) {
+    // A prior that exists and has lines can still fail to line up with this month's schedule, and
+    // when it does the continuity checks stand down. Saying "checked line by line" here while a
+    // finding below says nothing was compared would have the report contradict itself on one page.
+    notChecked.push('Continuity against the previous application — the two schedules could not be '
+      + 'lined up with each other, so re-billing and silent reversals were NOT checked. See the '
+      + 'finding below.');
   } else {
     notChecked.push(`Continuity was checked line by line against application `
       + `${prior.application_number ?? '(number not read)'}, which contributed `
@@ -1713,6 +1823,9 @@ async function reviewPayApp({
         previousRead: !!prior,
         previousLineItems: (prior?.g703?.line_items || []).length,
         previousApplicationNumber: prior?.application_number ?? null,
+        // Which stored reading was consumed, so a review that turns out to rest on a corrected
+        // earlier application can be found and re-run rather than quietly left stale.
+        previousFromReviewId: previousReviewId ?? null,
         contractSupplied: !!profile,
         retainageRate: profile ? profile.retainage_rate : null,
         payApplicationPdfAvailable: !!buffer,

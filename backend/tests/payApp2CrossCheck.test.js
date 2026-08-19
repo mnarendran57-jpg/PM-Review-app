@@ -319,6 +319,75 @@ const checks = r => r.findings.map(f => f.check);
       'small balances alone must not trigger it — the percentages here are still percentages');
   });
 
+  // ARE THE TWO SCHEDULES THE SAME SCHEDULE?
+  //
+  // A schedule of values is stable between applications. So a handful of continuity failures is a
+  // finding about the contractor, and a large fraction of them is a finding about the extraction.
+  // Comparing two independent readings of the same package once produced seventy-one findings —
+  // fourteen drifts, nine column-D mismatches, thirty-two new lines, sixteen dropped — every one an
+  // artefact. One accurate "these do not line up" serves a reviewer far better.
+
+  await test('a wholesale mismatch is reported once, not as a finding per line', async () => {
+    const prior = priorApplication();
+    // Every scheduled value different: two documents that were never aligned to each other.
+    prior.lineItems.forEach((li, i) => { li.c = li.c + 1000 * (i + 1); });
+    const r = await run(application(), { previous: prior, previousSupplied: true });
+
+    assert.ok(checks(r).includes('SCHEDULES_NOT_ALIGNED'), 'the misalignment must be named');
+    assert.ok(!checks(r).includes('SOV_DRIFT'),
+      'per-line drift findings are artefacts of the misalignment and must not be published');
+    assert.ok(!checks(r).includes('CONTINUITY_D'));
+    const f = r.findings.find(x => x.check === 'SCHEDULES_NOT_ALIGNED');
+    assert.match(f.detail, /Continuity was NOT checked/);
+    // The summary and the findings must not contradict each other on the same page.
+    const said = r.notChecked.join(' ');
+    assert.match(said, /could not be lined up/);
+    assert.ok(!/Continuity was checked line by line/.test(said),
+      'the summary cannot claim continuity ran while a finding says nothing was compared');
+  });
+
+  await test('schedules keyed differently are reported as unmatched, not as wholesale change', async () => {
+    const prior = priorApplication();
+    prior.lineItems.forEach((li, i) => { li.itemNo = `X${i + 90}`; li.description = `Other ${i}`; });
+    const r = await run(application(), { previous: prior, previousSupplied: true });
+
+    assert.ok(checks(r).includes('PRIOR_NO_MATCH'));
+    assert.ok(!checks(r).includes('NEW_LINE_ITEM'),
+      'every line reported as new is noise when the real fault is the keying');
+    assert.ok(!checks(r).includes('DROPPED_LINE_ITEM'));
+  });
+
+  await test('line 7 stands down rather than manufacture a critical from a bad reading', async () => {
+    const prior = priorApplication();
+    prior.lineItems.forEach((li, i) => { li.c = li.c + 1000 * (i + 1); });
+    prior.summary.line6 = 999999; // would fail loudly if it were compared
+    const r = await run(application(), { previous: prior, previousSupplied: true });
+
+    assert.ok(!checks(r).includes('LINE7_CONTINUITY'),
+      "the prior's Line 6 is not a trustworthy reference when the prior could not be aligned");
+    assert.ok(checks(r).includes('LINE7_NOT_CHECKED'), 'and standing down must be visible');
+  });
+
+  await test('a few genuine changes are still reported line by line', async () => {
+    // One line's scheduled value differs, and the prior is internally consistent about it — a real
+    // change order between the two applications, not two documents that were never aligned.
+    const prior = priorApplication([50000, 85000, 12600]);
+    const r = await run(application(), { previous: prior, previousSupplied: true });
+
+    assert.ok(!checks(r).includes('SCHEDULES_NOT_ALIGNED'),
+      'one change in three is a contractor finding, not an extraction fault');
+    assert.ok(checks(r).includes('SOV_DRIFT'), 'and it must still be reported');
+  });
+
+  await test('application 1 having no prior is not reported as something missing', async () => {
+    const first = application();
+    first.summary.applicationNumber = 1;
+    const r = await run(first, { previous: null, previousSupplied: false });
+    const f = r.findings.find(x => x.check === 'NO_PRIOR');
+    assert.match(f.detail, /Nothing is missing/,
+      'a first application has no prior by definition, and should not read as a gap');
+  });
+
   console.log(failures ? `\n${failures} failing` : '\nall passing');
   process.exit(failures ? 1 : 0);
 })();
