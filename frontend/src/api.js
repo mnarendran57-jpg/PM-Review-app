@@ -484,7 +484,9 @@ function triggerDownload(blob, fileName) {
 // Nothing here has a deadline, and that is the point: the document decides how long the work takes,
 // and no clock in the browser, a proxy or a load balancer gets a vote any more. Each poll is a tiny
 // request that either says "running" or hands back the result.
-async function waitForJob(jobId, { onTick, base = '/pay-app-review' } = {}) {
+// `base` is required in spirit: Reviewer 1 is held at its August behaviour and has no jobs
+// endpoint, so a caller that forgets to name its own module would poll a 404 for ever.
+async function waitForJob(jobId, { onTick, base = '/pay-app-review-2' } = {}) {
   const started = Date.now();
   // Quick at first — a small pay application is read in seconds and should not sit waiting on a
   // slow poll — then easing off so a twenty-minute read is not a thousand requests.
@@ -512,14 +514,17 @@ export const payAppReviewApi = {
   reportHtml: id => api.get(`/pay-app-review/${id}/report.html`, { responseType: 'text' }).then(r => r.data),
   // The upload still has a timeout — that part is a file transfer and a stall there is a real
   // fault. The READING has none, because it is no longer happening on this connection.
-  extract: (formData, onTick) => api.post('/pay-app-review/extract', formData, {
+  // Reviewer 1 is held at its 1-2 August behaviour, which predates the job queue: the reading
+  // happens on this request and the result comes back on it. Do NOT wait for a job here — the
+  // route it talks to does not create one, and there is no /jobs endpoint on it to poll.
+  extract: formData => api.post('/pay-app-review/extract', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
-  }).then(r => waitForJob(r.data.jobId, { onTick })),
+  }).then(r => r.data),
   // The first review on a project reads the contract, which is several passes on a long
   // agreement; every review after that reads the stored terms and returns in seconds.
-  create: (formData, onTick) => api.post('/pay-app-review', formData, {
+  create: formData => api.post('/pay-app-review', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
-  }).then(r => waitForJob(r.data.jobId, { onTick })),
+  }).then(r => r.data),
   projects: () => api.get('/pay-app-review/projects').then(r => r.data),
   createProject: projectName =>
     api.post('/pay-app-review/projects', { project_name: projectName }).then(r => r.data),
@@ -588,12 +593,12 @@ export const payAppReview2Api = {
   // fault. The READING has none, because it is no longer happening on this connection.
   extract: (formData, onTick) => api.post('/pay-app-review-2/extract', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
-  }).then(r => waitForJob(r.data.jobId, { onTick })),
+  }).then(r => waitForJob(r.data.jobId, { onTick, base: '/pay-app-review-2' })),
   // The first review on a project reads the contract, which is several passes on a long
   // agreement; every review after that reads the stored terms and returns in seconds.
   create: (formData, onTick) => api.post('/pay-app-review-2', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
-  }).then(r => waitForJob(r.data.jobId, { onTick })),
+  }).then(r => waitForJob(r.data.jobId, { onTick, base: '/pay-app-review-2' })),
   projects: () => api.get('/pay-app-review-2/projects').then(r => r.data),
   createProject: projectName =>
     api.post('/pay-app-review-2/projects', { project_name: projectName }).then(r => r.data),
