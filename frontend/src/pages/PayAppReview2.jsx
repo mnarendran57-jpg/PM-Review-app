@@ -571,6 +571,12 @@ export default function PayAppReview2() {
     fd.append('current', JSON.stringify(current));
     if (previous) fd.append('previous', JSON.stringify(previous));
     if (previousReviewId) fd.append('previous_review_id', previousReviewId);
+    // THAT a previous application was uploaded, separately from whether anything came out of
+    // reading it. Without this the review has no way to tell an empty extraction from an empty
+    // upload slot: both arrive as no `previous` field, and the report says none was supplied — to
+    // a reviewer who is looking at the file they just attached. The fact has to travel even when
+    // the data does not.
+    if (previousFile) fd.append('previous_uploaded', 'true');
     if (projectId) fd.append('project_id', projectId);
     if (deliveryMethod) fd.append('delivery_method', deliveryMethod);
     const primaryId = governingDocs.find(d => d.is_primary === 1)?.id;

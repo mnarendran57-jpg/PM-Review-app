@@ -726,7 +726,12 @@ async function runPayAppReview(req, currentFile) {
         // as whether anything came out of reading it. Without this the two are indistinguishable
         // downstream, and a failed extraction reports as "none was supplied" — which tells the
         // reviewer their upload was ignored and sends them looking in the wrong place.
-        previousSupplied: !!(req.body.previous || previousReviewId),
+        //
+        // `previous_uploaded` is the case the other two miss. When a previous PDF is attached and
+        // its extraction comes back empty, there is no `previous` body and no review id to infer
+        // from — the only witness that a file was ever attached is the form saying so.
+        previousSupplied: !!(req.body.previous || previousReviewId
+          || req.body.previous_uploaded === 'true'),
         contractTerms,
         contracts: contracts.filter(c => c.termsStatus === 'ready'),
         deliveryMethod,
