@@ -564,8 +564,9 @@ async function callClaudeWithRetry(content, hasPrevious) {
 }
 
 async function analyzePayApps(currentBuffer, previousBuffer) {
+  // Only the current document's page count decides anything now; analyzeInPasses splits whatever
+  // it is given, so pre-splitting the previous one was a PDF parse whose answer nothing read.
   const currentParts = await splitPdf(currentBuffer);
-  const previousParts = previousBuffer ? await splitPdf(previousBuffer) : [];
 
   // A pay app long enough to need splitting (usually a big continuation sheet or attached
   // backup) is read one document at a time, in page-range passes. Header values come from
@@ -589,25 +590,35 @@ async function analyzePayApps(currentBuffer, previousBuffer) {
     return { current, previous };
   };
 
-  // Both fit in one request: send one call rather than two.
+  // TWO PAY APPLICATIONS ARE NEVER READ IN ONE CALL.
   //
-  // This is now a much narrower case than it was, because MAX_PAGES_PER_PASS is deliberately small
-  // and most real packages split. It is kept for the genuinely short pay app — a cover and one
-  // continuation sheet — where a single call is the whole job and splitting it would add a request
-  // to save nothing. The old reason for preferring it, that requests were rationed at five a
-  // minute, no longer holds.
-  if (currentParts.length === 1 && previousParts.length <= 1) {
+  // They used to be, whenever both were short enough to fit in one request, and it silently lost
+  // the previous application. Asked to transcribe two complete pay applications into a single tool
+  // call, the reply comes back with the current one filled in — every line item of it — and the
+  // previous one simply absent. `parsed.previous || null` then accepted that as "there wasn't one".
+  //
+  // Reproduced on a five-page package: current came back with 78 line items, previous came back
+  // NULL. Downstream the review reported that a previous application had been supplied but could
+  // not be read, which was true and completely unhelpful, because nothing was wrong with the file.
+  //
+  // The failure hid for a long time because it only affects SHORT documents. A large package splits
+  // and takes the passes route below, which reads each document independently and returns both. So
+  // the bug was invisible on exactly the packages big enough to be worth testing with, and present
+  // on every CSP pay app, which is the small case.
+  //
+  // The two reads run concurrently, so this costs a request and no wall-clock time.
+  if (previousBuffer) return inPasses();
+
+  // One document, short enough for one request: send one call rather than splitting it.
+  if (currentParts.length === 1) {
     const content = [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: currentBuffer.toString('base64') } },
+      { type: 'text', text: buildPrompt(false) },
     ];
-    if (previousBuffer) {
-      content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: previousBuffer.toString('base64') } });
-    }
-    content.push({ type: 'text', text: buildPrompt(!!previousBuffer) });
 
     try {
-      const parsed = await callClaudeWithRetry(content, !!previousBuffer);
-      return { current: parsed.current, previous: parsed.previous || null };
+      const parsed = await callClaudeWithRetry(content, false);
+      return { current: parsed.current, previous: null };
     } catch (err) {
       if (!err?.truncated) throw err;
       // Fitting in one REQUEST does not mean fitting in one ANSWER. A CMAR pay app carrying a
