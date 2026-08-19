@@ -147,7 +147,14 @@ function buildReportDoc({ result, data, projectName, contractor }) {
     // Not a check — a list of what to look at on site this period. It survives the retirement of
     // the old suite because it answers a different question: not "is this right" but "what
     // should I go and see before I certify it".
-    checklist: buildSiteVerificationChecklist(current, data?.previous),
+    // The deterministic list is what was billed as new this period. An engine may add to it: a
+    // progress judgment — a line jumping 5% to 85% — is arithmetically fine and belongs on a list
+    // someone carries round a site, not in a findings list someone adjudicates at a desk. Putting
+    // it here is what keeps it out of there.
+    checklist: [
+      ...buildSiteVerificationChecklist(current, data?.previous),
+      ...(result?.siteChecklist || []),
+    ],
   };
   doc.markdown = renderMarkdown(doc);
   return doc;
