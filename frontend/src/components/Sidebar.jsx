@@ -5,7 +5,7 @@ import {
   ClipboardDocumentCheckIcon, Squares2X2Icon, ScaleIcon, ArrowLeftIcon,
   Cog6ToothIcon, EnvelopeIcon, FolderIcon, ReceiptPercentIcon, CameraIcon, UserGroupIcon,
   ClipboardDocumentListIcon, QuestionMarkCircleIcon, CheckCircleIcon, FolderOpenIcon,
-  ChevronUpDownIcon,
+  ChevronUpDownIcon, BeakerIcon,
 } from '@heroicons/react/24/outline';
 import { authApi, selectedOrg, selectedProgram, orgsApi, programsApi, projectsApi } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -61,6 +61,11 @@ function useSwitchTarget(org, program) {
 const projectTools = [
   { slug: 'proposal-intake', label: 'Proposal Intake', icon: InboxArrowDownIcon, color: '#fbbf24', glow: 'rgba(245,158,11,0.16)' },
   { slug: 'pay-app-review', label: 'Pay App Review', icon: DocumentMagnifyingGlassIcon, color: '#60a5fa', glow: 'rgba(59,130,246,0.16)' },
+  // The sandbox. `feature` points at the real module because this is not something Coaster
+  // sells — it rides along wherever Pay App Review is enabled and must never become a plan
+  // feature of its own. Named and coloured so it cannot be mistaken for the real one.
+  { slug: 'pay-app-review-2', label: 'Pay App Reviewer 2', feature: 'pay-app-review',
+    icon: BeakerIcon, color: '#f59e0b', glow: 'rgba(245,158,11,0.16)' },
   { slug: 'pco-review', label: 'Change Order Review', icon: ScaleIcon, color: '#fb923c', glow: 'rgba(249,115,22,0.16)' },
   { slug: 'invoice-review', label: 'Invoice Review', icon: ReceiptPercentIcon, color: '#2dd4bf', glow: 'rgba(20,184,166,0.16)' },
   { slug: 'progress-report', label: 'Progress Report', icon: CameraIcon, color: '#fb7185', glow: 'rgba(244,63,94,0.16)' },
@@ -293,7 +298,7 @@ export default function Sidebar() {
                   below reads from it, so hiding it would strand whatever they did buy. */}
               <NavRow to={`/project/${projectId}/shared-documents`} label="Shared Documents"
                 Icon={FolderOpenIcon} color="#facc15" glow="rgba(234,179,8,0.16)" />
-              {projectTools.filter(t => hasFeature(t.slug)).map(t => (
+              {projectTools.filter(t => hasFeature(t.feature || t.slug)).map(t => (
                 <NavRow key={t.slug} to={`/project/${projectId}/${t.slug}`}
                   label={t.label} Icon={t.icon} color={t.color} glow={t.glow} />
               ))}

@@ -89,6 +89,26 @@ function fillDeclaredNulls(value, schema) {
 //   truncatedMessage thrown when the model runs out of room mid-answer. Worth setting
 //                    wherever the output can be long, since "it was cut off" and "it failed"
 //                    call for different things from the user.
+// One place that actually calls the API, so the retry behaviour is the same whatever shape of
+// answer is being asked for.
+async function send(request, { attempts = 2, label = 'ai' } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await client.messages.create(request);
+    } catch (err) {
+      if (!RETRYABLE.has(err?.status) || attempt >= attempts) throw err;
+      // The API's own retry-after where it gives one: it knows when the window resets better
+      // than a guess does. Capped so a long advertised wait cannot outlast the client.
+      const advertised = Number(err?.headers?.['retry-after']);
+      const wait = Number.isFinite(advertised) && advertised > 0
+        ? Math.min(advertised, 90) * 1000
+        : Math.min(20000 * attempt, 60000);
+      console.warn(`[${label}] ${err.status} on attempt ${attempt}; waiting ${Math.round(wait / 1000)}s`);
+      await sleep(wait);
+    }
+  }
+}
+
 async function askForJson({
   content,
   tool,
@@ -128,22 +148,7 @@ async function askForJson({
   // past it starts being cached on its own.
 
   let response;
-  for (let attempt = 1; ; attempt++) {
-    try {
-      response = await client.messages.create(request);
-      break;
-    } catch (err) {
-      if (!RETRYABLE.has(err?.status) || attempt >= attempts) throw err;
-      // The API's own retry-after where it gives one: it knows when the window resets better
-      // than a guess does. Capped so a long advertised wait cannot outlast the client.
-      const advertised = Number(err?.headers?.['retry-after']);
-      const wait = Number.isFinite(advertised) && advertised > 0
-        ? Math.min(advertised, 90) * 1000
-        : Math.min(20000 * attempt, 60000);
-      console.warn(`[${label}] ${err.status} on attempt ${attempt}; waiting ${Math.round(wait / 1000)}s`);
-      await sleep(wait);
-    }
-  }
+  response = await send(request, { attempts, label });
 
   if (response.usage) {
     const read = response.usage.cache_read_input_tokens;
@@ -184,4 +189,42 @@ async function askForJson({
   };
 }
 
-module.exports = { MODEL, FAST_MODEL, askForJson, fillDeclaredNulls };
+// Plain prose back, with no schema imposed on it.
+//
+// Everything else in this app goes through askForJson, because a schema is what makes an answer
+// checkable — and this deliberately does the opposite. It exists for the Pay App Reviewer 2
+// sandbox, where the whole question is what a set of instructions produces when nothing reshapes
+// it. Forcing that through a tool call would answer a different question.
+//
+// Nothing here feeds a calculation or a stored finding. If that ever changes, it should go back
+// through a schema first.
+async function askForText({ content, system = null, maxTokens = 16000, label = 'ai text' }) {
+  const request = {
+    model: MODEL,
+    max_tokens: maxTokens,
+    messages: [{ role: 'user', content }],
+  };
+  if (system) request.system = system;
+
+  const response = await send(request, { label });
+
+  const text = (response.content || [])
+    .filter(block => block.type === 'text')
+    .map(block => block.text)
+    .join('')
+    .trim();
+
+  if (response.stop_reason === 'max_tokens') {
+    // Said rather than hidden: a report cut off mid-sentence looks complete to a skim.
+    const err = new Error('The answer was longer than the reply limit and has been cut short.');
+    err.truncated = true;
+    err.partial = text;
+    throw err;
+  }
+
+  console.log(`[${label}] careful in=${response.usage.input_tokens} `
+    + `out=${response.usage.output_tokens} tokens`);
+  return text;
+}
+
+module.exports = { MODEL, FAST_MODEL, askForJson, askForText, fillDeclaredNulls };

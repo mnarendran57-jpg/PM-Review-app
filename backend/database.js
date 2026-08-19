@@ -1336,6 +1336,46 @@ if (resetEmail && resetPassword) {
   }
 }
 
+// --- Pay App Reviewer 2 -----------------------------------------------------------------------
+// A sandbox: the same reviewer, with the review logic taken out so a different approach can be
+// dropped in behind it. Its own table, so nothing tried here can corrupt a real review, carrying
+// every column the live table has ended up with.
+//
+// Delete this table with routes/payAppReview2.js and the page when the experiment is over, or
+// promote what worked into the real module first.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pay_app_reviews_2 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER,
+    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    project_name TEXT,
+    application_number INTEGER,
+    period_to TEXT,
+    contract_sum_to_date REAL,
+    total_completed_to_date REAL,
+    current_payment_due REAL,
+    balance_to_finish REAL,
+    extracted_data TEXT NOT NULL,
+    checks_result TEXT NOT NULL,
+    report_markdown TEXT NOT NULL,
+    current_file_name TEXT,
+    current_file BLOB,
+    current_file_key TEXT,
+    previous_review_id INTEGER REFERENCES pay_app_reviews_2(id) ON DELETE SET NULL,
+    contract_sum REAL,
+    co_log TEXT,
+    compliance_findings TEXT,
+    engine_result TEXT,
+    delivery_method TEXT,
+    review_answers TEXT,
+    critical_count INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_pay_app_reviews_2_project ON pay_app_reviews_2(project_id);
+`);
+
 // --- AI work that outlives its request ------------------------------------------------------
 // Reading a pay application or a drawing set takes minutes. Held inside an HTTP request, that is a
 // race against every timeout between the browser and the server — and losing it did not just show

@@ -35,6 +35,8 @@ app.use('/api/rfis', require('./routes/rfis'));
 app.use('/api/meetings', require('./routes/meetings'));
 app.use('/api/memo-templates', require('./routes/memoTemplates'));
 app.use('/api/pay-app-review', require('./routes/payAppReview'));
+// A sandbox copy of the module above, on its own table. See routes/payAppReview2.js.
+app.use('/api/pay-app-review-2', require('./routes/payAppReview2'));
 app.use('/api/pco-review', require('./routes/pcoReview'));
 app.use('/api/invoice-review', require('./routes/invoiceReview'));
 app.use('/api/progress-report', require('./routes/progressReport'));

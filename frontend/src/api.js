@@ -484,7 +484,7 @@ function triggerDownload(blob, fileName) {
 // Nothing here has a deadline, and that is the point: the document decides how long the work takes,
 // and no clock in the browser, a proxy or a load balancer gets a vote any more. Each poll is a tiny
 // request that either says "running" or hands back the result.
-async function waitForJob(jobId, { onTick } = {}) {
+async function waitForJob(jobId, { onTick, base = '/pay-app-review' } = {}) {
   const started = Date.now();
   // Quick at first — a small pay application is read in seconds and should not sit waiting on a
   // slow poll — then easing off so a twenty-minute read is not a thousand requests.
@@ -493,7 +493,7 @@ async function waitForJob(jobId, { onTick } = {}) {
   for (;;) {
     const elapsed = Date.now() - started;
     await new Promise(r => setTimeout(r, delayFor(elapsed)));
-    const job = await api.get(`/pay-app-review/jobs/${jobId}`).then(r => r.data);
+    const job = await api.get(`${base}/jobs/${jobId}`).then(r => r.data);
     if (job.status === 'done') return job.result;
     if (job.status === 'failed') {
       const err = new Error(job.error || 'The work could not be completed.');
@@ -574,6 +574,81 @@ export const payAppReviewApi = {
   },
   delete: id => api.delete(`/pay-app-review/${id}`).then(r => r.data),
 };
+
+// Pay App Reviewer 2 — the sandbox. Identical surface to payAppReviewApi, pointed at
+// /api/pay-app-review-2, which writes to its own table. A separate object rather than a base-path
+// argument so the experiment can change its own endpoints without the live client accommodating it.
+export const payAppReview2Api = {
+  list: params => api.get('/pay-app-review-2', { params }).then(r => r.data),
+  get: id => api.get(`/pay-app-review-2/${id}`).then(r => r.data),
+  // The findings report, rendered server-side so the page, the PDF and the printed copy are
+  // the same document rather than three renderings that can drift apart.
+  reportHtml: id => api.get(`/pay-app-review-2/${id}/report.html`, { responseType: 'text' }).then(r => r.data),
+  // The upload still has a timeout — that part is a file transfer and a stall there is a real
+  // fault. The READING has none, because it is no longer happening on this connection.
+  extract: (formData, onTick) => api.post('/pay-app-review-2/extract', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => waitForJob(r.data.jobId, { onTick })),
+  // The first review on a project reads the contract, which is several passes on a long
+  // agreement; every review after that reads the stored terms and returns in seconds.
+  create: (formData, onTick) => api.post('/pay-app-review-2', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => waitForJob(r.data.jobId, { onTick })),
+  projects: () => api.get('/pay-app-review-2/projects').then(r => r.data),
+  createProject: projectName =>
+    api.post('/pay-app-review-2/projects', { project_name: projectName }).then(r => r.data),
+  projectHistory: projectId => api.get(`/pay-app-review-2/project/${projectId}/history`).then(r => r.data),
+  getContract: projectId => api.get(`/pay-app-review-2/project/${projectId}/contract`).then(r => r.data),
+  uploadContract: (projectId, formData) =>
+    api.post(`/pay-app-review-2/project/${projectId}/contract`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+    }).then(r => r.data),
+  updateContractTerms: (projectId, terms) =>
+    api.patch(`/pay-app-review-2/project/${projectId}/contract`, { terms }).then(r => r.data),
+  deleteContract: projectId => api.delete(`/pay-app-review-2/project/${projectId}/contract`).then(r => r.data),
+
+  // Shared Documents: every contract and reference file on a project. A 'contract' has its
+  // terms read and can be reviewed against; a 'reference' (schedule, estimate) is stored for
+  // the team and never sent to the AI.
+  listDocuments: projectId =>
+    api.get(`/pay-app-review-2/project/${projectId}/documents`).then(r => r.data),
+  addDocument: (projectId, formData) =>
+    api.post(`/pay-app-review-2/project/${projectId}/documents`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+    }).then(r => r.data),
+  updateDocument: (projectId, docId, data) =>
+    api.patch(`/pay-app-review-2/project/${projectId}/documents/${docId}`, data).then(r => r.data),
+  deleteDocument: (projectId, docId) =>
+    api.delete(`/pay-app-review-2/project/${projectId}/documents/${docId}`).then(r => r.data),
+  documentFileUrl: (projectId, docId) =>
+    `${apiBaseUrl}/pay-app-review-2/project/${projectId}/documents/${docId}/file.pdf`,
+  latestForProject: ({ projectId, projectName }) =>
+    api.get('/pay-app-review-2/latest-for-project', {
+      params: projectId ? { project_id: projectId } : { project_name: projectName },
+    }).then(r => r.data),
+  downloadPdf: async (id, fileName) => {
+    const res = await api.get(`/pay-app-review-2/${id}/report.pdf`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `pay_app_review_${id}.pdf`);
+  },
+  downloadMarkedUpPdf: async (id, fileName) => {
+    const res = await api.get(`/pay-app-review-2/${id}/marked-up.pdf`, { responseType: 'blob', timeout: AI_TIMEOUT });
+    triggerDownload(res.data, fileName || `pay_app_${id}_marked_up.pdf`);
+  },
+  downloadMarkdown: async (id, fileName) => {
+    const res = await api.get(`/pay-app-review-2/${id}/report.md`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `pay_app_review_${id}.md`);
+  },
+  downloadJson: async (id, fileName) => {
+    const res = await api.get(`/pay-app-review-2/${id}/report.json`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `pay_app_review_${id}.json`);
+  },
+  downloadOriginal: async (id, fileName) => {
+    const res = await api.get(`/pay-app-review-2/${id}/original.pdf`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `pay_app_${id}.pdf`);
+  },
+  delete: id => api.delete(`/pay-app-review-2/${id}`).then(r => r.data),
+};
+
 
 // Shared Documents — the project's contracts, drawings, specs and the rest, uploaded once and
 // read by every tool that needs them. The endpoints still sit under the pay-app-review router
