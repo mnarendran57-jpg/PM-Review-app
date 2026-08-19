@@ -673,7 +673,7 @@ export default function PayAppReview2() {
       {confirmDialog}
       <PageHeader
         title="Pay App Reviewer 2"
-        subtitle="The same reviewer with the review logic taken out — a sandbox for trying a different approach"
+        subtitle="Reviews a CSP pay application against the contract and last month's application. Subcontractor billings and GMP contingency are not checked here."
         icon={DocumentMagnifyingGlassIcon}
         accent="blue"
       />
