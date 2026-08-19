@@ -722,6 +722,11 @@ async function runPayAppReview(req, currentFile) {
       engineResult = await reviewPayApp({
         current,
         previous,
+        // Whether a previous application was HANDED to this review, which is not the same question
+        // as whether anything came out of reading it. Without this the two are indistinguishable
+        // downstream, and a failed extraction reports as "none was supplied" — which tells the
+        // reviewer their upload was ignored and sends them looking in the wrong place.
+        previousSupplied: !!(req.body.previous || previousReviewId),
         contractTerms,
         contracts: contracts.filter(c => c.termsStatus === 'ready'),
         deliveryMethod,

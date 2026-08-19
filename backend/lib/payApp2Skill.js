@@ -568,9 +568,28 @@ const rowKey = row => String(row.item_no ?? '').trim()
 // Column D is definitionally what was billed through the previous application, so it must equal the
 // prior application's column G on every line. A mismatch means work was re-billed, silently
 // reversed, or the schedule shifted underneath.
-function checkContinuity(cur, prior, f) {
+//
+// THREE STATES, NOT ONE. "No prior application", "a prior application was supplied but nothing came
+// out of it", and "it was read but has no schedule" look identical to a truthiness test and mean
+// completely different things to the reader. Telling someone their file was not supplied when they
+// supplied it is worse than saying nothing: it sends them looking in the wrong place, and it hides
+// a pipeline fault behind a sentence that reads like a fact about their paperwork.
+function checkContinuity(cur, prior, f, { supplied = false } = {}) {
   if (!prior) {
-    f.add(INFO, 'NO_PRIOR', 'No prior pay application supplied; continuity checks skipped.');
+    if (supplied) {
+      f.add(HIGH, 'PRIOR_EMPTY',
+        'A previous pay application was supplied but nothing could be read from it, so continuity '
+        + 'was NOT checked. This is a fault in the reading, not a finding about the contractor.');
+    } else {
+      f.add(INFO, 'NO_PRIOR', 'No prior pay application supplied; continuity checks skipped.');
+    }
+    return;
+  }
+
+  if (!(prior.g703?.line_items || []).length) {
+    f.add(HIGH, 'PRIOR_NO_SCHEDULE',
+      'The previous pay application was supplied and read, but no schedule lines came out of it, so '
+      + 'continuity was NOT checked. Re-read the previous application before relying on this review.');
     return;
   }
 
@@ -765,7 +784,7 @@ function checkLienWaiver(cur, f) {
 
 // --- the validator driver ------------------------------------------------------------------------
 
-function validate(cur, prior, profile) {
+function validate(cur, prior, profile, { priorSupplied = false } = {}) {
   const f = new Findings();
   checkG702Internal(cur, f);
   checkG702ToG703(cur, f);
@@ -774,7 +793,7 @@ function validate(cur, prior, profile) {
   checkContingencyAndCredits(cur, f);
   checkRetainage(cur, profile, f);
   checkRetainageAdjustedSum(cur, profile, f);
-  checkContinuity(cur, prior, f);
+  checkContinuity(cur, prior, f, { supplied: priorSupplied });
   checkLine7(cur, prior, f);
   checkContractTerms(cur, profile, f);
   checkG702Completeness(cur, profile, f);
@@ -1272,6 +1291,8 @@ const TITLES = {
   RETAINAGE_ADJUSTED_SUM: 'The schedule and the amount requested do not tie through retainage',
   RETAINAGE_EXEMPT_ITEMS: 'Some items are exempt from retainage under the contract',
   NO_PRIOR: 'No previous application was supplied',
+  PRIOR_EMPTY: 'The previous application could not be read, so nothing was compared against it',
+  PRIOR_NO_SCHEDULE: 'The previous application had no schedule lines to compare against',
   SEQUENCE_GAP: 'An application number appears to be missing',
   CONTINUITY_D: "What was billed before does not match last month's application",
   SOV_DRIFT: 'A scheduled value changed without a change order',
@@ -1355,14 +1376,28 @@ function buildHeadline({ cur, counts, rec, note }) {
   return parts.join(' ');
 }
 
-async function reviewPayApp({ current, previous, contractTerms, contracts, deliveryMethod, files }) {
+async function reviewPayApp({
+  current, previous, previousSupplied, contractTerms, contracts, deliveryMethod, files,
+}) {
   const cur = toExtraction(current);
   if (!cur) return null;
   const prior = toExtraction(previous);
   const profile = toContractProfile(contractTerms, contracts);
+  // Whether a previous application was HANDED to this review, which is a different question from
+  // whether anything came out of it. The caller says so explicitly; the fallback covers an older
+  // caller that does not.
+  const priorSupplied = previousSupplied ?? !!previous;
 
   // STEP 2 — cross-check the reading before anything is validated against it.
   const suspects = crossCheck(cur, profile);
+
+  // THE PRIOR APPLICATION'S READING IS CHECKED TOO. A misread figure in last month's schedule
+  // produces false continuity findings against a current application that is perfectly correct —
+  // and the finding points at this month's numbers, when the error is in last month's reading. The
+  // prior application's PDF is not in front of us at review time, so nothing here can be re-read;
+  // a prior cell that fails is unverifiable by definition, and the continuity checks that rest on
+  // it are held back rather than published.
+  const priorSuspects = prior ? crossCheck(prior, profile) : [];
 
   // The single pass over the pages: the targeted re-read AND everything no calculation can settle.
   let reading = null;
@@ -1432,9 +1467,15 @@ async function reviewPayApp({ current, previous, contractTerms, contracts, deliv
   const stillUnsettled = [
     ...unverified,
     ...residual.filter(r => !unverified.some(u => u.location === r.location && u.cell === r.cell)),
+    // Last month's doubtful cells travel with a note saying so, because "schedule line 4" in a
+    // report otherwise reads as a line on the application in front of the reader.
+    ...priorSuspects.map(s => ({
+      ...s,
+      reason: "it is a figure in LAST MONTH'S application, whose pages are not part of this review",
+    })),
   ];
 
-  const f = validate(cur, prior, profile);
+  const f = validate(cur, prior, profile, { priorSupplied });
   groupByRootCause(f.items);
   const { kept, withheld } = withholdUnverified(f.items, stillUnsettled);
 
@@ -1507,9 +1548,25 @@ async function reviewPayApp({ current, previous, contractTerms, contracts, deliv
       + 'that could not be verified. They will run once the reading is settled.');
   }
 
-  if (!prior) {
+  // WHAT THIS REVIEW WAS ACTUALLY HANDED. "Continuity was checked and passed" and "continuity was
+  // never checked" are indistinguishable in a findings list that contains neither, so the inputs
+  // are stated rather than inferred — and the sentence changes depending on whether a previous
+  // application was supplied, because telling someone their file was missing when they supplied it
+  // sends them looking in the wrong place.
+  if (!prior && priorSupplied) {
+    notChecked.push('Continuity against the previous application — one was supplied, but nothing '
+      + 'could be read from it, so re-billing and silent reversals were NOT checked. This is a '
+      + 'fault in the reading rather than anything about the contractor.');
+  } else if (!prior) {
     notChecked.push('Continuity against the previous application — none was supplied, so re-billing '
       + 'and silent reversals could not be checked.');
+  } else if (!(prior.g703?.line_items || []).length) {
+    notChecked.push('Continuity against the previous application — it was read but produced no '
+      + 'schedule lines, so re-billing and silent reversals were NOT checked.');
+  } else {
+    notChecked.push(`Continuity was checked line by line against application `
+      + `${prior.application_number ?? '(number not read)'}, which contributed `
+      + `${prior.g703.line_items.length} schedule lines.`);
   }
   if (!profile) {
     notChecked.push('Everything the contract governs — retainage rate, tax treatment and required '
@@ -1567,6 +1624,19 @@ async function reviewPayApp({ current, previous, contractTerms, contracts, deliv
         corrected: corrections,
         unverified: stillUnsettled,
         checksWithheld: withheld.map(w => ({ check: w.check, location: w.location })),
+        priorSuspect: priorSuspects.length,
+      },
+      // What the review was handed, recorded rather than inferred. A findings list containing no
+      // continuity findings looks the same whether continuity passed or never ran, and this is the
+      // only thing that tells the two apart.
+      inputsReceived: {
+        previousSupplied: priorSupplied,
+        previousRead: !!prior,
+        previousLineItems: (prior?.g703?.line_items || []).length,
+        previousApplicationNumber: prior?.application_number ?? null,
+        contractSupplied: !!profile,
+        retainageRate: profile ? profile.retainage_rate : null,
+        payApplicationPdfAvailable: !!buffer,
       },
     },
     subcontractorRows: [],
