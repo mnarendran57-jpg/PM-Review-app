@@ -454,6 +454,82 @@ const checks = r => r.findings.map(f => f.check);
       'a heading must never appear as a finding location');
   });
 
+  // COLUMN D FOLLOWS THE PRIOR LINE'S D + E, NOT ITS COLUMN G.
+  //
+  // The header is a formula — "From Previous Application (D + E)" — and G = D + E + F. They agree
+  // only while column F is empty, which is why comparing against G looked right for so long. On a
+  // line carrying stored material G exceeds D + E, and the check reports a mismatch on a line where
+  // the contractor did everything correctly: material in a warehouse has been paid for but not
+  // completed, so it does not roll into next month's "work completed from previous application".
+  await test('stored material on the prior line is not a continuity mismatch', async () => {
+    const prior = priorApplication();
+    // Last month: $10,000 completed and $5,000 of material sitting in a warehouse.
+    prior.lineItems[0] = { ...prior.lineItems[0], d: 0, e: 10000, f: 5000, g: 15000, h: 41000 };
+    prior.grandTotalRow = { c: 153600, d: 0, e: 26800, f: 5000, g: 31800, h: 121800, pctComplete: 21 };
+
+    const app = application();
+    // This month's column D is last month's D + E — 10,000 — and correctly excludes the material.
+    app.lineItems[0] = { ...app.lineItems[0], d: 10000, e: 16800, f: 0, g: 26800, h: 29200, pctComplete: 47.9 };
+    app.grandTotalRow = null;
+
+    const r = await run(app, { previous: prior, previousSupplied: true });
+    const d = r.findings.filter(x => x.check === 'CONTINUITY_D');
+    assert.strictEqual(d.length, 0,
+      `column D excluding stored material is correct, got: ${d.map(x => x.detail).join(' | ')}`);
+  });
+
+  await test('a real column D mismatch is still caught, and mentions any stored material', async () => {
+    const prior = priorApplication();
+    prior.lineItems[0] = { ...prior.lineItems[0], d: 0, e: 10000, f: 5000, g: 15000, h: 41000 };
+
+    const app = application();
+    // Claims 15,000 billed before — the prior's G, which double-counts the warehoused material.
+    app.lineItems[0] = { ...app.lineItems[0], d: 15000, e: 16800, f: 0, g: 31800, h: 24200, pctComplete: 56.8 };
+    app.grandTotalRow = null;
+
+    const r = await run(app, { previous: prior, previousSupplied: true });
+    const d = r.findings.find(x => x.check === 'CONTINUITY_D');
+    assert.ok(d, 'a genuine mismatch must still be reported');
+    assert.strictEqual(d.expected, 10000, "the expectation is the prior's D + E");
+    assert.match(d.detail, /stored material, which column D does not include/,
+      'and the report should say why the two figures differ');
+  });
+
+  // ONE DROPPED ROW MUST NOT COST THE WHOLE COMPARISON.
+  //
+  // Item numbers are only reliable while both readings found the same rows. Lose one line near the
+  // top of a scanned schedule and every number after it shifts, so this month's line 3 is compared
+  // against last month's line 3 when it should be compared against line 2. On a real pair that
+  // produced sixteen "changed" scheduled values out of twenty-two and the review refused to compare
+  // them at all. The descriptions still lined up perfectly.
+  await test('a schedule that lost a row still aligns, by description', async () => {
+    const prior = priorApplication();
+    // Last month's reading picked up a heading row the current reading did not, shifting every
+    // item number below it by one.
+    prior.lineItems = [
+      { itemNo: '1', description: 'General Conditions', c: 20000, d: 0, e: 20000, f: 0, g: 20000, h: 0, pctComplete: 100 },
+      ...prior.lineItems.map((li, i) => ({ ...li, itemNo: String(i + 2) })),
+    ];
+    prior.grandTotalRow = null;
+
+    const r = await run(application(), { previous: prior, previousSupplied: true });
+    assert.ok(!checks(r).includes('SCHEDULES_NOT_ALIGNED'),
+      'the same lines under different numbers are still the same lines');
+    assert.ok(!checks(r).includes('PRIOR_NO_MATCH'));
+    assert.match(r.notChecked.join(' '), /Continuity was checked line by line/,
+      'and continuity should actually run');
+  });
+
+  await test('genuinely different schedules are still refused', async () => {
+    const prior = priorApplication();
+    prior.lineItems.forEach((li, i) => {
+      li.itemNo = `X${i}`; li.description = `Totally Different Scope ${i}`; li.c += 40000;
+    });
+    const r = await run(application(), { previous: prior, previousSupplied: true });
+    assert.ok(checks(r).includes('PRIOR_NO_MATCH') || checks(r).includes('SCHEDULES_NOT_ALIGNED'),
+      'matching by description must not manufacture an alignment that does not exist');
+  });
+
   console.log(failures ? `\n${failures} failing` : '\nall passing');
   process.exit(failures ? 1 : 0);
 })();

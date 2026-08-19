@@ -627,6 +627,48 @@ function checkRetainageAdjustedSum(cur, profile, f) {
 const rowKey = row => String(row.item_no ?? '').trim()
   || String(row.description ?? '').trim().toLowerCase();
 
+// The same line, named the same way, whatever punctuation or case the two readings chose.
+const descKey = row => String(row.description ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// MATCHING TWO SCHEDULES TO EACH OTHER.
+//
+// Item number first, because that is what the form is numbered by. But item numbers are only
+// reliable while both readings found the same rows: lose ONE line near the top of a scanned
+// schedule and every number after it shifts by one, so line 9 of this month is compared against
+// line 9 of last month when it should be compared against line 8.
+//
+// That is not hypothetical. On a real pair the previous reading dropped a row and the schedules
+// came out 23 lines against 22; matched by number, sixteen of twenty-two "changed" their scheduled
+// value, and the review refused to compare them at all. Matched by description they line up.
+//
+// So both keyings are tried and the one that actually aligns is used. The measure is how many
+// matched lines agree on their scheduled value, because a schedule of values is stable between
+// applications — the keying that produces more agreement is the keying that found the same lines.
+function alignRows(curRows, priorRows) {
+  const build = (keyOf) => {
+    const map = new Map();
+    for (const r of priorRows) {
+      const k = keyOf(r);
+      if (k && !map.has(k)) map.set(k, r);
+    }
+    let matched = 0;
+    let agreeing = 0;
+    for (const r of curRows) {
+      const p = map.get(keyOf(r));
+      if (!p) continue;
+      matched += 1;
+      if (present(r.scheduled_value) && present(p.scheduled_value)
+        && close(num(r.scheduled_value), num(p.scheduled_value))) agreeing += 1;
+    }
+    return { map, keyOf, matched, agreeing };
+  };
+
+  const byNumber = build(rowKey);
+  const byDescription = build(descKey);
+  // Descriptions only win when they clearly do better; a tie leaves the form's own numbering alone.
+  return byDescription.agreeing > byNumber.agreeing ? byDescription : byNumber;
+}
+
 // Column D is definitionally what was billed through the previous application, so it must equal the
 // prior application's column G on every line. A mismatch means work was re-billed, silently
 // reversed, or the schedule shifted underneath.
@@ -697,9 +739,11 @@ function checkContinuity(cur, prior, f, { supplied = false } = {}) {
   }
 
   const priorRows = prior.g703?.line_items || [];
-  const priRows = new Map();
-  for (const r of priorRows) priRows.set(rowKey(r), r);
   const curRows = cur.g703?.line_items || [];
+  // Whichever keying actually lines the two schedules up — see alignRows.
+  const alignment = alignRows(curRows, priorRows);
+  const priRows = alignment.map;
+  const keyOf = alignment.keyOf;
 
   // BEFORE COMPARING ANYTHING, ASK WHETHER THE TWO SCHEDULES ARE THE SAME SCHEDULE.
   //
@@ -714,7 +758,7 @@ function checkContinuity(cur, prior, f, { supplied = false } = {}) {
   // seventy-one findings, every one of them an artefact of two independent readings disagreeing.
   // A reviewer given one accurate "these do not line up" is far better served than one handed
   // seventy plausible dollar deltas to disprove individually.
-  const matched = curRows.filter(r => priRows.has(rowKey(r))).length;
+  const matched = alignment.matched;
   if (curRows.length && matched === 0) {
     f.add(HIGH, 'PRIOR_NO_MATCH',
       `None of the ${curRows.length} line items matched any of the ${priRows.size} lines in the `
@@ -726,14 +770,17 @@ function checkContinuity(cur, prior, f, { supplied = false } = {}) {
   if (matched) {
     const bothPresent = (a, b) => present(a) && present(b);
     const drift = curRows.filter((r) => {
-      const p = priRows.get(rowKey(r));
+      const p = priRows.get(keyOf(r));
       return p && bothPresent(r.scheduled_value, p.scheduled_value)
         && !close(num(r.scheduled_value), num(p.scheduled_value));
     }).length;
+    // Same rule as the per-line check below: column D follows the prior line's D + E, not its G.
+    // Measuring the alignment against G counted every stored-material line as a mismatch and could
+    // tip a perfectly aligned pair over the threshold on its own.
     const dMismatch = curRows.filter((r) => {
-      const p = priRows.get(rowKey(r));
+      const p = priRows.get(keyOf(r));
       return p && present(r.prior_completed)
-        && !close(num(r.prior_completed), num(p.total_to_date));
+        && !close(num(r.prior_completed), num(p.prior_completed) + num(p.this_period));
     }).length;
 
     // A proportion alone is not enough on a short schedule: one approved change order on a
@@ -762,7 +809,7 @@ function checkContinuity(cur, prior, f, { supplied = false } = {}) {
 
   for (const r of curRows) {
     const loc = rowLocation(r);
-    const p = priRows.get(rowKey(r));
+    const p = priRows.get(keyOf(r));
     if (!p) {
       // MEDIUM rather than HIGH: new lines are routine on projects with active change orders. This
       // is a prompt to confirm the backing change order exists, not an accusation.
@@ -774,12 +821,23 @@ function checkContinuity(cur, prior, f, { supplied = false } = {}) {
       continue;
     }
 
+    // FOLLOW THE COLUMN HEADER, WHICH IS A FORMULA: "From Previous Application (D + E)".
+    //
+    // This was comparing against the prior line's column G, and G = D + E + F. The two agree only
+    // while column F is empty. The moment a line carries stored material, G exceeds D + E, and
+    // comparing against G reports a mismatch on every such line — material sitting in a warehouse
+    // has been paid for but not completed, so it does not roll into next month's "work completed
+    // from previous application". The contractor is right and the check is wrong.
     const D = num(r.prior_completed);
-    const pG = num(p.total_to_date);
-    if (present(r.prior_completed) && !close(D, pG)) {
+    const expectedD = num(p.prior_completed) + num(p.this_period);
+    if (present(r.prior_completed) && !close(D, expectedD)) {
+      const pF = num(p.materials_stored);
+      const storedNote = Math.abs(pF) <= TOL ? ''
+        : ` The prior line also carried ${money(pF)} in stored material, which column D does not `
+          + 'include.';
       f.add(CRITICAL, 'CONTINUITY_D',
-        "Column D must equal the prior application's column G for this line.",
-        { expected: pG, found: D, delta: D - pG, location: loc });
+        `Column D must equal the prior application's D + E for this line.${storedNote}`,
+        { expected: expectedD, found: D, delta: D - expectedD, location: loc });
     }
 
     const C = num(r.scheduled_value);
@@ -791,7 +849,7 @@ function checkContinuity(cur, prior, f, { supplied = false } = {}) {
     }
   }
 
-  const curKeys = new Set(curRows.map(rowKey));
+  const curKeys = new Set(curRows.map(keyOf));
   for (const [k, p] of priRows) {
     if (curKeys.has(k)) continue;
     if (Math.abs(num(p.total_to_date)) > TOL) {
