@@ -154,16 +154,21 @@ function ContractPanel({ projectId, contract, onChange }) {
     );
   }
 
-  const t = contract.terms || {};
-  const taxLabel = t.taxExempt === true ? 'Tax exempt' : t.taxExempt === false ? 'Not tax exempt' : 'Tax status not stated';
-  const taxStyle = t.taxExempt === true
-    ? { background: '#d1fae5', color: '#065f46' }
-    : t.taxExempt === false
-      ? { background: '#f1f5f9', color: '#475569' }
-      : { background: '#fff7ed', color: '#c2410c' };
-
+  // WHAT WAS READ OUT OF THE CONTRACT IS NOT SHOWN, DELIBERATELY.
+  //
+  // This panel used to print the tax status, the exemption wording and every unallowable clause
+  // found in the agreement — nineteen of them on a real contract, filling the column beside the
+  // upload form before a single pay application had been reviewed.
+  //
+  // None of it is a finding. It is Coaster's reading of a document the reviewer already has, and
+  // set above the review it competes with the findings for attention and buries them. The terms are
+  // still read, still stored, and still drive the tax and unallowable-cost checks; they simply
+  // belong in the report, where they appear as the basis for something that is actually wrong,
+  // rather than as a wall of clauses on the way in.
+  //
+  // What stays is what a reviewer needs to act on: which contract is attached, and how to remove it.
   return (
-    <div className="p-3 rounded-xl space-y-2.5" style={{ background: '#fafbfc', border: '1px solid #f1f5f9' }}>
+    <div className="p-3 rounded-xl" style={{ background: '#fafbfc', border: '1px solid #f1f5f9' }}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <DocumentTextIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
@@ -173,37 +178,9 @@ function ContractPanel({ projectId, contract, onChange }) {
           <TrashIcon className="w-3.5 h-3.5" />
         </button>
       </div>
-
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold" style={taxStyle}>
-          {taxLabel}
-        </span>
-        {contract.terms_edited ? (
-          <span className="text-[10px] text-gray-400">terms corrected by you</span>
-        ) : (
-          <span className="text-[10px] text-gray-400">read from the contract — check before relying on it</span>
-        )}
-      </div>
-
-      {t.taxExemptBasis && <p className="text-[11px] text-gray-500 italic">“{t.taxExemptBasis}”</p>}
-
-      <div>
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1">
-          Unallowable items ({(t.unallowableItems || []).length})
-        </p>
-        {(t.unallowableItems || []).length === 0 ? (
-          <p className="text-[11px] text-gray-400">None found in this contract.</p>
-        ) : (
-          <ul className="space-y-1">
-            {t.unallowableItems.map((u, i) => (
-              <li key={i} className="text-[11px] text-gray-600">
-                <span className="font-medium text-gray-900">{u.item}</span>
-                {u.basis && <span className="text-gray-400"> — {u.basis}</span>}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      <p className="text-[10px] text-gray-400 mt-1.5">
+        Its terms are read once and applied to every review on this project.
+      </p>
     </div>
   );
 }
