@@ -15,9 +15,45 @@ function fillPlaceholders(text, fields) {
   return (text || '').replace(/\{\{(\w+)\}\}/g, (_, key) => fields[key] ?? '');
 }
 
+// THE STANDARD PDF FONTS CANNOT WRITE EVERY CHARACTER, and they raise rather than skip.
+//
+// pdf-lib's built-in fonts encode WinAnsi, which covers the em dash, the section sign and curly
+// quotes but NOT the arrow, the approximately-equal sign, the true minus, or the comparison
+// operators. Handed one of those, both drawText and widthOfTextAtSize throw, and a whole report
+// that had already been produced comes back as a 500 with nothing to show the PM.
+//
+// That was survivable while the text in these documents was written in code. It stopped being
+// survivable once a review could put the model's own prose on the page: "5% -> 85%" and "~$800"
+// are the natural way to write those things, and neither can be printed.
+//
+// So the unprintable characters are translated to what a typesetter would have used before the
+// glyphs existed, and anything still unencodable is dropped rather than allowed to take the
+// document down with it. A PDF with "->" in it is a small blemish. A PDF that does not exist is
+// the difference between a review and no review.
+// Only characters WinAnsi genuinely lacks. Curly quotes, the em dash, the ellipsis, the bullet,
+// the section sign, ×, ÷, ± and ° all encode perfectly well, and rewriting them would be an
+// unprompted downgrade of the typography on a document that goes to a client.
+const SUBSTITUTIONS = [
+  [/[→➡]/g, '->'], [/←/g, '<-'], [/↔/g, '<->'],
+  [/≈/g, '~'], [/≠/g, '!='], [/≤/g, '<='], [/≥/g, '>='],
+  [/−/g, '-'],
+  [/[✅✔✓]/g, 'yes'], [/[❌✗]/g, 'no'],
+  [/[   ⁠]/g, ' '],
+];
+
+// WinAnsi is Latin-1 plus a handful of typographic characters in 0x80–0x9F. Anything outside what
+// the substitutions above rescue is removed.
+const ENCODABLE = /[\t\n\r\x20-\x7e\xa0-\xff€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ]/;
+
+function toWinAnsi(text) {
+  let s = String(text ?? '');
+  for (const [pattern, replacement] of SUBSTITUTIONS) s = s.replace(pattern, replacement);
+  return [...s].filter(ch => ENCODABLE.test(ch)).join('');
+}
+
 function wrapLine(line, font, size, maxWidth) {
   if (line === '') return [''];
-  const words = line.split(' ');
+  const words = toWinAnsi(line).split(' ');
   const wrapped = [];
   let current = '';
   for (const word of words) {
@@ -136,6 +172,6 @@ async function mergePdfBuffers(buffers) {
 }
 
 module.exports = {
-  renderMemoPdf, mergePdfBuffers, fillPlaceholders, wrapLine,
+  renderMemoPdf, mergePdfBuffers, fillPlaceholders, wrapLine, toWinAnsi,
   PAGE_WIDTH, PAGE_HEIGHT, MARGIN, CONTENT_WIDTH, LEGACY_LOGO_PATH,
 };

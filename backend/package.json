@@ -9,7 +9,8 @@
     "test:payapp": "node tests/payAppInvariants.test.js",
     "test:rfi": "node tests/rfiReconcile.test.js",
     "test:pdf": "node tests/pdfTextLayer.test.js",
-    "test:jobs": "node tests/jobs.test.js"
+    "test:jobs": "node tests/jobs.test.js",
+    "test:reportpdf": "node tests/reportPdfEncoding.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

@@ -1,7 +1,7 @@
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const { money } = require('./money');
 const {
-  wrapLine, PAGE_WIDTH, PAGE_HEIGHT, MARGIN, CONTENT_WIDTH,
+  wrapLine, toWinAnsi, PAGE_WIDTH, PAGE_HEIGHT, MARGIN, CONTENT_WIDTH,
 } = require('./pdfGen');
 
 const BODY_SIZE = 10;
@@ -35,7 +35,9 @@ async function renderPayAppReportPdf({ report, companyName }) {
       y: PAGE_HEIGHT - 28, size: BODY_SIZE, font: fontItalic, color: GREY,
     });
     // Wordmark, top-left, in place of a logo image.
-    page.drawText(companyName || 'Coaster', {
+    // Everything else on the page reaches drawText through wrapLine, which sanitizes. This does
+    // not, and an organization's name is user-supplied.
+    page.drawText(toWinAnsi(companyName || 'Coaster'), {
       x: MARGIN, y: PAGE_HEIGHT - 52, size: 18, font: fontBold, color: INK,
     });
     return PAGE_HEIGHT - 76;
