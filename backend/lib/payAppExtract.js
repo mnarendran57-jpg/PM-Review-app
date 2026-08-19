@@ -1,4 +1,5 @@
 const { splitPdf, analyzeInPasses, partNotice, mergeExtracted } = require('./pdfChunk');
+const { normalizeOrientation } = require('./pdfNormalize');
 const { askForJson } = require('./aiJson');
 
 // One pay-application's worth of fields (used for both "current" and "previous" below).
@@ -613,7 +614,24 @@ async function callClaudeWithRetry(content, hasPrevious) {
   return data;
 }
 
-async function analyzePayApps(currentBuffer, previousBuffer) {
+async function analyzePayApps(currentRaw, previousRaw) {
+  // ORIENTATION FIRST, ON BOTH DOCUMENTS, BEFORE A SINGLE FIGURE IS READ.
+  //
+  // The two applications in one review frequently disagree about it. A real pair on this project
+  // had the current application upright and the previous one carrying /Rotate 270 on every page,
+  // and a sideways G703 is where transcription errors begin. The previous one matters more: its
+  // errors come back as continuity failures blamed on this month's application.
+  const cur = await normalizeOrientation(currentRaw, 'current pay application');
+  const pri = previousRaw
+    ? await normalizeOrientation(previousRaw, 'previous pay application')
+    : { buffer: null, rotated: [], sidewaysSuspects: [] };
+  const currentBuffer = cur.buffer;
+  const previousBuffer = pri.buffer;
+  const orientation = {
+    current: { rotated: cur.rotated, sidewaysSuspects: cur.sidewaysSuspects },
+    previous: previousRaw ? { rotated: pri.rotated, sidewaysSuspects: pri.sidewaysSuspects } : null,
+  };
+
   // Only the current document's page count decides anything now; analyzeInPasses splits whatever
   // it is given, so pre-splitting the previous one was a PDF parse whose answer nothing read.
   const currentParts = await splitPdf(currentBuffer);
@@ -637,7 +655,7 @@ async function analyzePayApps(currentBuffer, previousBuffer) {
       analyzeInPasses(currentBuffer, readOne),
       previousBuffer ? analyzeInPasses(previousBuffer, readOne) : Promise.resolve(null),
     ]);
-    return { current, previous };
+    return { current, previous, orientation };
   };
 
   // TWO PAY APPLICATIONS ARE NEVER READ IN ONE CALL.
@@ -668,7 +686,7 @@ async function analyzePayApps(currentBuffer, previousBuffer) {
 
     try {
       const parsed = await callClaudeWithRetry(content, false);
-      return { current: parsed.current, previous: null };
+      return { current: parsed.current, previous: null, orientation };
     } catch (err) {
       if (!err?.truncated) throw err;
       // Fitting in one REQUEST does not mean fitting in one ANSWER. A CMAR pay app carrying a

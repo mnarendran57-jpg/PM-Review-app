@@ -670,6 +670,32 @@ function checkContinuity(cur, prior, f, { supplied = false } = {}) {
       + 'gap is weaker evidence — confirm no intervening application is missing.');
   }
 
+  // IS THIS THE SAME PROJECT'S PREVIOUS APPLICATION AT ALL?
+  //
+  // Two applications under one contract share an original contract sum. When they do not, the
+  // document in the previous slot is not this project's previous application, and every comparison
+  // that follows is against a different job.
+  //
+  // This is not a theoretical guard. A previous application that arrived as a JBIG2-encoded scan —
+  // a codec the reader cannot decode — came back as a complete, plausible, entirely invented pay
+  // application: a different project name, a different contract sum, twenty-three line items none
+  // of which were on the form. Read three times it invented three different projects. A blank page
+  // produces fiction rather than an error, and the only cheap way to catch fiction is to check it
+  // against something the real document must agree with.
+  const curSum = cur.g702?.line1_original_contract_sum;
+  const priSum = prior.g702?.line1_original_contract_sum;
+  if (present(curSum) && present(priSum) && !close(num(curSum), num(priSum), 1)) {
+    f.add(HIGH, 'PRIOR_DIFFERENT_CONTRACT',
+      `The previous application states an original contract sum of ${money(num(priSum))} and this `
+      + `one states ${money(num(curSum))}. Two applications under one contract cannot disagree `
+      + 'about it, so the document read as the previous application is not this project\'s previous '
+      + 'application — most often it is a different job, or a scan the reader could not decode. '
+      + 'Continuity was NOT checked. This is a fault in the reading, not a finding about the '
+      + 'contractor.',
+      { expected: num(curSum), found: num(priSum), delta: num(priSum) - num(curSum) });
+    return;
+  }
+
   const priorRows = prior.g703?.line_items || [];
   const priRows = new Map();
   for (const r of priorRows) priRows.set(rowKey(r), r);
@@ -780,6 +806,7 @@ function checkContinuity(cur, prior, f, { supplied = false } = {}) {
 // CRITICAL finding out of a bad reading. Stand down and say so instead.
 const PRIOR_UNRELIABLE = new Set([
   'SCHEDULES_NOT_ALIGNED', 'PRIOR_NO_MATCH', 'PRIOR_EMPTY', 'PRIOR_NO_SCHEDULE',
+  'PRIOR_DIFFERENT_CONTRACT',
 ]);
 
 function checkLine7(cur, prior, f) {
@@ -810,13 +837,40 @@ function checkContractTerms(cur, profile, f) {
     return;
   }
 
+  // "LINE 1 IS WRONG" AND "THIS IS THE WRONG CONTRACT" ARE DIFFERENT FINDINGS, and telling them
+  // apart is the difference between a report someone can act on and a number that discredits it.
+  //
+  // A $437,000 pay application measured against a $109 million agreement produced a CRITICAL saying
+  // line 1 was out by $108,968,229. Nothing about a pay application is ever out by $109 million.
+  // The contract on file simply governed a different job, and the review said so in the one way
+  // guaranteed to make a reader stop trusting the page.
+  //
+  // The contracts themselves are already scoped to the project — the route selects them by
+  // project_id — so this is about a contract filed against the right project that belongs to a
+  // different one. An order-of-magnitude gap is the signal: a real line-1 error is a typo, a
+  // transposition, a missing change order. It is not a factor of ten.
   const cs = profile.contract_sum;
   if (cs !== null && cs !== undefined && present(cur.g702?.line1_original_contract_sum)) {
     const L1 = num(cur.g702.line1_original_contract_sum);
+    const named = profile.contract_form ? `"${profile.contract_form}"` : 'the contract on file';
     if (!close(num(cs), L1)) {
-      f.add(CRITICAL, 'CONTRACT_SUM_MISMATCH', 'G702 Line 1 does not match the executed contract sum.',
-        { expected: num(cs), found: L1, delta: L1 - num(cs), location: 'Cover sheet line 1',
-          citation: profile.citations?.contract_sum });
+      const wrongDocument = L1 > TOL && num(cs) > TOL
+        && (num(cs) / L1 > 5 || L1 / num(cs) > 5);
+      if (wrongDocument) {
+        f.add(HIGH, 'CONTRACT_NOT_FOR_THIS_APPLICATION',
+          `This application is drawn against a contract sum of ${money(L1)}, but ${named} is for `
+          + `${money(num(cs))} — different by a factor of `
+          + `${(Math.max(num(cs), L1) / Math.min(num(cs), L1)).toFixed(0)}. A pay application is not `
+          + 'wrong by that much; the document being measured against belongs to a different job. '
+          + 'Attach this project\'s own contract and run the review again. Everything the contract '
+          + 'governs — retainage, tax treatment, unallowable items — was checked against the wrong '
+          + 'agreement and cannot be relied on.',
+          { expected: L1, found: num(cs), location: 'The contract on file' });
+      } else {
+        f.add(CRITICAL, 'CONTRACT_SUM_MISMATCH', 'G702 Line 1 does not match the executed contract sum.',
+          { expected: num(cs), found: L1, delta: L1 - num(cs), location: 'Cover sheet line 1',
+            citation: profile.citations?.contract_sum });
+      }
     }
   }
 
@@ -971,11 +1025,32 @@ const orNull = v => (v === undefined || v === '' ? null : v ?? null);
 const SUBTOTAL = /(^|\s)(sub)?totals?\b|\btotals?\s*:/i;
 const isSubtotal = li => SUBTOTAL.test(String(li.description || ''));
 
+// A HEADING IS NOT A LINE ITEM. Schedules group their lines under headings — "General Conditions",
+// "MEP", a building name, a phase — and those rows carry a description and no money at all. Counted
+// as lines they inflate the line count, they appear as NEW LINE ITEM and DROPPED LINE ITEM findings
+// whenever two applications group things differently, and they dilute every ratio that decides
+// whether two schedules line up.
+//
+// The test is the figures, not the words: a row with a description and not one number anywhere in
+// it is a heading. That catches "General Conditions" and "MEP" without needing to know what a
+// particular contractor calls its sections, and it cannot swallow a real line, because a real line
+// always carries at least a scheduled value.
+const MONEY_COLUMNS = ['c', 'd', 'e', 'f', 'g', 'h'];
+const isHeading = (li) => {
+  if (!String(li.description || '').trim()) return false;
+  const carriesFigures = MONEY_COLUMNS.some(k => isNum(li[k]) && li[k] !== 0)
+    || (isNum(li.pctComplete) && li.pctComplete !== 0)
+    || (isNum(li.retainage) && li.retainage !== 0);
+  return !carriesFigures;
+};
+
 function toExtraction(payApp) {
   if (!payApp?.summary) return null;
   const s = payApp.summary;
 
-  const lineItems = (payApp.lineItems || []).filter(li => !isSubtotal(li)).map(li => ({
+  const lineItems = (payApp.lineItems || [])
+    .filter(li => !isSubtotal(li) && !isHeading(li))
+    .map(li => ({
     item_no: orNull(li.itemNo),
     description: li.description || '',
     scheduled_value: orNull(li.c),
@@ -1015,6 +1090,7 @@ function toExtraction(payApp) {
     tax_billed: taxBilled,
     _tax_rows: taxRows,
     _subtotal_rows_excluded: (payApp.lineItems || []).filter(isSubtotal).length,
+    _heading_rows_excluded: (payApp.lineItems || []).filter(isHeading).length,
     g702: {
       line1_original_contract_sum: orNull(s.line1),
       line2_net_change_orders: orNull(s.line2),
@@ -1469,6 +1545,8 @@ const TITLES = {
   RETAINAGE_EXEMPT_ITEMS: 'Some items are exempt from retainage under the contract',
   NO_PRIOR: 'No previous application was supplied',
   PRIOR_NO_MATCH: 'None of the schedule lines matched the previous application',
+  PRIOR_DIFFERENT_CONTRACT: 'The previous application is for a different contract, so nothing was compared',
+  CONTRACT_NOT_FOR_THIS_APPLICATION: 'The contract on file is for a different job than this application',
   SCHEDULES_NOT_ALIGNED: 'This schedule and last month’s do not line up, so nothing was compared',
   LINE7_NOT_CHECKED: 'Previous payments were not checked, because last month’s reading is unreliable',
   PRIOR_EMPTY: 'The previous application could not be read, so nothing was compared against it',
@@ -1807,6 +1885,7 @@ async function reviewPayApp({
       taxRows: cur._tax_rows || [],
       taxBilled: cur.tax_billed,
       subtotalRowsExcluded: cur._subtotal_rows_excluded || 0,
+      headingRowsExcluded: cur._heading_rows_excluded || 0,
       reading: {
         crossChecked: cellCount,
         suspect: suspects.length,

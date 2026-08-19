@@ -388,6 +388,72 @@ const checks = r => r.findings.map(f => f.check);
       'a first application has no prior by definition, and should not read as a gap');
   });
 
+  // A BLANK PAGE PRODUCES FICTION, NOT AN ERROR.
+  //
+  // A previous application that arrived as a JBIG2-encoded scan — a codec the reader cannot decode
+  // — came back as a complete, plausible, entirely invented pay application. Read three times it
+  // invented three different projects. Two applications under one contract cannot disagree about
+  // the original contract sum, so that is the cheapest thing to check fiction against.
+  await test('a previous application for a different contract sum is refused', async () => {
+    const prior = priorApplication();
+    prior.summary.line1 = 878000; // this project's applications are drawn on 153,600
+    const r = await run(application(), { previous: prior, previousSupplied: true });
+
+    assert.ok(checks(r).includes('PRIOR_DIFFERENT_CONTRACT'));
+    assert.ok(!checks(r).includes('SOV_DRIFT'), 'nothing may be compared against a different job');
+    assert.ok(!checks(r).includes('CONTINUITY_D'));
+    assert.ok(!checks(r).includes('LINE7_CONTINUITY'), 'and Line 7 must stand down too');
+    assert.match(r.findings.find(x => x.check === 'PRIOR_DIFFERENT_CONTRACT').detail,
+      /not a finding about the contractor/);
+  });
+
+  // THE WRONG CONTRACT IS NOT AN ARITHMETIC ERROR.
+  //
+  // A $437,000 application measured against a $109 million agreement produced a CRITICAL saying
+  // line 1 was out by $108,968,229. Nothing about a pay application is ever out by $109 million.
+  await test('a contract from a different job is named as such, not as a line-1 error', async () => {
+    const r = await run(application(), {
+      contractTerms: {
+        party: 'Someone Else', taxExempt: false, originalContractSum: 109405229,
+        retainageRate: null, unallowableItems: [],
+      },
+      contracts: [{ isPrimary: true, label: 'CHS_A133', termsStatus: 'ready' }],
+    });
+    assert.ok(checks(r).includes('CONTRACT_NOT_FOR_THIS_APPLICATION'));
+    assert.ok(!checks(r).includes('CONTRACT_SUM_MISMATCH'),
+      'presenting this as a line-1 error is what discredits the report');
+    const f = r.findings.find(x => x.check === 'CONTRACT_NOT_FOR_THIS_APPLICATION');
+    assert.match(f.detail, /belongs to a different job/);
+    assert.ok(!/108,968,229/.test(f.detail), 'the delta is meaningless here and must not be printed');
+  });
+
+  await test('a real line-1 error is still reported as one', async () => {
+    const r = await run(application(), {
+      contractTerms: {
+        party: 'HTX', taxExempt: false, originalContractSum: 155600, // 2,000 out, a typo
+        retainageRate: null, unallowableItems: [],
+      },
+      contracts: [{ isPrimary: true, label: 'A101', termsStatus: 'ready' }],
+    });
+    assert.ok(checks(r).includes('CONTRACT_SUM_MISMATCH'));
+    assert.ok(!checks(r).includes('CONTRACT_NOT_FOR_THIS_APPLICATION'));
+  });
+
+  // HEADINGS ARE NOT LINE ITEMS.
+  await test('group headings are not counted as schedule lines', async () => {
+    const app = application();
+    app.lineItems = [
+      { itemNo: '', description: 'General Conditions', c: null, d: null, e: null, f: null, g: null, h: null, pctComplete: null },
+      ...app.lineItems,
+      { itemNo: '', description: 'MEP', c: null, d: null, e: null, f: null, g: null, h: null, pctComplete: null },
+    ];
+    const r = await run(app);
+    assert.strictEqual(r.stats.lineItems, 3, 'the two headings must not be counted');
+    assert.strictEqual(r.cspReview.headingRowsExcluded, 2);
+    assert.ok(!r.findings.some(f => /General Conditions|MEP/.test(f.location || '')),
+      'a heading must never appear as a finding location');
+  });
+
   console.log(failures ? `\n${failures} failing` : '\nall passing');
   process.exit(failures ? 1 : 0);
 })();
