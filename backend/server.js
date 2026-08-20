@@ -35,6 +35,10 @@ app.use('/api/rfis', require('./routes/rfis'));
 app.use('/api/meetings', require('./routes/meetings'));
 app.use('/api/memo-templates', require('./routes/memoTemplates'));
 app.use('/api/pay-app-review', require('./routes/payAppReview'));
+// Shared Documents — the project's filing cabinet. It is addressed under the pay app review path
+// for historical reasons and mounted separately so that holding one module at an older behaviour
+// cannot take the whole project's documents down with it, which is what happened on 19 August.
+app.use('/api/pay-app-review', require('./routes/projectDocuments'));
 // A sandbox copy of the module above, on its own table. See routes/payAppReview2.js.
 app.use('/api/pay-app-review-2', require('./routes/payAppReview2'));
 app.use('/api/pco-review', require('./routes/pcoReview'));
