@@ -10,6 +10,8 @@ const access = require('../lib/access');
 const { requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../lib/plans');
 const { brandingFor } = require('../lib/orgBranding');
+const { uprightJpeg } = require('../lib/imageOrientation');
+const { fillProgressTemplate, templateForProject } = require('../lib/progressCover');
 
 // Everything here belongs to one organization, and within it a member sees only the
 // projects they are on. Applied to the whole router so a new endpoint cannot be added
@@ -33,6 +35,8 @@ const upload = multer({
 });
 
 const ACCEPTED = new Set(['image/jpeg', 'image/jpg', 'image/pjpeg']);
+
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 // Next sequential report number for a project (the template titles reports "…-14", etc.).
 function nextReportNumber(projectId) {
@@ -79,12 +83,23 @@ router.post('/', upload.array('images', 100), async (req, res) => {
     const contractor = req.body.contractor || null;
     const reportNumber = req.body.report_number ? Number(req.body.report_number) : nextReportNumber(projectId);
 
-    const images = files.map((f, i) => ({
-      buffer: f.buffer,
-      mediaType: f.mimetype === 'image/jpg' ? 'image/jpeg' : f.mimetype,
-      caption: (captions[i] || '').toString().trim(),
-      fileName: f.originalname,
-    }));
+    // Turned the right way up before anything looks at it. A phone held sideways writes the
+    // pixels in the sensor's orientation and records a tag saying how far round to turn them;
+    // the upload box honours that tag, and every consumer downstream of here does not. Doing it
+    // once, here, means Claude, the PDF and the Word template all see the same upright photo —
+    // and the stored file is upright too, so an old report reprinted later is still right.
+    let turned = 0;
+    const images = files.map((f, i) => {
+      const upright = uprightJpeg(f.buffer);
+      if (upright.rotated) turned++;
+      return {
+        buffer: upright.buffer,
+        mediaType: f.mimetype === 'image/jpg' ? 'image/jpeg' : f.mimetype,
+        caption: (captions[i] || '').toString().trim(),
+        fileName: f.originalname,
+      };
+    });
+    if (turned) console.log(`[progress] ${turned} of ${files.length} photo(s) turned upright`);
 
     const report = await analyzeProgress({
       images, projectName, contractor, periodLabel, visitDate, notes: req.body.notes || null,
@@ -114,8 +129,12 @@ router.post('/', upload.array('images', 100), async (req, res) => {
     `);
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
-      const { key } = await storage.storeFile('progress', f.buffer, f.mimetype, f.originalname);
-      insertFile.run(reportId, i, f.originalname, f.mimetype, images[i].caption || null, key, key ? Buffer.alloc(0) : f.buffer);
+      // The upright bytes, not the ones that were uploaded. Storing the original would mean
+      // every reprint of this report had to rotate it again — and the report the PM downloads
+      // a month from now would depend on code that could have changed since.
+      const bytes = images[i].buffer;
+      const { key } = await storage.storeFile('progress', bytes, f.mimetype, f.originalname);
+      insertFile.run(reportId, i, f.originalname, f.mimetype, images[i].caption || null, key, key ? Buffer.alloc(0) : bytes);
     }
 
     res.json({ id: reportId, report, header });
@@ -209,6 +228,82 @@ router.get('/:id/report.pdf', async (req, res) => {
     console.error('Progress report PDF error:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// The report in the organization's own Word template, when the project has one confirmed on its
+// Shared Documents. This is the deliverable a customer with a house format actually wants: their
+// document, their formatting, this visit's observations and photographs written into it. The PDF
+// above stays as it is for everyone who has not uploaded one.
+router.get('/:id/report.docx', async (req, res) => {
+  try {
+    const row = visibleReport(req);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+
+    const template = templateForProject(row.project_id);
+    if (!template) {
+      return res.status(404).json({
+        error: 'This project has no confirmed progress report template. Upload your Word report '
+          + 'on the project\'s Shared Documents and confirm its placeholders first.',
+      });
+    }
+
+    const templateBuffer = await storage.readFile({
+      key: template.row.file_key, blob: template.row.file_blob,
+    });
+    if (!templateBuffer) return res.status(404).json({ error: 'The template file could not be read.' });
+
+    const report = JSON.parse(row.report_json);
+    const header = headerFromRow(row);
+    if (row.project_id) {
+      const proj = db.prepare('SELECT project_name FROM projects WHERE id=?').get(row.project_id);
+      header.projectName = proj?.project_name || null;
+    }
+
+    const photoRows = db.prepare(
+      'SELECT caption, file_key, file_blob FROM progress_report_files WHERE report_id=? ORDER BY sort_order ASC'
+    ).all(row.id);
+    const photos = [];
+    for (const p of photoRows) {
+      // Already upright: they were turned before they were stored. See the upload above.
+      const buffer = await storage.readFile({ key: p.file_key, blob: p.file_blob });
+      if (buffer) photos.push({ caption: p.caption || '', buffer });
+    }
+
+    const num = header.reportNumber != null ? `-${header.reportNumber}` : '';
+    const docx = fillProgressTemplate({
+      templateBuffer,
+      replacements: template.terms.replacements,
+      fields: {
+        report_title: `${header.projectName || 'Project'} Progress Report${num}`,
+        report_number: header.reportNumber != null ? String(header.reportNumber) : '',
+        date: header.visitDate || '',
+        time: header.visitTime || '',
+        weather: header.weather || '',
+        submitted_by: header.submittedBy || '',
+        project_name: header.projectName || '',
+        contractor: header.contractor || '',
+        progress: report.progress || [],
+      },
+      photos,
+    });
+
+    const stem = (header.projectName || 'Progress').replace(/[^a-z0-9]+/gi, '_');
+    res.setHeader('Content-Type', DOCX_MIME);
+    res.setHeader('Content-Disposition', `attachment; filename="${stem}_Progress_Report${num}.docx"`);
+    res.send(docx);
+  } catch (err) {
+    console.error('Progress report Word error:', err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// Whether the Word download should be offered at all — the page asks before showing the button,
+// rather than offering a download that answers 404.
+router.get('/project/:projectId/template', (req, res) => {
+  const project = access.projectForUser(req.user, req.params.projectId);
+  if (!project || project.org_id !== req.orgId) return res.status(404).json({ error: 'Project not found' });
+  const template = templateForProject(Number(req.params.projectId));
+  res.json(template ? { available: true, fileName: template.row.file_name } : { available: false });
 });
 
 router.get('/:id/files/:fileId', async (req, res) => {

@@ -1,8 +1,10 @@
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
 const { askForJson } = require('./aiJson');
+const { COVER_KINDS, DEFAULT_KIND } = require('./coverTemplates');
 
-// An organization's own memo cover, in Word, driving the memo Coaster produces.
+// An organization's own document, in Word, driving what Coaster produces — their memo cover for
+// Proposal Intake, their progress report for Progress Report.
 //
 // The point is that the output IS the customer's document — their fonts, their letterhead,
 // their tables — rather than an approximation of it redrawn by this app. That means filling
@@ -10,26 +12,19 @@ const { askForJson } = require('./aiJson');
 //
 // Placeholders use the same {{field}} form the first customer's template already uses, so a
 // file prepared by hand needs no conversion at all.
+//
+// Which fields exist, and what the model is told it is reading, come from lib/coverTemplates.js.
+// Everything below is the same for every kind of cover.
 const DELIMITERS = { start: '{{', end: '}}' };
 
-// The fields a proposal can supply. The AI is only ever allowed to map onto these, because a
+// The fields a filled copy can supply. The AI is only ever allowed to map onto these, because a
 // placeholder naming a field that is never populated renders as a blank in a signed document.
-const FIELDS = [
-  { key: 'date', label: "Today's date" },
-  { key: 'to_name', label: 'Who the memo is addressed to' },
-  { key: 'from_name', label: 'Who the memo is from' },
-  { key: 'project_name', label: 'Project name' },
-  { key: 'vendor_name', label: 'Vendor or contractor name' },
-  { key: 'memo_type', label: '"Proposal" or "Change Order"' },
-  { key: 'po_number', label: 'Purchase order number' },
-  { key: 'po_reference', label: 'Wording referencing the PO, or blank' },
-  { key: 'scope_of_work', label: 'Scope of work described in the proposal' },
-  { key: 'total_price', label: 'Total price' },
-  { key: 'change_order_price', label: 'Change order amount' },
-  { key: 'original_po_amount', label: 'Original PO amount' },
-  { key: 'new_total_amount', label: 'PO total after the change' },
-  { key: 'request_sentence', label: 'The sentence asking for the requisition or PO increase' },
-];
+const kindOf = kind => COVER_KINDS[kind] || COVER_KINDS[DEFAULT_KIND];
+const fieldsFor = kind => kindOf(kind).fields;
+const fieldKeysFor = kind => new Set(fieldsFor(kind).map(f => f.key));
+
+// Kept for callers that predate there being more than one kind of cover.
+const FIELDS = COVER_KINDS[DEFAULT_KIND].fields;
 const FIELD_KEYS = new Set(FIELDS.map(f => f.key));
 
 const DOC_XML = 'word/document.xml';
@@ -41,6 +36,49 @@ const unescapeXml = s => String(s)
 const escapeXml = s => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+
+// --- Matching a span without matching inside a word -----------------------------------------
+//
+// A placeholder is applied by literal text match, and for a memo that was fine: no memo field is
+// ever one character long. A progress report has one that is — the report number — and a bare "7"
+// matched inside "1177 West Loop South" and inside the date "2026-07-14", so confirming a
+// perfectly correct mapping silently rewrote the company's own address and the visit date.
+//
+// A span whose edge is alphanumeric only matches where that edge is not against another
+// alphanumeric character. "7" therefore still matches in "Progress Report-7" and no longer in
+// "1177"; a span edged with punctuation is unaffected, so nothing that used to work stops.
+const isWordChar = c => /[A-Za-z0-9]/.test(c || '');
+
+function boundedIndexes(haystack, needle) {
+  const out = [];
+  if (!needle) return out;
+  const needsLeft = isWordChar(needle[0]);
+  const needsRight = isWordChar(needle[needle.length - 1]);
+  let at = haystack.indexOf(needle);
+  while (at !== -1) {
+    const before = at > 0 ? haystack[at - 1] : '';
+    const after = haystack[at + needle.length] || '';
+    if (!(needsLeft && isWordChar(before)) && !(needsRight && isWordChar(after))) out.push(at);
+    at = haystack.indexOf(needle, at + 1);
+  }
+  return out;
+}
+
+const boundedIncludes = (haystack, needle) => boundedIndexes(haystack, needle).length > 0;
+const boundedCount = (haystack, needle) => boundedIndexes(haystack, needle).length;
+
+function boundedReplace(haystack, needle, replacement) {
+  const hits = boundedIndexes(haystack, needle);
+  if (!hits.length) return haystack;
+  let out = '';
+  let cursor = 0;
+  for (const at of hits) {
+    if (at < cursor) continue;   // an overlapping hit whose text has already been consumed
+    out += haystack.slice(cursor, at) + replacement;
+    cursor = at + needle.length;
+  }
+  return out + haystack.slice(cursor);
+}
 
 function loadZip(buffer) {
   try {
@@ -88,9 +126,9 @@ function readDocx(buffer) {
 // "find" has to come back byte-for-byte or the literal match fails, and a memo's scope line
 // routinely carries an inch mark or a quoted phrase. Asking for this as text-and-parse meant
 // exactly those memos — the ones with a dimension in them — failed to read at all.
-const PLACEHOLDER_TOOL = {
+const placeholderTool = kind => ({
   name: 'propose_placeholders',
-  description: 'Propose which parts of a memo cover vary from memo to memo.',
+  description: `Propose which parts of a ${kindOf(kind).noun} vary from one to the next.`,
   input_schema: {
     type: 'object',
     properties: {
@@ -101,10 +139,10 @@ const PLACEHOLDER_TOOL = {
           properties: {
             find: {
               type: 'string',
-              description: 'The exact text in the memo that should become variable, copied '
+              description: 'The exact text in the document that should become variable, copied '
                 + 'character for character.',
             },
-            field: { type: 'string', enum: [...FIELD_KEYS] },
+            field: { type: 'string', enum: [...fieldKeysFor(kind)] },
             confidence: { type: 'string', enum: ['high', 'low'] },
             why: {
               type: 'string',
@@ -118,50 +156,56 @@ const PLACEHOLDER_TOOL = {
       notes: {
         type: 'string',
         description: 'Anything the user should know: a value you could not map, or a field '
-          + 'this memo seems to need that is not in the list.',
+          + 'this document seems to need that is not in the list.',
       },
     },
     required: ['replacements'],
   },
-};
+});
 
-function buildPrompt(text) {
-  return `You are looking at a construction project manager's memo cover — the letter that
-goes on top of a vendor proposal when it is sent to an owner for approval. This particular
-copy is a filled-in example or a blank form. Your job is to work out which parts of it change
-from memo to memo, so it can be reused as a template.
+function buildPrompt(text, kind) {
+  const def = kindOf(kind);
+  const repeating = def.fields.filter(f => f.repeating);
+  return `${def.intro}
 
-THE MEMO AS IT READS TODAY:
+THE ${def.document.toUpperCase()} AS IT READS TODAY:
 """
 ${text}
 """
 
 These are the only values this app can supply. Map onto these and nothing else:
-${FIELDS.map(f => `  ${f.key} — ${f.label}`).join('\n')}
+${def.fields.map(f => `  ${f.key} — ${f.label}`).join('\n')}
 
 Report your proposals with the propose_placeholders tool.
 
 Rules:
-- "find" must appear in the memo above EXACTLY as you write it, including capitalisation and
-  punctuation. It is used for a literal text match; an approximation will not be found.
-- Only mark text that genuinely varies between memos. A heading, a standing instruction, a
-  signature block job title and the company's own address stay as they are.
+- "find" must appear in the ${def.document} above EXACTLY as you write it, including
+  capitalisation and punctuation. It is used for a literal text match; an approximation will not
+  be found.
+- Only mark text that genuinely varies between ${def.document}s. A heading, a standing
+  instruction, a signature block job title and the company's own address stay as they are.
 - Do not map two different pieces of text to the same field unless they really are the same
   value repeated.
 - Prefer the smallest span that captures the value. For a line reading "Project: Aldine ISD
   Middle School", mark only "Aldine ISD Middle School", not the whole line.
-- Where the memo already contains a {{field}} placeholder, leave it alone — do not include it
-  in "replacements".
+- Where the ${def.document} already contains a {{field}} placeholder, leave it alone — do not
+  include it in "replacements".
 - Mark "confidence" as "low" when you are guessing from position rather than from the wording
   around it. The user reviews these, and a flagged guess is far more useful than a confident
-  wrong one.`;
+  wrong one.${repeating.length ? `
+- ${repeating.map(f => f.key).join(' and ')} repeat. Mark ONE example each — a single bullet, a
+  single caption — never the whole list. The paragraph holding it is copied once per item when
+  the ${def.document} is produced, so marking two of them produces the list twice.` : ''}${
+  (def.extraRules || []).map(rule => `\n- ${rule}`).join('')}`;
 }
 
 // Reads an uploaded memo and proposes which parts of it are variable. Nothing is written:
 // the proposals are shown to the user, who confirms or corrects them before the template is
 // saved. A memo goes to an owner for signature, so a misread field must not reach one
 // silently.
-async function proposePlaceholders(buffer) {
+async function proposePlaceholders(buffer, kind = DEFAULT_KIND) {
+  const def = kindOf(kind);
+  const fieldKeys = fieldKeysFor(kind);
   const { text, paragraphs, hasPlaceholders } = readDocx(buffer);
   if (!text.trim()) {
     const err = new Error('No text could be read from that document.');
@@ -170,17 +214,17 @@ async function proposePlaceholders(buffer) {
   }
 
   const { data: parsed } = await askForJson({
-    content: [{ type: 'text', text: buildPrompt(text) }],
-    tool: PLACEHOLDER_TOOL,
+    content: [{ type: 'text', text: buildPrompt(text, kind) }],
+    tool: placeholderTool(kind),
     maxTokens: 3000,
-    label: 'memo placeholders',
+    label: `${def.noun} placeholders`,
   });
 
   // Anything that does not literally appear in the document is dropped rather than offered:
   // it could not be applied, so showing it would only invite the user to approve a no-op.
   const replacements = (Array.isArray(parsed.replacements) ? parsed.replacements : [])
-    .filter(r => r && typeof r.find === 'string' && r.find.trim() && FIELD_KEYS.has(r.field))
-    .filter(r => text.includes(r.find))
+    .filter(r => r && typeof r.find === 'string' && r.find.trim() && fieldKeys.has(r.field))
+    .filter(r => boundedIncludes(text, r.find))
     .map(r => ({
       find: r.find,
       field: r.field,
@@ -190,7 +234,7 @@ async function proposePlaceholders(buffer) {
       // appears in the From line and again over the signature, and both should follow the
       // same field. It is surfaced rather than assumed, so a phrase that happens to repeat
       // for unrelated reasons is visible before the template is saved.
-      occurrences: text.split(r.find).length - 1,
+      occurrences: boundedCount(text, r.find),
     }));
 
   // Overlapping proposals are the one failure that silently produces a worse template. The
@@ -202,7 +246,9 @@ async function proposePlaceholders(buffer) {
   const kept = [];
   const dropped = [];
   for (const r of replacements) {
-    const swallowsAnother = replacements.some(o => o !== r && r.find.includes(o.find));
+    // Bounded, for the same reason as everywhere else: "2026-07-14" does not contain the report
+    // number "7" in any sense that matters, and treating it as a container dropped the date.
+    const swallowsAnother = replacements.some(o => o !== r && boundedIncludes(r.find, o.find));
     (swallowsAnother ? dropped : kept).push(r);
   }
 
@@ -214,7 +260,7 @@ async function proposePlaceholders(buffer) {
       : null,
   ].filter(Boolean).join(' ') || null;
 
-  return { paragraphs, hasPlaceholders, replacements: kept, notes, fields: FIELDS };
+  return { paragraphs, hasPlaceholders, replacements: kept, notes, fields: def.fields };
 }
 
 // Rewrites the .docx so the confirmed spans become {{field}} tags.
@@ -225,16 +271,17 @@ async function proposePlaceholders(buffer) {
 // formatting inside that one paragraph — a bold word mid-sentence — is flattened to the
 // paragraph's opening style. Only paragraphs actually being changed are touched, so the rest
 // of the document keeps its formatting exactly.
-function applyPlaceholders(buffer, replacements) {
+function applyPlaceholders(buffer, replacements, kind = DEFAULT_KIND) {
+  const fieldKeys = fieldKeysFor(kind);
   const zip = loadZip(buffer);
   const xml = zip.file(DOC_XML).asText();
 
   // Overlaps are filtered on proposal, but a mapping edited by hand can reintroduce one, and
   // the damage is silent: the wider span consumes the narrower and a field quietly disappears
   // from the template. Dropped here too rather than trusted to have been caught upstream.
-  const candidates = (replacements || []).filter(r => r && r.find && FIELD_KEYS.has(r.field));
+  const candidates = (replacements || []).filter(r => r && r.find && fieldKeys.has(r.field));
   const wanted = candidates
-    .filter(r => !candidates.some(o => o !== r && r.find.includes(o.find)))
+    .filter(r => !candidates.some(o => o !== r && boundedIncludes(r.find, o.find)))
     // Longest first, so a short value nested inside a longer one cannot pre-empt it.
     .sort((a, b) => b.find.length - a.find.length);
   if (wanted.length === 0) return { buffer, changed: 0 };
@@ -250,10 +297,8 @@ function applyPlaceholders(buffer, replacements) {
     let next = text;
     let hit = false;
     for (const r of wanted) {
-      if (next.includes(r.find)) {
-        next = next.split(r.find).join(`{{${r.field}}}`);
-        hit = true;
-      }
+      const replaced = boundedReplace(next, r.find, `{{${r.field}}}`);
+      if (replaced !== next) { next = replaced; hit = true; }
     }
     if (!hit) return openTag + body;
     changed++;
@@ -312,5 +357,7 @@ function fillDocx(templateBuffer, data) {
 
 module.exports = {
   readDocx, proposePlaceholders, applyPlaceholders, fillDocx,
+  loadZip, paragraphsOf, escapeXml, unescapeXml, DOC_XML,
+  fieldsFor, fieldKeysFor,
   FIELDS, FIELD_KEYS, DELIMITERS,
 };

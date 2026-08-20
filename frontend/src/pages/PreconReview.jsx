@@ -4,6 +4,7 @@ import {
   DocumentTextIcon, DocumentMagnifyingGlassIcon, ClipboardDocumentCheckIcon,
 } from '@heroicons/react/24/outline';
 import { preconReviewApi, payAppReviewApi } from '../api';
+import { WORD_TEMPLATES } from '../wordTemplates';
 import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -62,7 +63,7 @@ export default function PreconReview() {
   useEffect(() => {
     if (!ctx?.projectId) { setProjectDocs([]); return; }
     payAppReviewApi.listDocuments(ctx.projectId)
-      .then(all => setProjectDocs(all.filter(d => d.doc_type !== 'memo-cover')))
+      .then(all => setProjectDocs(all.filter(d => !WORD_TEMPLATES.includes(d.doc_type))))
       .catch(() => setProjectDocs([]));
   }, [ctx?.projectId]);
 

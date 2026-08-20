@@ -5,6 +5,7 @@ import {
   CheckCircleIcon, ExclamationTriangleIcon, ScaleIcon, DocumentMagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
 import { submittalsApi, payAppReviewApi } from '../api';
+import { WORD_TEMPLATES } from '../wordTemplates';
 import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
@@ -155,7 +156,7 @@ function NewSubmittalForm({ onSaved, onCancel }) {
   useEffect(() => {
     if (!projectId) return;
     payAppReviewApi.listDocuments(projectId)
-      .then(all => setDocs(all.filter(d => d.doc_type !== 'memo-cover')))
+      .then(all => setDocs(all.filter(d => !WORD_TEMPLATES.includes(d.doc_type))))
       .catch(() => setDocs([]));
   }, [projectId]);
 
@@ -699,7 +700,7 @@ function PredictedReviewPanel({ record, onRan }) {
   useEffect(() => {
     if (!projectId) return;
     payAppReviewApi.listDocuments(projectId)
-      .then(all => setDocs(all.filter(d => d.doc_type !== 'memo-cover')))
+      .then(all => setDocs(all.filter(d => !WORD_TEMPLATES.includes(d.doc_type))))
       .catch(() => setDocs([]));
   }, [projectId]);
 

@@ -47,6 +47,7 @@ const DOC_TYPES = [
   { key: 'schedule', label: 'Schedule', hint: 'Baseline and updated programmes', accent: '#0d9488' },
   { key: 'permit', label: 'Permits & Approvals', hint: 'Permits, approvals, authority letters', accent: '#65a30d' },
   { key: 'memo-cover', label: 'Memo Cover', hint: 'Your Word memo letter — Proposal Intake fills it in', accent: '#e11d48', docx: true },
+  { key: 'progress-cover', label: 'Progress Report Template', hint: 'Your Word progress report — Progress Report fills it in', accent: '#f43f5e', docx: true },
   { key: 'other', label: 'Other', hint: 'Anything else the team needs on file', accent: '#64748b' },
   // Predates the richer list and is kept so existing rows stay valid. Never offered on upload;
   // shown as "Other".

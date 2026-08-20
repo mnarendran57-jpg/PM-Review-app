@@ -31,6 +31,7 @@ const CATEGORIES = [
   { key: 'schedule', label: 'Schedule', hint: 'Baseline and updated programmes', accent: '#0d9488' },
   { key: 'permit', label: 'Permits & Approvals', hint: 'Permits, approvals, authority letters', accent: '#65a30d' },
   { key: 'memo-cover', label: 'Memo Cover', hint: 'Your Word memo letter — Proposal Intake fills it in', accent: '#e11d48', docx: true },
+  { key: 'progress-cover', label: 'Progress Report Template', hint: 'Your Word progress report — Progress Report fills it in', accent: '#f43f5e', docx: true },
   { key: 'other', label: 'Other', hint: 'Anything else the team needs on file', accent: '#64748b' },
   { key: 'reference', label: 'Other', hint: 'Anything else the team needs on file', accent: '#64748b' },
 ];
@@ -42,16 +43,48 @@ const GOVERNING = ['contract', 'purchase-order'];
 // Only these are offered on upload — 'reference' is legacy and folds into 'other'.
 const UPLOAD_CATEGORIES = CATEGORIES.filter(c => c.key !== 'reference');
 
-// Mirrors FIELDS in backend/lib/memoCover.js. Kept in step by hand; the backend rejects
+// The organization's own Word documents that Coaster fills in. Each is uploaded once, its varying
+// parts are confirmed, and from then on the module named here produces that document rather than
+// an approximation of it drawn in code.
+//
+// Mirrors COVER_KINDS in backend/lib/coverTemplates.js. Kept in step by hand; the backend rejects
 // anything not on its own list, so a drift here fails loudly rather than silently.
-const MEMO_FIELDS = [
-  ['date', "Today's date"], ['to_name', 'Addressed to'], ['from_name', 'From'],
-  ['project_name', 'Project name'], ['vendor_name', 'Vendor name'], ['memo_type', 'Proposal / Change Order'],
-  ['po_number', 'PO number'], ['po_reference', 'PO reference wording'], ['scope_of_work', 'Scope of work'],
-  ['total_price', 'Total price'], ['change_order_price', 'Change order amount'],
-  ['original_po_amount', 'Original PO amount'], ['new_total_amount', 'New PO total'],
-  ['request_sentence', 'The request sentence'],
-];
+const COVERS = {
+  'memo-cover': {
+    noun: 'memo cover',
+    thing: 'memo',
+    filledBy: 'Proposal Intake',
+    upload: 'Upload the memo letter you already use — filled in or blank, it does not need '
+      + 'placeholders. Coaster reads it and shows you which parts it thinks change from memo to '
+      + 'memo, for you to confirm. After that every proposal is generated into your own document.',
+    fields: [
+      ['date', "Today's date"], ['to_name', 'Addressed to'], ['from_name', 'From'],
+      ['project_name', 'Project name'], ['vendor_name', 'Vendor name'], ['memo_type', 'Proposal / Change Order'],
+      ['po_number', 'PO number'], ['po_reference', 'PO reference wording'], ['scope_of_work', 'Scope of work'],
+      ['total_price', 'Total price'], ['change_order_price', 'Change order amount'],
+      ['original_po_amount', 'Original PO amount'], ['new_total_amount', 'New PO total'],
+      ['request_sentence', 'The request sentence'],
+    ],
+  },
+  'progress-cover': {
+    noun: 'progress report template',
+    thing: 'report',
+    filledBy: 'Progress Report',
+    upload: 'Upload a progress report you have already written — one with its observations and '
+      + 'photos still in it works best. Coaster reads it and shows you which parts change from '
+      + 'report to report, for you to confirm. After that every site visit is written up into '
+      + 'your own document, photographs and all.',
+    fields: [
+      ['report_title', 'Report title'], ['report_number', 'Report number'], ['date', 'Visit date'],
+      ['time', 'Visit time'], ['weather', 'Weather'], ['submitted_by', 'Submitted by'],
+      ['project_name', 'Project name'], ['contractor', 'Contractor'],
+      ['progress', 'One progress observation (repeats)'],
+      ['photo_caption', 'One photo caption (repeats)'],
+    ],
+  },
+};
+
+const coverFor = docType => COVERS[docType] || null;
 
 const categoryFor = key => CATEGORIES.find(c => c.key === key) || CATEGORIES.find(c => c.key === 'other');
 const docName = doc => (doc.label || '').trim() || doc.file_name;
@@ -90,15 +123,16 @@ function UploadForm({ projectId, onSaved, onCancel }) {
   };
 
   const chosen = categoryFor(docType);
+  const cover = coverFor(docType);
 
   return (
     <form onSubmit={save} className="space-y-4">
-      {/* A memo cover is the one category that is not a PDF: it stays a Word file so it can be
+      {/* The covers are the categories that are not PDFs: they stay Word files so they can be
           filled in and handed back as one. */}
       <FileDrop file={file} onChange={f => { setFile(f); if (!label && f) setLabel(f.name.replace(/\.(pdf|docx)$/i, '')); }}
-        label={chosen.docx ? 'Your memo cover (Word .docx)' : 'The document (PDF)'}
+        label={cover ? `Your ${cover.noun} (Word .docx)` : 'The document (PDF)'}
         accept={chosen.docx ? '.docx' : '.pdf'}
-        hint={chosen.docx ? 'Word document — the memo letter you already use' : 'PDF · no size limit'} />
+        hint={cover ? `Word document — the ${cover.thing} you already use` : 'PDF · no size limit'} />
 
       <div>
         <label className="label">What is it?</label>
@@ -125,13 +159,11 @@ function UploadForm({ projectId, onSaved, onCancel }) {
 
       {/* Uploading a contract triggers a model read of the whole agreement, which takes a
           while and is worth saying before the user waits on a spinner. */}
-      {chosen.docx && (
+      {cover && (
         <div className="p-3 rounded-xl text-[11px] leading-relaxed"
           style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#9f1239' }}>
           <SparklesIcon className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
-          Upload the memo letter you already use — filled in or blank, it does not need placeholders.
-          Coaster reads it and shows you which parts it thinks change from memo to memo, for you to
-          confirm. After that every proposal is generated into your own document.
+          {cover.upload}
         </div>
       )}
 
@@ -157,10 +189,13 @@ function UploadForm({ projectId, onSaved, onCancel }) {
   );
 }
 
-// Confirming what Coaster read out of the memo. Every proposal is shown with the exact text
-// it matched, so the user is approving something concrete rather than a field name — and a
-// memo goes to an owner for signature, which is why nothing is applied until this is done.
-function MemoCoverReview({ doc, projectId, onDone, onCancel }) {
+// Confirming what Coaster read out of the customer's document. Every proposal is shown with the
+// exact text it matched, so the user is approving something concrete rather than a field name —
+// and these documents go out over somebody's name, which is why nothing is applied until this is
+// done. Shared by the memo cover and the progress report template; only the field list and the
+// wording differ.
+function CoverReview({ doc, projectId, onDone, onCancel }) {
+  const cover = coverFor(doc.doc_type) || COVERS['memo-cover'];
   const initial = (doc.terms?.replacements || []).map(r => ({ ...r, keep: true }));
   const [rows, setRows] = useState(initial);
   const [busy, setBusy] = useState(false);
@@ -188,9 +223,20 @@ function MemoCoverReview({ doc, projectId, onDone, onCancel }) {
     <div className="space-y-4">
       <p className="text-sm text-gray-600 leading-relaxed">
         Coaster read <span className="font-semibold">{doc.file_name}</span> and marked the parts it
-        thinks change from memo to memo. Untick anything that should stay fixed, and correct any
-        field that was matched to the wrong thing.
+        thinks change from {cover.thing} to {cover.thing}. Untick anything that should stay fixed,
+        and correct any field that was matched to the wrong thing.
       </p>
+
+      {doc.doc_type === 'progress-cover' && (
+        <div className="p-3 rounded-xl text-[11px] leading-relaxed"
+          style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#9f1239' }}>
+          Two of these repeat. <span className="font-semibold">One progress observation</span> and{' '}
+          <span className="font-semibold">one photo caption</span> should each be marked on a single
+          example — one bullet, one caption — and Coaster copies that line once per observation and
+          once per photo, with the photograph placed above its caption. If two are ticked for the
+          same field, the list comes out twice.
+        </div>
+      )}
 
       {doc.terms?.notes && (
         <div className="p-3 rounded-xl text-[11px] leading-relaxed"
@@ -202,8 +248,8 @@ function MemoCoverReview({ doc, projectId, onDone, onCancel }) {
       <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
         {rows.length === 0 && (
           <p className="text-[12px] text-gray-500">
-            Nothing variable was found. If the memo already uses {'{{field}}'} placeholders it will
-            work as-is — just confirm.
+            Nothing variable was found. If the {cover.thing} already uses {'{{field}}'} placeholders
+            it will work as-is — just confirm.
           </p>
         )}
         {rows.map((r, i) => (
@@ -217,7 +263,7 @@ function MemoCoverReview({ doc, projectId, onDone, onCancel }) {
                 <span className="text-[10px] text-gray-400">becomes</span>
                 <select className="input py-0.5 text-[11px] w-auto" value={r.field}
                   onChange={e => setRow(i, { field: e.target.value })}>
-                  {MEMO_FIELDS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                  {cover.fields.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
                 </select>
                 {r.occurrences > 1 && (
                   <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold"
@@ -241,7 +287,7 @@ function MemoCoverReview({ doc, projectId, onDone, onCancel }) {
       <div className="flex justify-end gap-2">
         <button className="btn-secondary" onClick={onCancel}>Cancel</button>
         <button className="btn-primary" onClick={confirm} disabled={busy}>
-          {busy ? 'Saving…' : `Use this memo cover (${rows.filter(r => r.keep).length} fields)`}
+          {busy ? 'Saving…' : `Use this ${cover.noun} (${rows.filter(r => r.keep).length} fields)`}
         </button>
       </div>
     </div>
@@ -412,11 +458,11 @@ function DocumentRow({ doc, projectId, onChanged, onReview }) {
               {doc.created_at ? ` · added ${formatDate(doc.created_at)}` : ''}
               {doc.terms_edited === 1 ? ' · terms corrected by you' : ''}
             </p>
-            {doc.doc_type === 'memo-cover' && (
+            {coverFor(doc.doc_type) && (
               <p className="text-[11px] mt-1">
                 {terms?.confirmed
                   ? <span style={{ color: '#15803d' }}>
-                      Ready — {(terms.replacements || []).length} field{(terms.replacements || []).length === 1 ? '' : 's'} will be filled in on every memo.
+                      Ready — {(terms.replacements || []).length} field{(terms.replacements || []).length === 1 ? '' : 's'} will be filled in on every {coverFor(doc.doc_type).thing}.
                     </span>
                   : <span style={{ color: '#c2410c' }}>
                       Needs review — Coaster found {(terms?.replacements || []).length} variable part(s). Confirm them before it is used.
@@ -433,7 +479,7 @@ function DocumentRow({ doc, projectId, onChanged, onReview }) {
 
       {!renaming && (
         <div className="flex items-center gap-1 flex-shrink-0">
-          {doc.doc_type === 'memo-cover' && (
+          {coverFor(doc.doc_type) && (
             <button className={doc.terms?.confirmed ? 'btn-secondary px-2 py-1' : 'btn-primary px-2 py-1'}
               title="Review what Coaster will fill in" onClick={() => onReview(doc)}>
               <SparklesIcon className="w-4 h-4" />
@@ -576,7 +622,7 @@ export default function SharedDocuments() {
 
       {reviewing && (
         <Modal title="What Coaster will fill in" onClose={() => setReviewing(null)} size="lg">
-          <MemoCoverReview doc={reviewing} projectId={projectId}
+          <CoverReview doc={reviewing} projectId={projectId}
             onDone={() => { setReviewing(null); load(); }}
             onCancel={() => setReviewing(null)} />
         </Modal>
@@ -587,7 +633,7 @@ export default function SharedDocuments() {
             onSaved={saved => {
               setUploading(false);
               load();
-              if (saved?.doc_type === 'memo-cover') setReviewing(saved);
+              if (coverFor(saved?.doc_type)) setReviewing(saved);
             }}
             onCancel={() => setUploading(false)} />
         </Modal>

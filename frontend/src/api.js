@@ -725,6 +725,15 @@ export const progressReportApi = {
     const res = await api.get(`/progress-report/${id}/report.md`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `progress_report_${id}.md`);
   },
+  // The report written into the organization's own Word template, when the project has one
+  // confirmed on its Shared Documents.
+  downloadDocx: async (id, fileName) => {
+    const res = await api.get(`/progress-report/${id}/report.docx`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `progress_report_${id}.docx`);
+  },
+  // Asked before the Word button is shown, so the page never offers a download that 404s.
+  template: projectId =>
+    api.get(`/progress-report/project/${projectId}/template`).then(r => r.data),
   delete: id => api.delete(`/progress-report/${id}`).then(r => r.data),
 };
 

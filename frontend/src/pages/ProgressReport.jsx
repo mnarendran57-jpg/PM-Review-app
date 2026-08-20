@@ -207,6 +207,9 @@ export default function ProgressReport() {
   const [result, setResult] = useState(null);   // { id, report, header, localPhotos }
   const [viewing, setViewing] = useState(null); // { id, report, header }
   const [history, setHistory] = useState([]);
+  // The organization's own Word report, if one has been uploaded and confirmed on this project's
+  // Shared Documents. Asked for once per project; without one the PDF is the only deliverable.
+  const [template, setTemplate] = useState(null);
 
   const loadHistory = () => progressReportApi.list(routeProjectId ? { project_id: routeProjectId } : undefined).then(list => {
     setHistory(list);
@@ -215,6 +218,13 @@ export default function ProgressReport() {
     setReportNumber(prev => prev === '' ? String(maxNum + 1) : prev);
   });
   useEffect(() => { loadHistory(); }, [routeProjectId]);
+
+  useEffect(() => {
+    if (!routeProjectId) { setTemplate(null); return; }
+    progressReportApi.template(routeProjectId)
+      .then(t => setTemplate(t?.available ? t : null))
+      .catch(() => setTemplate(null));
+  }, [routeProjectId]);
 
   useEffect(() => () => photos.forEach(p => URL.revokeObjectURL(p.url)), []); // eslint-disable-line
 
@@ -356,6 +366,17 @@ export default function ProgressReport() {
               )}
             </div>
 
+            {/* Discoverable where it matters. A PM who has a house report format has no reason to
+                guess that uploading it on Shared Documents is what makes Coaster use it. */}
+            {routeProjectId && (
+              <p className="text-[11px] text-gray-400 leading-relaxed">
+                {template
+                  ? <>Reports download as your own Word document — <span className="text-gray-500">{template.fileName}</span>.</>
+                  : <>Have a report format of your own? Upload it on this project's Shared Documents as a
+                      Progress Report Template and every visit is written up into it.</>}
+              </p>
+            )}
+
             <div>
               <label className="label">Overall Notes for This Visit (optional)</label>
               <textarea className="input" rows={2} value={notes} onChange={e => setNotes(e.target.value)}
@@ -380,7 +401,16 @@ export default function ProgressReport() {
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">{result ? 'Generated Report' : 'Saved Report'}</h2>
                 <div className="flex items-center gap-2">
-                  <button className="btn-primary px-3 py-1.5" onClick={() => progressReportApi.downloadPdf(active.id)}>
+                  {/* Their own document comes first when they have one — it is the thing that
+                      actually goes to the team. The PDF stays for everyone else. */}
+                  {template && (
+                    <button className="btn-primary px-3 py-1.5" title={template.fileName}
+                      onClick={() => progressReportApi.downloadDocx(active.id)}>
+                      <ArrowDownTrayIcon className="w-4 h-4" /> Download Word
+                    </button>
+                  )}
+                  <button className={template ? 'btn-secondary px-3 py-1.5' : 'btn-primary px-3 py-1.5'}
+                    onClick={() => progressReportApi.downloadPdf(active.id)}>
                     <ArrowDownTrayIcon className="w-4 h-4" /> Download PDF
                   </button>
                   <button className="btn-secondary px-3 py-1.5" onClick={() => { setResult(null); setViewing(null); }}>Close</button>
