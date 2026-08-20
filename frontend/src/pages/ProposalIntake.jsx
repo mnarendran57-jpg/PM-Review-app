@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   CloudArrowUpIcon, SparklesIcon, DocumentTextIcon, ArrowDownTrayIcon,
   TrashIcon, ClockIcon, CheckCircleIcon, BuildingOfficeIcon, ArrowPathRoundedSquareIcon,
@@ -53,6 +53,78 @@ function HistoryItem({ item, onDelete }) {
         </button>
         <button className="btn-danger" onClick={() => onDelete(item.id)}><TrashIcon className="w-4 h-4" /></button>
       </div>
+    </div>
+  );
+}
+
+// What comes out of an intake, and the loop back into it.
+//
+// The PDF is the package that gets circulated. The Word file is the same memo in a form the PM can
+// change — and sending the changed file back rebuilds the package around it, so the two never
+// drift apart. Before this, an edit lived only in the PM's own copy while everyone else kept
+// receiving the memo as first generated.
+function ResultPanel({ result, onReset }) {
+  const [state, setState] = useState(result);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [replaced, setReplaced] = useState(false);
+  const fileRef = useRef();
+
+  const putBack = async file => {
+    if (!file) return;
+    setBusy(true); setError(''); setReplaced(false);
+    try {
+      const next = await proposalIntakeApi.replaceMemoDocx(state.id, file);
+      setState(s => ({ ...s, ...next }));
+      setReplaced(true);
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Could not rebuild the package from that document.');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="p-4 rounded-xl space-y-3" style={{ background: '#d1fae5', border: '1px solid #6ee7b7' }}>
+      {/* The title and the buttons stack rather than compete: this panel sits in the narrow left
+          column, and side by side the heading wrapped onto three lines. */}
+      <div className="flex items-center gap-2">
+        <CheckCircleIcon className="w-5 h-5 flex-shrink-0" style={{ color: '#059669' }} />
+        <p className="text-sm font-semibold" style={{ color: '#065f46' }}>
+          {replaced ? 'Package rebuilt with your edited memo' : 'Memo package ready'}
+        </p>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <button className="btn-primary px-3 py-1.5"
+          onClick={() => proposalIntakeApi.download(state.id, state.merged_file_name)}>
+          <ArrowDownTrayIcon className="w-4 h-4" /> Download PDF
+        </button>
+        <button className="btn-secondary px-3 py-1.5" onClick={onReset}>New</button>
+      </div>
+
+      {/* Only when a confirmed memo cover produced one. Without a template there is no Word memo
+          to edit, and nothing here to offer. */}
+      {state.memo_docx_name && (
+        <div className="pt-2" style={{ borderTop: '1px solid rgba(6,95,70,0.15)' }}>
+          <p className="text-[11px] leading-relaxed mb-2" style={{ color: '#065f46' }}>
+            Need to change the memo? Download the Word file, edit it, and put it back — the PDF
+            above is rebuilt with your version in front of the same proposal.
+          </p>
+          <input ref={fileRef} type="file" accept=".docx" className="hidden"
+            onChange={e => { putBack(e.target.files?.[0]); e.target.value = ''; }} />
+          <div className="flex items-center gap-2">
+            <button className="btn-secondary px-3 py-1.5 text-xs"
+              onClick={() => proposalIntakeApi.downloadMemoDocx(state.id, state.memo_docx_name)}>
+              <DocumentTextIcon className="w-4 h-4" /> Word memo
+            </button>
+            <button className="btn-secondary px-3 py-1.5 text-xs" disabled={busy}
+              onClick={() => fileRef.current.click()}>
+              {busy
+                ? <><SparklesIcon className="w-4 h-4 animate-pulse" /> Rebuilding…</>
+                : <><ArrowPathRoundedSquareIcon className="w-4 h-4" /> Upload edited memo</>}
+            </button>
+          </div>
+          {error && <p className="text-xs mt-2" style={{ color: '#b91c1c' }}>{error}</p>}
+        </div>
+      )}
     </div>
   );
 }
@@ -366,28 +438,7 @@ export default function ProposalIntake() {
               </button>
             )}
 
-            {result && (
-              <div className="p-4 rounded-xl flex items-center justify-between gap-3" style={{ background: '#d1fae5', border: '1px solid #6ee7b7' }}>
-                <div className="flex items-center gap-2">
-                  <CheckCircleIcon className="w-5 h-5" style={{ color: '#059669' }} />
-                  <p className="text-sm font-semibold" style={{ color: '#065f46' }}>Memo package ready</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {/* Only when a confirmed memo cover produced one. */}
-                  {result.memo_docx_name && (
-                    <button className="btn-primary px-3 py-1.5"
-                      title="Your memo in Word, on your own template"
-                      onClick={() => proposalIntakeApi.downloadMemoDocx(result.id, result.memo_docx_name)}>
-                      <DocumentTextIcon className="w-4 h-4" /> Word memo
-                    </button>
-                  )}
-                  <button className="btn-secondary px-3 py-1.5" onClick={() => proposalIntakeApi.download(result.id, result.merged_file_name)}>
-                    <ArrowDownTrayIcon className="w-4 h-4" /> Download
-                  </button>
-                  <button className="btn-secondary px-3 py-1.5" onClick={reset}>New</button>
-                </div>
-              </div>
-            )}
+            {result && <ResultPanel result={result} onReset={reset} />}
           </div>
         </div>
 

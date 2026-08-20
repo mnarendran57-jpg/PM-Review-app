@@ -3,7 +3,9 @@ const router = express.Router();
 const multer = require('multer');
 const db = require('../database');
 const { askForJson } = require('../lib/aiJson');
+const { PDFDocument } = require('pdf-lib');
 const { renderMemoPdf, mergePdfBuffers } = require('../lib/pdfGen');
+const { renderMemoCoverPdf } = require('../lib/memoCoverPdf');
 const { applyPlaceholders, fillDocx } = require('../lib/memoCover');
 const { loadCover } = require('../lib/coverLookup');
 
@@ -183,7 +185,13 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
       console.error('Memo cover could not be filled (falling back to the built-in memo):', err.message);
     }
 
-    const memoPdf = await renderMemoPdf(template, fields, await brandingFor(req.orgId));
+    // The memo page in front of the package. Where the organization has given Coaster its own
+    // letter, the page is that letter's words; otherwise it is the built-in memo, unchanged, so a
+    // customer who has uploaded nothing sees exactly what they saw before.
+    const branding = await brandingFor(req.orgId);
+    const memoPdf = memoDocx
+      ? await renderMemoCoverPdf(memoDocx, branding)
+      : await renderMemoPdf(template, fields, branding);
     const mergedPdf = await mergePdfBuffers([memoPdf, proposalFile.buffer, poFile?.buffer]);
 
     const baseName = proposalFile.originalname.replace(/\.pdf$/i, '');
@@ -272,6 +280,78 @@ router.get('/:id/memo.docx', async (req, res) => {
   res.setHeader('Content-Type', DOCX_MIME);
   res.setHeader('Content-Disposition', `attachment; filename="${row.memo_docx_name || 'memo.docx'}"`);
   res.send(bytes);
+});
+
+// An edited memo, put back.
+//
+// The Word file exists so a PM can change the memo after seeing it — a sentence about the scope,
+// a name, a condition of approval that only they know about. Until now that edit lived only in
+// their copy: the PDF everyone else receives was made when the intake ran and never looked at the
+// .docx again, so the edited memo and the circulated package disagreed, silently, with the
+// package winning.
+//
+// Sending the edited file back here re-typesets the memo page from it and rebuilds the package
+// around it. The proposal and the PO are the ones already on file — the only thing that changes
+// is the letter in front of them, which is the only thing the PM changed.
+router.put('/:id/memo.docx', upload.single('memo_docx'), async (req, res) => {
+  try {
+    const row = visibleRow(req);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    if (!req.file) return res.status(400).json({ error: 'Choose the edited Word memo to upload.' });
+    if (req.file.mimetype !== DOCX_MIME) {
+      return res.status(400).json({ error: 'The memo must be a Word document (.docx).' });
+    }
+
+    const proposalBytes = await storage.readFile({
+      key: row.proposal_file_key, blob: row.proposal_file,
+    });
+    if (!proposalBytes) {
+      return res.status(409).json({
+        error: 'The original proposal PDF is no longer on file, so the package cannot be rebuilt.',
+      });
+    }
+    const poBytes = (row.po_file_key || row.po_file)
+      ? await storage.readFile({ key: row.po_file_key, blob: row.po_file })
+      : null;
+
+    // Typeset from the edited document, then staple the same proposal and PO behind it.
+    const memoPdf = await renderMemoCoverPdf(req.file.buffer, await brandingFor(req.orgId));
+    const mergedPdf = await mergePdfBuffers([memoPdf, proposalBytes, poBytes]);
+
+    const previousMerged = row.merged_pdf_key;
+    const previousDocx = row.memo_docx_key;
+    const docxName = row.memo_docx_name || req.file.originalname;
+
+    const mergedKey = (await storage.storeFile(
+      'proposal', mergedPdf, 'application/pdf', row.merged_file_name || 'processed.pdf')).key;
+    const docxKey = (await storage.storeFile(
+      'proposal', req.file.buffer, DOCX_MIME, docxName)).key;
+
+    db.prepare(`
+      UPDATE proposal_intakes
+      SET merged_pdf = ?, merged_pdf_key = ?, memo_docx = ?, memo_docx_key = ?, memo_docx_name = ?
+      WHERE id = ?
+    `).run(
+      mergedKey ? Buffer.alloc(0) : mergedPdf, mergedKey,
+      docxKey ? Buffer.alloc(0) : req.file.buffer, docxKey, docxName,
+      row.id,
+    );
+
+    // Only once the replacements are safely stored. A failed write must not cost the package that
+    // was already working.
+    const stale = [previousMerged, previousDocx].filter(k => k && k !== mergedKey && k !== docxKey);
+    if (stale.length) await storage.remove(stale);
+
+    res.json({
+      success: true,
+      merged_file_name: row.merged_file_name,
+      memo_docx_name: docxName,
+      pages: (await PDFDocument.load(mergedPdf)).getPageCount(),
+    });
+  } catch (err) {
+    console.error('Memo replacement error:', err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
 });
 
 router.delete('/:id', async (req, res) => {

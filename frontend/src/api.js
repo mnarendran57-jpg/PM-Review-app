@@ -436,6 +436,16 @@ export const proposalIntakeApi = {
     a.remove();
     window.URL.revokeObjectURL(url);
   },
+  // The edited memo, put back. The memo page is re-typeset from this document and the package is
+  // rebuilt around it, so the PDF everyone receives says what the PM last wrote rather than what
+  // the intake produced.
+  replaceMemoDocx: (id, file) => {
+    const fd = new FormData();
+    fd.append('memo_docx', file);
+    return api.put(`/proposal-intake/${id}/memo.docx`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(r => r.data);
+  },
   // The memo as the organization's own Word document, when a confirmed memo cover exists on
   // the project. Absent otherwise, so callers check before offering it.
   downloadMemoDocx: async (id, fileName) => {
