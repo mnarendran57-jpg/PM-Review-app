@@ -89,6 +89,9 @@ function HistoryItem({ item, onView, onDelete }) {
 // reading a legal document and can be wrong, and a bad term would otherwise mis-flag every
 // application from here on.
 function ContractPanel({ projectId, contract, onChange }) {
+  // The panel owns its own confirmation rather than borrowing the page's, so the dialog travels
+  // with the button it guards.
+  const [confirm, confirmDialog] = useConfirm();
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -109,7 +112,22 @@ function ContractPanel({ projectId, contract, onChange }) {
     }
   };
 
+  // ASK FIRST. This deletes the row AND the file from object storage, and there is no copy left
+  // afterwards — the reviewer has to find the original PDF and upload it again, and the contract's
+  // terms have to be read a second time. Deleting a REVIEW asked before doing far less; this sat a
+  // single stray click away from destroying the document every check on the project measures
+  // against, with no warning and nothing to undo it. It cost a real contract on a real project
+  // before it was noticed.
   const remove = async () => {
+    const ok = await confirm({
+      title: 'Delete this contract?',
+      message: `"${contract.file_name}" will be removed from this project, and the file itself is `
+        + 'deleted with it. Every review on this project measures against its terms — tax status, '
+        + 'retainage and unallowable costs — and those checks will stop running until a contract is '
+        + 'attached again. This cannot be undone.',
+      confirmLabel: 'Delete contract',
+    });
+    if (!ok) return;
     setBusy(true);
     try { await payAppReviewApi.deleteContract(projectId); onChange(); }
     finally { setBusy(false); }
@@ -181,6 +199,7 @@ function ContractPanel({ projectId, contract, onChange }) {
       <p className="text-[10px] text-gray-400 mt-1.5">
         Its terms are read once and applied to every review on this project.
       </p>
+      {confirmDialog}
     </div>
   );
 }
