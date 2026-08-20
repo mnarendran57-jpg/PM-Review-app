@@ -147,6 +147,80 @@ function uprightJpeg(buffer) {
   }
 }
 
+// --- Fitting a photo to the size it is actually printed at -----------------------------------
+//
+// A phone photograph is around 12 megapixels and four megabytes. A progress report prints it about
+// three inches wide. Embedding the original put the whole four megabytes into the document for
+// every photo: a four-photo report came to 11MB, and a twenty-photo site visit would have come to
+// fifty — which most mail servers refuse, so the report could not be sent at all.
+//
+// The copy that goes into the document is fitted to roughly what it is printed at, at a resolution
+// well above what any printer resolves. The original is untouched on the server, so nothing is
+// lost: this is only the copy that travels.
+
+// The largest a photo is ever printed in either report is about three and a half inches. 1600
+// pixels across that is over 450 dots per inch — past what a printer or a screen can show, and
+// still enough to zoom into a label on a piece of equipment.
+const DEFAULT_MAX_EDGE = 1600;
+
+// Averages the source pixels each destination pixel covers, rather than picking one of them.
+// Sampling a single pixel is much faster and looks it: on a four-times reduction the fine detail in
+// a site photo — a strut, a grille, printed text on a nameplate — breaks into aliased noise.
+function boxScale({ data, width, height }, outW, outH) {
+  const out = Buffer.alloc(outW * outH * 4);
+  const xRatio = width / outW;
+  const yRatio = height / outH;
+
+  for (let y = 0; y < outH; y++) {
+    const y0 = Math.floor(y * yRatio);
+    const y1 = Math.min(height, Math.max(y0 + 1, Math.ceil((y + 1) * yRatio)));
+    for (let x = 0; x < outW; x++) {
+      const x0 = Math.floor(x * xRatio);
+      const x1 = Math.min(width, Math.max(x0 + 1, Math.ceil((x + 1) * xRatio)));
+
+      let r = 0; let g = 0; let b = 0; let n = 0;
+      for (let sy = y0; sy < y1; sy++) {
+        let at = ((sy * width) + x0) * 4;
+        for (let sx = x0; sx < x1; sx++) {
+          r += data[at]; g += data[at + 1]; b += data[at + 2];
+          at += 4; n++;
+        }
+      }
+      const to = ((y * outW) + x) * 4;
+      out[to] = r / n; out[to + 1] = g / n; out[to + 2] = b / n; out[to + 3] = 255;
+    }
+  }
+  return { data: out, width: outW, height: outH };
+}
+
+// A copy of the photo no larger than `maxEdge` on its longest side. A photo already that size or
+// smaller is handed straight back, so the common case costs nothing. Anything that cannot be
+// decoded is handed back as it arrived — a report that is larger than it needed to be is a far
+// better outcome than a report that could not be produced.
+function fitJpeg(buffer, { maxEdge = DEFAULT_MAX_EDGE, quality = 82 } = {}) {
+  const { width, height } = readJpeg(buffer);
+  if (!width || !height) return buffer;
+  const longest = Math.max(width, height);
+  if (longest <= maxEdge) return buffer;
+
+  try {
+    const decoded = jpeg.decode(buffer, { useTArray: true, maxMemoryUsageInMB: 2048 });
+    const scale = maxEdge / longest;
+    const scaled = boxScale(
+      decoded,
+      Math.max(1, Math.round(width * scale)),
+      Math.max(1, Math.round(height * scale)),
+    );
+    const encoded = jpeg.encode(scaled, quality);
+    // Only if it actually helped. A photo that was already efficiently compressed can come back
+    // larger from a re-encode, and shipping a bigger file to save space would be absurd.
+    return encoded.data.length < buffer.length ? Buffer.from(encoded.data) : buffer;
+  } catch (err) {
+    console.warn('[photo] could not be resized, using it at full size:', err.message);
+    return buffer;
+  }
+}
+
 // Dimensions only, for a photo already known to be upright — what the Word template needs to
 // work out how big to draw it.
 const jpegSize = buffer => {
@@ -154,4 +228,4 @@ const jpegSize = buffer => {
   return { width, height };
 };
 
-module.exports = { uprightJpeg, jpegSize, readJpeg };
+module.exports = { uprightJpeg, fitJpeg, jpegSize, readJpeg, DEFAULT_MAX_EDGE };

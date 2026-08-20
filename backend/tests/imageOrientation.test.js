@@ -161,6 +161,86 @@ test('the mirrored orientations are not confused with one another', () => {
   }, 'orientation 4');
 });
 
+// --- Fitting a photo to the size it is printed at ---------------------------------------------
+
+const { fitJpeg, DEFAULT_MAX_EDGE } = require('../lib/imageOrientation');
+
+// A photograph-like image: a smooth gradient with fine detail on top, so a bad downscale is
+// visible as either blur in the wrong place or aliased noise.
+function detailedJpeg(width, height) {
+  const data = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const at = ((y * width) + x) * 4;
+      const stripe = x % 2 === 0 ? 90 : -90;   // detail at the finest scale the image can hold
+      data[at] = Math.max(0, Math.min(255, Math.round((x / width) * 200) + stripe));
+      data[at + 1] = Math.round((y / height) * 200);
+      data[at + 2] = 128;
+      data[at + 3] = 255;
+    }
+  }
+  return Buffer.from(jpeg.encode({ data, width, height }, 92).data);
+}
+
+test('a phone-sized photo is brought down to the size it is printed at', () => {
+  const original = detailedJpeg(3024, 4032);
+  const fitted = fitJpeg(original);
+  const size = readJpeg(fitted);
+  assert.strictEqual(Math.max(size.width, size.height), DEFAULT_MAX_EDGE);
+  // The shape is kept: 3024x4032 is 3:4.
+  assert.ok(Math.abs((size.width / size.height) - (3024 / 4032)) < 0.01,
+    `${size.width}x${size.height} is not the original shape`);
+  assert.ok(fitted.length < original.length / 4,
+    `${fitted.length} bytes is not much smaller than ${original.length}`);
+});
+
+test('a photo already small enough is handed back untouched, byte for byte', () => {
+  const small = detailedJpeg(800, 600);
+  const fitted = fitJpeg(small);
+  assert.ok(fitted === small, 'it should be the same buffer, not a re-encoded copy');
+});
+
+test('resizing never returns a bigger file than it was given', () => {
+  // A small, already well-compressed image can come back larger from a re-encode. Shipping the
+  // bigger one to save space would be absurd.
+  for (const [w, h] of [[1601, 1200], [2000, 40], [1700, 1700]]) {
+    const original = detailedJpeg(w, h);
+    assert.ok(fitJpeg(original).length <= original.length, `${w}x${h} grew`);
+  }
+});
+
+test('the detail survives, rather than turning to noise', () => {
+  // Averaging the covered pixels turns the fine stripes into their mean. Sampling a single pixel
+  // instead picks whichever stripe it lands on, and at a scale that is not a whole number the
+  // phase drifts — so the result is a field of large jumps where the original was even. 420 rather
+  // than a round 400 is the point: an exact eight-times reduction lands on the same stripe every
+  // time and hides the problem.
+  const fitted = fitJpeg(detailedJpeg(3200, 800), { maxEdge: 420 });
+  const decoded = jpeg.decode(fitted, { useTArray: true });
+  const row = decoded.height >> 1;
+  let jumps = 0;
+  for (let x = 1; x < decoded.width; x++) {
+    const a = decoded.data[((row * decoded.width) + x - 1) * 4];
+    const b = decoded.data[((row * decoded.width) + x) * 4];
+    if (Math.abs(a - b) > 30) jumps++;
+  }
+  assert.ok(jumps < decoded.width / 10,
+    `${jumps} large jumps across ${decoded.width} pixels — the detail aliased instead of averaging`);
+});
+
+test('an odd aspect ratio never collapses to a zero dimension', () => {
+  // A very long, thin photo scaled by the long edge rounds the short one towards nothing.
+  const fitted = fitJpeg(detailedJpeg(4000, 12), { maxEdge: 200 });
+  const size = readJpeg(fitted);
+  assert.ok(size.height >= 1, `height came out ${size.height}`);
+  assert.strictEqual(size.width, 200);
+});
+
+test('a file that is not a JPEG is handed back rather than lost', () => {
+  const junk = Buffer.from('still not an image');
+  assert.ok(fitJpeg(junk) === junk);
+});
+
 // --- Failure costs the rotation, never the upload --------------------------------------------
 
 test('a file that is not a JPEG at all comes back untouched', () => {
