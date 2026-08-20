@@ -350,6 +350,15 @@ export default function PayAppReview() {
     return payAppReviewApi.getContract(projectId).then(setContract).catch(() => setContract(null));
   };
 
+  // The figures across the top — work completed, paid to date, balance to finish, issues flagged —
+  // are the project's billing history added up. They are derived from the reviews on file, so
+  // anything that changes which reviews exist has to reload them. Deleting a review did not, and
+  // the panel went on reporting money against an application that was no longer there.
+  const loadBudget = () => {
+    if (!projectId) { setBudget(null); return Promise.resolve(); }
+    return payAppReviewApi.projectHistory(projectId).then(setBudget).catch(() => setBudget(null));
+  };
+
   // Pull the selected project's billing history and executed contract so the PM sees
   // where the job stands, and what the contract allows, before uploading anything.
   useEffect(() => {
@@ -384,7 +393,7 @@ export default function PayAppReview() {
     // A review may have created a project (or added to one), so refresh both the
     // dropdown and the budget panel rather than leaving stale numbers on screen.
     if (data.projectId && !projectId) setProjectId(String(data.projectId));
-    else if (projectId) payAppReviewApi.projectHistory(projectId).then(setBudget).catch(() => {});
+    else loadBudget();
     loadHistory();
     loadProjects();
   };
@@ -451,8 +460,14 @@ export default function PayAppReview() {
   const handleDelete = async id => {
     if (!(await confirm('Delete this pay app review from history? The original PDF is removed too.'))) return;
     await payAppReviewApi.delete(id);
+    // Everything on screen that was derived from this review goes with it: the report if it is
+    // open, the result panel if it is the one just produced, and the totals across the top, which
+    // are the sum of the reviews on file and were left standing after the row beneath them was
+    // gone. A figure that outlives its own source is worse than no figure.
     if (viewing?.id === id) setViewing(null);
+    if (result?.id === id) setResult(null);
     loadHistory();
+    loadBudget();
   };
 
   const reset = () => {
