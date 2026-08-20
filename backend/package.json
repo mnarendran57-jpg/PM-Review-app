@@ -11,7 +11,9 @@
     "test:pdf": "node tests/pdfTextLayer.test.js",
     "test:jobs": "node tests/jobs.test.js",
     "test:reportpdf": "node tests/reportPdfEncoding.test.js",
-    "test:payapp2": "node tests/payApp2CrossCheck.test.js"
+    "test:payapp2": "node tests/payApp2CrossCheck.test.js",
+    "test:photos": "node tests/imageOrientation.test.js",
+    "test:covers": "node tests/coverPlaceholders.test.js && node tests/progressCover.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
@@ -21,6 +23,7 @@
     "docxtemplater": "^3.69.3",
     "dotenv": "^16.4.5",
     "express": "^4.18.3",
+    "jpeg-js": "^0.4.4",
     "jsonwebtoken": "^9.0.3",
     "multer": "^1.4.5-lts.1",
     "nodemailer": "^9.0.3",
