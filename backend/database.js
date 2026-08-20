@@ -207,6 +207,28 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- The organization's own Word documents: their memo cover, their progress report. One of each
+  -- per company, uploaded once by an admin, and used by every project that has not uploaded its
+  -- own. They started out on the project, which meant a company with fifteen jobs uploaded the
+  -- same letter fifteen times; a template is a property of the company, not of the job.
+  --
+  -- The terms column holds the confirmed placeholder mapping, in the shape lib/memoCover.js
+  -- proposes. It is named for the contract terms that were the first thing stored this way, and kept
+  -- so a row here reads the same as the project-level row it stands in for.
+  CREATE TABLE IF NOT EXISTS org_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    doc_type TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    file_blob BLOB,
+    file_key TEXT,
+    terms TEXT NOT NULL DEFAULT '{}',
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE (org_id, doc_type)
+  );
+
   CREATE TABLE IF NOT EXISTS proposal_intakes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     intake_type TEXT NOT NULL,
@@ -405,6 +427,22 @@ addKeyCols('pco_reviews', ['pco_file_key', 'reference_file_key']);
 addKeyCols('preconstruction_review_files', ['file_key']);
 addKeyCols('invoice_review_files', ['file_key']);
 addKeyCols('progress_report_files', ['file_key']);
+
+// A second copy of each site photo, fitted to the size it is actually printed at.
+//
+// The original is a 12-megapixel, multi-megabyte phone photograph and the report prints it about
+// three inches wide. Embedding the original made a four-photo report 11MB and would have made a
+// twenty-photo site visit fifty — which most mail servers refuse, so the report existed but could
+// not be sent. Fitting it on the way out instead cost seven seconds per download, every download.
+//
+// So it is done once, when the photo is uploaded, and both the PDF and the Word file read this
+// copy. The original is untouched and is still what the photo viewer serves. Photos uploaded
+// before this existed have no display copy; lib routes/progressReport.js fits those on the fly, so
+// an older report still downloads at a sane size — just more slowly, once.
+const displayCols = db.prepare(`PRAGMA table_info(progress_report_files)`).all().map(c => c.name);
+for (const [col, type] of [['display_blob', 'BLOB'], ['display_key', 'TEXT']]) {
+  if (!displayCols.includes(col)) db.exec(`ALTER TABLE progress_report_files ADD COLUMN ${col} ${type}`);
+}
 
 const intakeCols = db.prepare(`PRAGMA table_info(proposal_intakes)`).all().map(c => c.name);
 if (!intakeCols.includes('change_order_price')) {

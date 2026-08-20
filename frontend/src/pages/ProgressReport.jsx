@@ -367,13 +367,16 @@ export default function ProgressReport() {
             </div>
 
             {/* Discoverable where it matters. A PM who has a house report format has no reason to
-                guess that uploading it on Shared Documents is what makes Coaster use it. */}
+                guess that Settings, or this project's Shared Documents, is what makes Coaster use
+                it — and one who has fed it in wants to see that it is being used. */}
             {routeProjectId && (
               <p className="text-[11px] text-gray-400 leading-relaxed">
                 {template
-                  ? <>Reports download as your own Word document — <span className="text-gray-500">{template.fileName}</span>.</>
-                  : <>Have a report format of your own? Upload it on this project's Shared Documents as a
-                      Progress Report Template and every visit is written up into it.</>}
+                  ? <>Every report downloads as your own Word document — <span className="text-gray-500">{template.fileName}</span>
+                      {template.source === 'organization' ? ', your company template.' : ', this project\'s own template.'}</>
+                  : <>Reports download as PDF and as an editable Word file. Have a report format of your
+                      own? Add it under Settings → Templates for the whole company, or on this project's
+                      Shared Documents for this job alone.</>}
               </p>
             )}
 
@@ -401,15 +404,15 @@ export default function ProgressReport() {
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">{result ? 'Generated Report' : 'Saved Report'}</h2>
                 <div className="flex items-center gap-2">
-                  {/* Their own document comes first when they have one — it is the thing that
-                      actually goes to the team. The PDF stays for everyone else. */}
-                  {template && (
-                    <button className="btn-primary px-3 py-1.5" title={template.fileName}
-                      onClick={() => progressReportApi.downloadDocx(active.id)}>
-                      <ArrowDownTrayIcon className="w-4 h-4" /> Download Word
-                    </button>
-                  )}
-                  <button className={template ? 'btn-secondary px-3 py-1.5' : 'btn-primary px-3 py-1.5'}
+                  {/* Always offered. The PDF is the finished thing; the Word file is the one a PM
+                      can change before sending it, which a site report routinely needs. Which
+                      document it is depends on what is on file — see the note under the form. */}
+                  <button className="btn-primary px-3 py-1.5"
+                    title={template ? `Your own format — ${template.fileName}` : "Coaster's format, editable"}
+                    onClick={() => progressReportApi.downloadDocx(active.id)}>
+                    <ArrowDownTrayIcon className="w-4 h-4" /> Download Word
+                  </button>
+                  <button className="btn-secondary px-3 py-1.5"
                     onClick={() => progressReportApi.downloadPdf(active.id)}>
                     <ArrowDownTrayIcon className="w-4 h-4" /> Download PDF
                   </button>

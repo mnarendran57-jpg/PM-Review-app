@@ -34,6 +34,9 @@ app.use('/api/submittals', require('./routes/submittals'));
 app.use('/api/rfis', require('./routes/rfis'));
 app.use('/api/meetings', require('./routes/meetings'));
 app.use('/api/memo-templates', require('./routes/memoTemplates'));
+// The organization's own Word documents — their memo cover, their progress report — fed once by
+// an admin and used by every project that has not uploaded its own.
+app.use('/api/org-templates', require('./routes/orgTemplates'));
 app.use('/api/pay-app-review', require('./routes/payAppReview'));
 // Shared Documents — the project's filing cabinet. It is addressed under the pay app review path
 // for historical reasons and mounted separately so that holding one module at an older behaviour

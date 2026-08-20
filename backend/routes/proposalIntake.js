@@ -5,6 +5,7 @@ const db = require('../database');
 const { askForJson } = require('../lib/aiJson');
 const { renderMemoPdf, mergePdfBuffers } = require('../lib/pdfGen');
 const { applyPlaceholders, fillDocx } = require('../lib/memoCover');
+const { loadCover } = require('../lib/coverLookup');
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const { brandingFor } = require('../lib/orgBranding');
@@ -158,28 +159,28 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
         : ''
     };
 
-    // The organization's own memo cover, if one has been confirmed on this project's Shared
-    // Documents. Filling their .docx keeps their exact formatting — their fonts, their
-    // letterhead, their signature block — which redrawing the memo here cannot do.
+    // The organization's own memo cover. Filling their .docx keeps their exact formatting — their
+    // fonts, their letterhead, their signature block — which redrawing the memo here cannot do.
+    //
+    // This used to look only at the project. A company that had fed Coaster its memo letter still
+    // got the built-in memo on every project that had not been handed its own copy: the template
+    // was on file and simply never looked for. lib/coverLookup.js checks the project first and the
+    // organization behind it, and is the only place that rule lives.
     let memoDocx = null;
-    const coverRow = req.body.project_id ? db.prepare(`
-      SELECT * FROM project_contracts
-      WHERE project_id = ? AND doc_type = 'memo-cover'
-      ORDER BY updated_at DESC, id DESC LIMIT 1
-    `).get(req.body.project_id) : null;
-
-    if (coverRow) {
-      try {
-        const coverTerms = JSON.parse(coverRow.terms || '{}');
-        if (coverTerms.confirmed) {
-          const coverBytes = await storage.readFile({ key: coverRow.file_key, blob: coverRow.file_blob });
-          const { buffer: prepared } = applyPlaceholders(coverBytes, coverTerms.replacements || []);
-          memoDocx = fillDocx(prepared, fields);
-        }
-      } catch (err) {
-        // A broken cover must not stop the memo going out — the PDF below still renders.
-        console.error('Memo cover could not be filled (falling back to the built-in memo):', err.message);
+    try {
+      const cover = await loadCover({
+        docType: 'memo-cover',
+        projectId: req.body.project_id ? Number(req.body.project_id) : null,
+        orgId: req.orgId,
+      });
+      if (cover) {
+        const { buffer: prepared } = applyPlaceholders(
+          cover.buffer, cover.terms.replacements || [], 'memo-cover');
+        memoDocx = fillDocx(prepared, fields);
       }
+    } catch (err) {
+      // A broken cover must not stop the memo going out — the PDF below still renders.
+      console.error('Memo cover could not be filled (falling back to the built-in memo):', err.message);
     }
 
     const memoPdf = await renderMemoPdf(template, fields, await brandingFor(req.orgId));

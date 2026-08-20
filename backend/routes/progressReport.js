@@ -10,8 +10,9 @@ const access = require('../lib/access');
 const { requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../lib/plans');
 const { brandingFor } = require('../lib/orgBranding');
-const { uprightJpeg } = require('../lib/imageOrientation');
-const { fillProgressTemplate, templateForProject } = require('../lib/progressCover');
+const { uprightJpeg, fitJpeg } = require('../lib/imageOrientation');
+const { fillProgressTemplate, templateFor, loadTemplate } = require('../lib/progressCover');
+const { renderProgressReportDocx } = require('../lib/progressReportDocx');
 
 // Everything here belongs to one organization, and within it a member sees only the
 // projects they are on. Applied to the whole router so a new endpoint cannot be added
@@ -124,8 +125,9 @@ router.post('/', upload.array('images', 100), async (req, res) => {
     const reportId = insert.lastInsertRowid;
 
     const insertFile = db.prepare(`
-      INSERT INTO progress_report_files (report_id, sort_order, file_name, mime_type, caption, file_key, file_blob)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO progress_report_files
+        (report_id, sort_order, file_name, mime_type, caption, file_key, file_blob, display_key, display_blob)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
@@ -134,7 +136,21 @@ router.post('/', upload.array('images', 100), async (req, res) => {
       // a month from now would depend on code that could have changed since.
       const bytes = images[i].buffer;
       const { key } = await storage.storeFile('progress', bytes, f.mimetype, f.originalname);
-      insertFile.run(reportId, i, f.originalname, f.mimetype, images[i].caption || null, key, key ? Buffer.alloc(0) : bytes);
+
+      // And a second copy at the size the report prints it, made once here rather than on every
+      // download. Both are kept: the original is what the viewer shows and what a PM would want
+      // back if they ever needed the full-resolution picture.
+      const display = fitJpeg(bytes);
+      const displayStored = display === bytes
+        ? { key: null }   // already small enough — no second copy is worth keeping
+        : await storage.storeFile('progress', display, f.mimetype, `display_${f.originalname}`);
+
+      insertFile.run(
+        reportId, i, f.originalname, f.mimetype, images[i].caption || null,
+        key, key ? Buffer.alloc(0) : bytes,
+        displayStored.key,
+        displayStored.key || display === bytes ? null : display,
+      );
     }
 
     res.json({ id: reportId, report, header });
@@ -155,6 +171,43 @@ router.get('/', (req, res) => {
   sql += ' ORDER BY created_at DESC';
   res.json(db.prepare(sql).all(...params));
 });
+
+// The report's photographs, ready to be put into a document.
+//
+// Already upright — they were turned at upload, see above — and fitted here to roughly the size
+// they are actually printed at. Embedding the originals meant a four-photo report came to 11MB and
+// a twenty-photo site visit would have been fifty, which most mail servers refuse; the report
+// existed but could not be sent, which is the same as not existing. The originals stay untouched
+// on the server and are what the photo viewer serves.
+//
+// Both downloads read their photographs through here, so the PDF and the Word file always contain
+// the same pictures at the same size.
+async function photosForReport(reportId) {
+  const rows = db.prepare(`
+    SELECT caption, mime_type, file_key, file_blob, display_key, display_blob
+    FROM progress_report_files WHERE report_id=? ORDER BY sort_order ASC
+  `).all(reportId);
+
+  const photos = [];
+  for (const p of rows) {
+    // The copy made at upload, where there is one.
+    let buffer = (p.display_key || p.display_blob)
+      ? await storage.readFile({ key: p.display_key, blob: p.display_blob })
+      : null;
+
+    if (!buffer) {
+      // A photo uploaded before display copies existed, or one small enough that no second copy
+      // was worth keeping. Fitting it here costs a second or two per photo, once per download,
+      // which is the price of not rewriting everybody's stored files behind their back.
+      const stored = await storage.readFile({ key: p.file_key, blob: p.file_blob });
+      if (!stored) continue;
+      buffer = fitJpeg(stored);
+    }
+
+    photos.push({ caption: p.caption || '', mimeType: p.mime_type || 'image/jpeg', buffer });
+  }
+  return photos;
+}
 
 // Assembles the header object the report views/PDF expect from a stored row.
 function headerFromRow(row) {
@@ -202,14 +255,7 @@ router.get('/:id/report.pdf', async (req, res) => {
       const proj = db.prepare('SELECT project_name FROM projects WHERE id=?').get(row.project_id);
       header.projectName = proj?.project_name || null;
     }
-    const photoRows = db.prepare(
-      'SELECT caption, mime_type, file_key, file_blob FROM progress_report_files WHERE report_id=? ORDER BY sort_order ASC'
-    ).all(row.id);
-    const photos = [];
-    for (const p of photoRows) {
-      const buffer = await storage.readFile({ key: p.file_key, blob: p.file_blob });
-      if (buffer) photos.push({ caption: p.caption, mimeType: p.mime_type, buffer });
-    }
+    const photos = await photosForReport(row.id);
 
     // The reporting organization's own letterhead. The previous lookup took whichever memo
     // template sorted first across the whole database, which put one customer's address on
@@ -230,27 +276,19 @@ router.get('/:id/report.pdf', async (req, res) => {
   }
 });
 
-// The report in the organization's own Word template, when the project has one confirmed on its
-// Shared Documents. This is the deliverable a customer with a house format actually wants: their
-// document, their formatting, this visit's observations and photographs written into it. The PDF
-// above stays as it is for everyone who has not uploaded one.
+// The report as a Word document, always. A site report routinely needs a line changed after the
+// walk — a trade named properly, an observation the photographs do not carry — and a PDF cannot
+// take one.
+//
+// Which document it is depends on what is on file. Where the organization has fed Coaster its own
+// progress report, or this project has one of its own, that is what comes back: their formatting,
+// with this visit written into it. Otherwise it is Coaster's own layout, the same one the PDF uses,
+// in a form the PM can edit. Both are offered under one button, because from where the PM stands
+// this is simply "the Word version".
 router.get('/:id/report.docx', async (req, res) => {
   try {
     const row = visibleReport(req);
     if (!row) return res.status(404).json({ error: 'Not found' });
-
-    const template = templateForProject(row.project_id);
-    if (!template) {
-      return res.status(404).json({
-        error: 'This project has no confirmed progress report template. Upload your Word report '
-          + 'on the project\'s Shared Documents and confirm its placeholders first.',
-      });
-    }
-
-    const templateBuffer = await storage.readFile({
-      key: template.row.file_key, blob: template.row.file_blob,
-    });
-    if (!templateBuffer) return res.status(404).json({ error: 'The template file could not be read.' });
 
     const report = JSON.parse(row.report_json);
     const header = headerFromRow(row);
@@ -259,33 +297,35 @@ router.get('/:id/report.docx', async (req, res) => {
       header.projectName = proj?.project_name || null;
     }
 
-    const photoRows = db.prepare(
-      'SELECT caption, file_key, file_blob FROM progress_report_files WHERE report_id=? ORDER BY sort_order ASC'
-    ).all(row.id);
-    const photos = [];
-    for (const p of photoRows) {
-      // Already upright: they were turned before they were stored. See the upload above.
-      const buffer = await storage.readFile({ key: p.file_key, blob: p.file_blob });
-      if (buffer) photos.push({ caption: p.caption || '', buffer });
-    }
+    const photos = await photosForReport(row.id);
 
     const num = header.reportNumber != null ? `-${header.reportNumber}` : '';
-    const docx = fillProgressTemplate({
-      templateBuffer,
-      replacements: template.terms.replacements,
-      fields: {
-        report_title: `${header.projectName || 'Project'} Progress Report${num}`,
-        report_number: header.reportNumber != null ? String(header.reportNumber) : '',
-        date: header.visitDate || '',
-        time: header.visitTime || '',
-        weather: header.weather || '',
-        submitted_by: header.submittedBy || '',
-        project_name: header.projectName || '',
-        contractor: header.contractor || '',
-        progress: report.progress || [],
-      },
-      photos,
-    });
+    const template = await loadTemplate({ projectId: row.project_id, orgId: req.orgId });
+
+    let docx;
+    if (template) {
+      docx = fillProgressTemplate({
+        templateBuffer: template.buffer,
+        replacements: template.terms.replacements,
+        fields: {
+          report_title: `${header.projectName || 'Project'} Progress Report${num}`,
+          report_number: header.reportNumber != null ? String(header.reportNumber) : '',
+          date: header.visitDate || '',
+          time: header.visitTime || '',
+          weather: header.weather || '',
+          submitted_by: header.submittedBy || '',
+          project_name: header.projectName || '',
+          contractor: header.contractor || '',
+          progress: report.progress || [],
+        },
+        photos,
+      });
+    } else {
+      const branding = await brandingFor(req.orgId);
+      docx = renderProgressReportDocx({
+        report, header, photos, companyName: branding.companyName, logo: branding.logo,
+      });
+    }
 
     const stem = (header.projectName || 'Progress').replace(/[^a-z0-9]+/gi, '_');
     res.setHeader('Content-Type', DOCX_MIME);
@@ -297,13 +337,16 @@ router.get('/:id/report.docx', async (req, res) => {
   }
 });
 
-// Whether the Word download should be offered at all — the page asks before showing the button,
-// rather than offering a download that answers 404.
+// Whose format the Word download will be in. The button is always shown — this only tells the page
+// what to say underneath it, so a PM who has fed Coaster their own report can see that it is the
+// one being used, and one who has not can see that there is something to upload.
 router.get('/project/:projectId/template', (req, res) => {
   const project = access.projectForUser(req.user, req.params.projectId);
   if (!project || project.org_id !== req.orgId) return res.status(404).json({ error: 'Project not found' });
-  const template = templateForProject(Number(req.params.projectId));
-  res.json(template ? { available: true, fileName: template.row.file_name } : { available: false });
+  const found = templateFor({ projectId: Number(req.params.projectId), orgId: req.orgId });
+  res.json(found
+    ? { available: true, source: found.source, fileName: found.row.file_name }
+    : { available: false, source: null, fileName: null });
 });
 
 router.get('/:id/files/:fileId', async (req, res) => {
@@ -321,8 +364,12 @@ router.get('/:id/files/:fileId', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   if (!visibleReport(req)) return res.status(404).json({ error: 'Not found' });
-  const keys = db.prepare('SELECT file_key FROM progress_report_files WHERE report_id=? AND file_key IS NOT NULL')
-    .all(req.params.id).map(r => r.file_key);
+  // Both copies of every photo. Missing the display copy here would leave an orphan in object
+  // storage for every photo ever uploaded — invisible, and billed for indefinitely.
+  const keys = db.prepare('SELECT file_key, display_key FROM progress_report_files WHERE report_id=?')
+    .all(req.params.id)
+    .flatMap(r => [r.file_key, r.display_key])
+    .filter(Boolean);
   db.prepare('DELETE FROM progress_reports WHERE id=?').run(req.params.id);
   await storage.remove(keys);
   res.json({ success: true });

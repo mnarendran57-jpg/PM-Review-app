@@ -468,6 +468,19 @@ export const memoTemplatesApi = {
   delete: id => api.delete(`/memo-templates/${id}`).then(r => r.data),
 };
 
+// The organization's own Word documents — their memo cover, their progress report. Fed once by an
+// admin in Settings and used by every project that has not uploaded its own on Shared Documents.
+export const orgTemplatesApi = {
+  list: () => api.get('/org-templates').then(r => r.data),
+  upload: (docType, formData) => api.post(`/org-templates/${docType}`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+  }).then(r => r.data),
+  update: (docType, data) => api.patch(`/org-templates/${docType}`, data).then(r => r.data),
+  delete: docType => api.delete(`/org-templates/${docType}`).then(r => r.data),
+  fileUrl: docType => `${apiBaseUrl}/org-templates/${docType}/file.docx`,
+  templateUrl: docType => `${apiBaseUrl}/org-templates/${docType}/template.docx`,
+};
+
 function triggerDownload(blob, fileName) {
   const url = window.URL.createObjectURL(blob);
   const a = document.createElement('a');

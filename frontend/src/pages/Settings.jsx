@@ -1,10 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   UserCircleIcon, FolderIcon, KeyIcon, CheckIcon, ExclamationTriangleIcon,
+  DocumentTextIcon, ArrowDownTrayIcon, ArrowUpTrayIcon, SparklesIcon, TrashIcon,
 } from '@heroicons/react/24/outline';
-import { authApi, projectsApi, selectedOrg } from '../api';
+import { authApi, projectsApi, orgTemplatesApi, selectedOrg } from '../api';
 import PageHeader from '../components/PageHeader';
 import OrgSwitcher from '../components/OrgSwitcher';
+import Modal from '../components/Modal';
+import { useConfirm } from '../components/ConfirmDialog';
+import CoverReview, { COVERS } from '../components/CoverReview';
 
 // Settings, in two halves: who you are, and the jobs you are on.
 //
@@ -21,6 +25,8 @@ import OrgSwitcher from '../components/OrgSwitcher';
 const TABS = [
   { key: 'personal', label: 'Personal Information', icon: UserCircleIcon },
   { key: 'projects', label: 'Project Information', icon: FolderIcon },
+  // Admin only: feeding a company's standard template changes what every project produces.
+  { key: 'templates', label: 'Templates', icon: DocumentTextIcon, adminOnly: true },
 ];
 
 function Field({ label, hint, children }) {
@@ -408,10 +414,167 @@ function ProjectsTab() {
   );
 }
 
+// --- The company's own Word documents ---------------------------------------------------------
+//
+// One memo cover and one progress report per organization, fed once. They used to live only on the
+// project, which meant a company with fifteen jobs uploaded the same two files fifteen times and
+// confirmed the same mapping fifteen times. A project can still upload its own on its Shared
+// Documents when a particular job needs a different format, and that one wins.
+
+function TemplateCard({ template, onChanged, onReview }) {
+  const cover = COVERS[template.doc_type] || {};
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [confirm, confirmDialog] = useConfirm();
+  const fileRef = useRef();
+
+  const choose = async file => {
+    if (!file) return;
+    setBusy(true); setError('');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      // Straight into the confirmation: the mapping is the thing the admin has to look at, and a
+      // template uploaded but never confirmed does nothing at all.
+      onReview(await orgTemplatesApi.upload(template.doc_type, fd));
+      onChanged();
+    } catch (err) {
+      setError(err?.friendlyMessage || err?.response?.data?.error || 'Could not read that document.');
+    } finally { setBusy(false); }
+  };
+
+  const remove = async () => {
+    const ok = await confirm({
+      title: `Remove this ${cover.noun}?`,
+      message: `${template.file_name} is deleted, and every project without one of its own goes back `
+        + `to Coaster's built-in ${cover.thing}. You can upload it again at any time.`,
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!ok) return;
+    await orgTemplatesApi.delete(template.doc_type);
+    onChanged();
+  };
+
+  return (
+    <div className="card p-5 space-y-3">
+      {confirmDialog}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-gray-900">{cover.label || template.doc_type}</h3>
+          <p className="text-[11px] text-gray-400 mt-0.5">
+            {cover.blurb} Filled in by {cover.filledBy}.
+          </p>
+        </div>
+        {template.onFile && (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0"
+            style={template.confirmed
+              ? { background: '#f0fdf4', color: '#15803d' }
+              : { background: '#fff7ed', color: '#c2410c' }}>
+            {template.confirmed ? 'IN USE' : 'NEEDS REVIEW'}
+          </span>
+        )}
+      </div>
+
+      {template.onFile ? (
+        <div className="p-3 rounded-xl" style={{ background: '#fafbfc', border: '1px solid #f1f5f9' }}>
+          <p className="text-[13px] font-medium text-gray-900 truncate">{template.file_name}</p>
+          <p className="text-[11px] mt-0.5" style={{ color: template.confirmed ? '#15803d' : '#c2410c' }}>
+            {template.confirmed
+              ? `${template.replacements.length} field${template.replacements.length === 1 ? '' : 's'} filled in on every ${cover.thing}.`
+              : `Coaster found ${template.replacements.length} variable part(s). Confirm them before it is used.`}
+          </p>
+        </div>
+      ) : (
+        <p className="text-[12px] text-gray-500">
+          Nothing on file. Every project uses Coaster's built-in {cover.thing} until you upload one.
+        </p>
+      )}
+
+      {error && <p className="text-xs" style={{ color: '#b91c1c' }}>{error}</p>}
+
+      <input ref={fileRef} type="file" accept=".docx" className="hidden"
+        onChange={e => { choose(e.target.files?.[0]); e.target.value = ''; }} />
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <button type="button" className="btn-primary px-3 py-1.5 text-xs"
+          onClick={() => fileRef.current.click()} disabled={busy}>
+          {busy
+            ? <><SparklesIcon className="w-4 h-4 animate-pulse" /> Reading…</>
+            : <><ArrowUpTrayIcon className="w-4 h-4" /> {template.onFile ? 'Replace' : 'Upload'}</>}
+        </button>
+        {template.onFile && (
+          <>
+            <button type="button" className="btn-secondary px-3 py-1.5 text-xs"
+              onClick={() => onReview(template)}>
+              <SparklesIcon className="w-4 h-4" /> {template.confirmed ? 'Review mapping' : 'Confirm'}
+            </button>
+            {/* The document with its placeholders written in — what they keep, and edit, so the
+                template Coaster fills is never a mystery. */}
+            <a className="btn-secondary px-3 py-1.5 text-xs"
+              href={orgTemplatesApi.templateUrl(template.doc_type)} target="_blank" rel="noreferrer">
+              <ArrowDownTrayIcon className="w-4 h-4" /> Download
+            </a>
+            <button type="button" className="btn-danger px-3 py-1.5 text-xs" onClick={remove}>
+              <TrashIcon className="w-4 h-4" />
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TemplatesTab() {
+  const [templates, setTemplates] = useState([]);
+  const [reviewing, setReviewing] = useState(null);
+  const [error, setError] = useState('');
+
+  const load = () => orgTemplatesApi.list().then(setTemplates)
+    .catch(err => setError(err?.response?.data?.error || 'Could not load your templates.'));
+  useEffect(() => { load(); }, []);
+
+  return (
+    <div className="max-w-3xl space-y-4">
+      <div className="p-4 rounded-xl text-[12px] leading-relaxed"
+        style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#9f1239' }}>
+        These are your company's own Word documents. Upload each one once and Coaster produces
+        <span className="font-semibold"> your document</span> — your fonts, your letterhead, your
+        signature block — on every project, instead of a version of it redrawn by this app. A
+        project that needs a different format can still upload its own on its Shared Documents,
+        and that one is used for that project.
+      </div>
+
+      {error && <p className="text-xs" style={{ color: '#b91c1c' }}>{error}</p>}
+
+      {templates.map(t => (
+        <TemplateCard key={t.doc_type} template={t} onChanged={load} onReview={setReviewing} />
+      ))}
+
+      {reviewing && (
+        <Modal title="What Coaster will fill in" onClose={() => setReviewing(null)} size="lg">
+          <CoverReview
+            docType={reviewing.doc_type}
+            fileName={reviewing.file_name}
+            terms={reviewing.terms || reviewing}
+            save={terms => orgTemplatesApi.update(reviewing.doc_type, { terms })}
+            onDone={() => { setReviewing(null); load(); }}
+            onCancel={() => setReviewing(null)} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // --- The page --------------------------------------------------------------------------------------
 
 export default function Settings() {
   const [tab, setTab] = useState('personal');
+  // Feeding the company's standard templates is an administrative act — it changes what every
+  // project in the organization produces. The backend enforces this; hiding the tab only saves a
+  // member from a button that would answer 403.
+  const isAdmin = !!selectedOrg.get()?.is_admin;
+  const tabs = TABS.filter(t => !t.adminOnly || isAdmin);
 
   return (
     <div className="p-8">
@@ -422,7 +585,7 @@ export default function Settings() {
       />
 
       <div className="flex gap-1 mb-6" style={{ borderBottom: '1px solid #e8edf2' }}>
-        {TABS.map(({ key, label, icon: Icon }) => (
+        {tabs.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             type="button"
@@ -440,7 +603,9 @@ export default function Settings() {
         ))}
       </div>
 
-      {tab === 'personal' ? <PersonalTab /> : <ProjectsTab />}
+      {tab === 'personal' && <PersonalTab />}
+      {tab === 'projects' && <ProjectsTab />}
+      {tab === 'templates' && isAdmin && <TemplatesTab />}
     </div>
   );
 }
