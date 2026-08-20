@@ -45,8 +45,15 @@ const SUBSTITUTIONS = [
 // the substitutions above rescue is removed.
 const ENCODABLE = /[\t\n\r\x20-\x7e\xa0-\xff€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ]/;
 
+// Whitespace that is not a space. A tab is the one that bites: Word writes a bulleted line as a
+// bullet, a tab, then the text, and pdf-lib REFUSES TO ENCODE A TAB — so a report round-tripped
+// through Word failed to render at all, over a character whose entire meaning is "some space
+// here". ENCODABLE lists them as printable because they are valid in a PDF string; they are not
+// valid in a drawn one, so they are flattened before that check rather than after it.
+const NON_SPACE_WHITESPACE = /[\t\v\f\r\n]/g;
+
 function toWinAnsi(text) {
-  let s = String(text ?? '');
+  let s = String(text ?? '').replace(NON_SPACE_WHITESPACE, ' ');
   for (const [pattern, replacement] of SUBSTITUTIONS) s = s.replace(pattern, replacement);
   return [...s].filter(ch => ENCODABLE.test(ch)).join('');
 }

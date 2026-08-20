@@ -5,7 +5,8 @@ const db = require('../database');
 const { askForJson } = require('../lib/aiJson');
 const { PDFDocument } = require('pdf-lib');
 const { renderMemoPdf, mergePdfBuffers } = require('../lib/pdfGen');
-const { renderMemoCoverPdf } = require('../lib/memoCoverPdf');
+const { renderDocxAsPdf } = require('../lib/docxToPdf');
+const { renderMemoDocx } = require('../lib/memoDocx');
 const { applyPlaceholders, fillDocx } = require('../lib/memoCover');
 const { loadCover } = require('../lib/coverLookup');
 
@@ -185,14 +186,22 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
       console.error('Memo cover could not be filled (falling back to the built-in memo):', err.message);
     }
 
-    // The memo page in front of the package. Where the organization has given Coaster its own
-    // letter, the page is that letter's words; otherwise it is the built-in memo, unchanged, so a
-    // customer who has uploaded nothing sees exactly what they saw before.
     const branding = await brandingFor(req.orgId);
+
+    // The memo page in front of the package. Where the organization has given Coaster its own
+    // letterhead template, the page is that letter's words; otherwise it is the built-in memo,
+    // drawn exactly as it always has been.
     const memoPdf = memoDocx
-      ? await renderMemoCoverPdf(memoDocx, branding)
+      ? await renderDocxAsPdf(memoDocx, { branding, confidential: true })
       : await renderMemoPdf(template, fields, branding);
     const mergedPdf = await mergePdfBuffers([memoPdf, proposalFile.buffer, poFile?.buffer]);
+
+    // Every package carries an editable Word memo, whether or not a template was uploaded. Being
+    // able to change the memo is the point — a condition of approval added after reading it back,
+    // a name corrected — and it used to be offered only to customers who had uploaded a letter of
+    // their own, which is most of them never. Without one, the built-in memo's own wording is
+    // written into a Word document the PM can edit and send back.
+    if (!memoDocx) memoDocx = renderMemoDocx(template, fields, branding);
 
     const baseName = proposalFile.originalname.replace(/\.pdf$/i, '');
     const mergedFileName = `${baseName}_processed.pdf`;
@@ -241,9 +250,13 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
 router.get('/', (req, res) => {
   const { search, intake_type, project_name } = req.query;
   const scope = access.visibilityClause(req.user, req.orgId, { projectColumn: null });
+  // memo_docx_name travels with the list so the history can offer the Word memo and the
+  // put-it-back button on an intake from last week, not only on the one just generated. A PM
+  // rarely edits the memo in the same minute they created it.
   let sql = `SELECT id, intake_type, vendor_name, project_name, po_number, proposal_date,
              total_price, change_order_price, original_po_amount, new_total_amount,
-             proposal_file_name, po_file_name, merged_file_name, created_by, created_at
+             proposal_file_name, po_file_name, merged_file_name, memo_docx_name,
+             created_by, created_at
              FROM proposal_intakes WHERE ${scope.sql}`;
   const params = [...scope.params];
   if (project_name) { sql += ' AND project_name = ?'; params.push(project_name); }
@@ -315,7 +328,7 @@ router.put('/:id/memo.docx', upload.single('memo_docx'), async (req, res) => {
       : null;
 
     // Typeset from the edited document, then staple the same proposal and PO behind it.
-    const memoPdf = await renderMemoCoverPdf(req.file.buffer, await brandingFor(req.orgId));
+    const memoPdf = await renderDocxAsPdf(req.file.buffer, { branding: await brandingFor(req.orgId), confidential: true });
     const mergedPdf = await mergePdfBuffers([memoPdf, proposalBytes, poBytes]);
 
     const previousMerged = row.merged_pdf_key;

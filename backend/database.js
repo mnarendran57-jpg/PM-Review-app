@@ -428,6 +428,23 @@ addKeyCols('preconstruction_review_files', ['file_key']);
 addKeyCols('invoice_review_files', ['file_key']);
 addKeyCols('progress_report_files', ['file_key']);
 
+// The report as the PM last edited it.
+//
+// Progress Report hands over a Word file so a site write-up can be corrected after the walk — a
+// trade named properly, an observation the photographs do not carry, a photo dropped because it
+// showed nothing. That edit used to live only in the PM's own copy: the PDF everyone else receives
+// was drawn from the stored observations and never looked at the Word file again.
+//
+// When an edited document is sent back it is kept here, and from then on it IS the report: both
+// downloads are produced from it. The original observations and photographs stay exactly where
+// they were, so clearing this column would restore what Coaster first wrote.
+const editedCols = db.prepare(`PRAGMA table_info(progress_reports)`).all().map(c => c.name);
+for (const [col, type] of [
+  ['edited_docx', 'BLOB'], ['edited_docx_key', 'TEXT'], ['edited_at', 'TEXT'],
+]) {
+  if (!editedCols.includes(col)) db.exec(`ALTER TABLE progress_reports ADD COLUMN ${col} ${type}`);
+}
+
 // A second copy of each site photo, fitted to the size it is actually printed at.
 //
 // The original is a 12-megapixel, multi-megabyte phone photograph and the report prints it about

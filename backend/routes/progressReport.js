@@ -13,6 +13,8 @@ const { brandingFor } = require('../lib/orgBranding');
 const { uprightJpeg, fitJpeg } = require('../lib/imageOrientation');
 const { fillProgressTemplate, templateFor, loadTemplate } = require('../lib/progressCover');
 const { renderProgressReportDocx } = require('../lib/progressReportDocx');
+const { renderDocxAsPdf } = require('../lib/docxToPdf');
+const { PDFDocument } = require('pdf-lib');
 
 // Everything here belongs to one organization, and within it a member sees only the
 // projects they are on. Applied to the whole router so a new endpoint cannot be added
@@ -244,11 +246,35 @@ router.get('/:id/report.md', (req, res) => {
   res.send(row.report_markdown);
 });
 
+// The report as the PM last edited it, if they have edited it. Both downloads read this, so the
+// Word file and the PDF always say the same thing.
+const editedDocxFor = async row => (
+  (row.edited_docx_key || row.edited_docx)
+    ? storage.readFile({ key: row.edited_docx_key, blob: row.edited_docx })
+    : null
+);
+
 // The PDF is the primary deliverable — laid out to match the standard report template.
 router.get('/:id/report.pdf', async (req, res) => {
   try {
     const row = visibleReport(req);
     if (!row) return res.status(404).json({ error: 'Not found' });
+
+    // Once a PM has edited the Word version, that is the report. Redrawing from the stored
+    // observations instead would quietly discard their edit and send the old wording out.
+    const edited = await editedDocxFor(row);
+    if (edited) {
+      const branding = await brandingFor(req.orgId);
+      const pdf = await renderDocxAsPdf(edited, { branding });
+      const proj = row.project_id
+        ? db.prepare('SELECT project_name FROM projects WHERE id=?').get(row.project_id)
+        : null;
+      const stem = (proj?.project_name || 'Progress').replace(/[^a-z0-9]+/gi, '_');
+      const n = row.report_number != null ? `-${row.report_number}` : '';
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${stem}_Progress_Report${n}.pdf"`);
+      return res.send(pdf);
+    }
     const report = JSON.parse(row.report_json);
     const header = headerFromRow(row);
     if (row.project_id) {
@@ -296,10 +322,19 @@ router.get('/:id/report.docx', async (req, res) => {
       const proj = db.prepare('SELECT project_name FROM projects WHERE id=?').get(row.project_id);
       header.projectName = proj?.project_name || null;
     }
+    const num = header.reportNumber != null ? `-${header.reportNumber}` : '';
+
+    // What the PM last sent back, if anything. Handing back a freshly generated report here would
+    // mean downloading, editing, and downloading again silently discarded the edit.
+    const edited = await editedDocxFor(row);
+    if (edited) {
+      const stem = (header.projectName || 'Progress').replace(/[^a-z0-9]+/gi, '_');
+      res.setHeader('Content-Type', DOCX_MIME);
+      res.setHeader('Content-Disposition', `attachment; filename="${stem}_Progress_Report${num}.docx"`);
+      return res.send(edited);
+    }
 
     const photos = await photosForReport(row.id);
-
-    const num = header.reportNumber != null ? `-${header.reportNumber}` : '';
     const template = await loadTemplate({ projectId: row.project_id, orgId: req.orgId });
 
     let docx;
@@ -335,6 +370,60 @@ router.get('/:id/report.docx', async (req, res) => {
     console.error('Progress report Word error:', err);
     res.status(err.status || 500).json({ error: err.message });
   }
+});
+
+// An edited report, put back.
+//
+// The Word file exists so a PM can change the write-up after the walk — a trade named properly, an
+// observation the photographs do not carry, a photograph dropped because it showed nothing. From
+// here on that document IS the report: both downloads are produced from it, so the copy the PM
+// keeps and the copy the team receives cannot drift apart.
+//
+// The observations and photographs Coaster read are left exactly where they were. Nothing is
+// overwritten, so the original report is still there behind this.
+router.put('/:id/report.docx', upload.single('report_docx'), async (req, res) => {
+  try {
+    const row = visibleReport(req);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    if (!req.file) return res.status(400).json({ error: 'Choose the edited Word report to upload.' });
+    if (req.file.mimetype !== DOCX_MIME) {
+      return res.status(400).json({ error: 'The report must be a Word document (.docx).' });
+    }
+
+    // Rendered now rather than on download, so a document that cannot be read is refused while the
+    // PM is still looking at the upload — not silently, later, when somebody wants the PDF.
+    const branding = await brandingFor(req.orgId);
+    const pdf = await renderDocxAsPdf(req.file.buffer, { branding });
+
+    const previous = row.edited_docx_key;
+    const { key } = await storage.storeFile(
+      'progress', req.file.buffer, DOCX_MIME, `edited_${req.file.originalname}`);
+
+    db.prepare(`
+      UPDATE progress_reports
+      SET edited_docx = ?, edited_docx_key = ?, edited_at = datetime('now')
+      WHERE id = ?
+    `).run(key ? Buffer.alloc(0) : req.file.buffer, key, row.id);
+
+    // Only once the replacement is safely stored.
+    if (previous && previous !== key) await storage.remove([previous]);
+
+    res.json({ success: true, edited: true, pages: (await PDFDocument.load(pdf)).getPageCount() });
+  } catch (err) {
+    console.error('Progress report edit error:', err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// Puts the report back to what Coaster wrote, discarding the edit. The observations and photos
+// were never touched, so this is just dropping the edited document.
+router.delete('/:id/report.docx', async (req, res) => {
+  const row = visibleReport(req);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  db.prepare(`UPDATE progress_reports SET edited_docx=NULL, edited_docx_key=NULL, edited_at=NULL WHERE id=?`)
+    .run(row.id);
+  if (row.edited_docx_key) await storage.remove([row.edited_docx_key]);
+  res.json({ success: true, edited: false });
 });
 
 // Whose format the Word download will be in. The button is always shown — this only tells the page

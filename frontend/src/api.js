@@ -754,6 +754,18 @@ export const progressReportApi = {
     const res = await api.get(`/progress-report/${id}/report.docx`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `progress_report_${id}.docx`);
   },
+  // The edited report, put back. From then on that document is the report: both the Word file and
+  // the PDF are produced from it, so the PM's copy and the team's copy cannot drift apart.
+  replaceDocx: (id, file) => {
+    const fd = new FormData();
+    fd.append('report_docx', file);
+    return api.put(`/progress-report/${id}/report.docx`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(r => r.data);
+  },
+  // Drops the edit and goes back to what Coaster wrote. The observations and photos were never
+  // touched, so nothing is lost by trying an edit.
+  revertDocx: id => api.delete(`/progress-report/${id}/report.docx`).then(r => r.data),
   // Asked before the Word button is shown, so the page never offers a download that 404s.
   template: projectId =>
     api.get(`/progress-report/project/${projectId}/template`).then(r => r.data),

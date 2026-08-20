@@ -44,6 +44,26 @@ const UNPRINTABLE = '→ ← ↔ ≈ ≠ ≤ ≥ − × ÷ ✅ ❌ … ‘ ’ �
     assert.match(toWinAnsi('−1,200.00'), /^-1,200\.00$/);
   });
 
+  // Found by round-tripping a progress report through Word: the bulleted lines are written as a
+  // bullet, a tab, then the text, and pdf-lib refuses to encode the tab — so the whole rebuilt
+  // report failed to render over a character that means "some space here".
+  await test('a tab becomes a space rather than taking the document down', async () => {
+    assert.strictEqual(toWinAnsi('•\tDuctwork rough-in is complete.'), '• Ductwork rough-in is complete.');
+    const { PDFDocument, StandardFonts } = require('pdf-lib');
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const page = pdf.addPage([612, 792]);
+    // The real failure was here: drawText, not the sanitiser.
+    for (const line of wrapLine('•\tAHU-1\tis complete', font, 11, 400)) {
+      page.drawText(line, { x: 50, y: 700, size: 11, font });
+    }
+    assert.ok((await pdf.save()).length > 0);
+  });
+
+  await test('every other kind of whitespace is flattened too', () => {
+    assert.strictEqual(toWinAnsi('a\rb\nc\vd\fe'), 'a b c d e');
+  });
+
   await test('characters WinAnsi does have are left alone', () => {
     const keep = 'Contract § 3.2.9 — retainage “held” at 5% • see p.7';
     assert.strictEqual(toWinAnsi(keep), keep);

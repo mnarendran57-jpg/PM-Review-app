@@ -26,7 +26,49 @@ function formatMoney(n) {
   return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function HistoryItem({ item, onDelete }) {
+// Download the memo, edit it, put it back — and the merged PDF is rebuilt around your version.
+//
+// Offered both on the package just generated and on any package in the history, because the edit
+// almost never happens in the same minute as the intake. `onRebuilt` lets the caller refresh
+// whatever it is showing.
+function MemoEditControls({ intake, onRebuilt, compact = false }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const fileRef = useRef();
+
+  const putBack = async file => {
+    if (!file) return;
+    setBusy(true); setError('');
+    try {
+      onRebuilt(await proposalIntakeApi.replaceMemoDocx(intake.id, file));
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Could not rebuild the package from that document.');
+    } finally { setBusy(false); }
+  };
+
+  const size = compact ? 'px-2 py-1' : 'px-3 py-1.5 text-xs';
+  return (
+    <>
+      <input ref={fileRef} type="file" accept=".docx" className="hidden"
+        onChange={e => { putBack(e.target.files?.[0]); e.target.value = ''; }} />
+      <button className={`btn-secondary ${size}`} title="Download the Word memo to edit"
+        onClick={() => proposalIntakeApi.downloadMemoDocx(intake.id, intake.memo_docx_name)}>
+        <DocumentTextIcon className="w-4 h-4" />{compact ? '' : ' Word memo'}
+      </button>
+      <button className={`btn-secondary ${size}`} disabled={busy}
+        title="Upload the edited Word memo — the PDF is rebuilt with it"
+        onClick={() => fileRef.current.click()}>
+        {busy
+          ? <SparklesIcon className="w-4 h-4 animate-pulse" />
+          : <ArrowPathRoundedSquareIcon className="w-4 h-4" />}
+        {compact ? '' : (busy ? ' Rebuilding…' : ' Upload edited memo')}
+      </button>
+      {error && <p className="text-xs w-full" style={{ color: '#b91c1c' }}>{error}</p>}
+    </>
+  );
+}
+
+function HistoryItem({ item, onDelete, onRebuilt }) {
   const date = new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const tc = TYPE_INFO[item.intake_type] || TYPE_INFO['New Vendor'];
   const priceLine = item.intake_type === 'Change Order'
@@ -48,6 +90,7 @@ function HistoryItem({ item, onDelete }) {
       </div>
       <div className="flex items-center gap-3 flex-shrink-0 ml-4">
         <span className="flex items-center gap-1 text-xs text-gray-400"><ClockIcon className="w-3.5 h-3.5" />{date}</span>
+        <MemoEditControls intake={item} onRebuilt={onRebuilt} compact />
         <button className="btn-secondary px-2 py-1" title="Download merged PDF" onClick={() => proposalIntakeApi.download(item.id, item.merged_file_name)}>
           <ArrowDownTrayIcon className="w-4 h-4" />
         </button>
@@ -65,22 +108,7 @@ function HistoryItem({ item, onDelete }) {
 // receiving the memo as first generated.
 function ResultPanel({ result, onReset }) {
   const [state, setState] = useState(result);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
   const [replaced, setReplaced] = useState(false);
-  const fileRef = useRef();
-
-  const putBack = async file => {
-    if (!file) return;
-    setBusy(true); setError(''); setReplaced(false);
-    try {
-      const next = await proposalIntakeApi.replaceMemoDocx(state.id, file);
-      setState(s => ({ ...s, ...next }));
-      setReplaced(true);
-    } catch (err) {
-      setError(err?.response?.data?.error || 'Could not rebuild the package from that document.');
-    } finally { setBusy(false); }
-  };
 
   return (
     <div className="p-4 rounded-xl space-y-3" style={{ background: '#d1fae5', border: '1px solid #6ee7b7' }}>
@@ -100,31 +128,18 @@ function ResultPanel({ result, onReset }) {
         <button className="btn-secondary px-3 py-1.5" onClick={onReset}>New</button>
       </div>
 
-      {/* Only when a confirmed memo cover produced one. Without a template there is no Word memo
-          to edit, and nothing here to offer. */}
-      {state.memo_docx_name && (
-        <div className="pt-2" style={{ borderTop: '1px solid rgba(6,95,70,0.15)' }}>
-          <p className="text-[11px] leading-relaxed mb-2" style={{ color: '#065f46' }}>
-            Need to change the memo? Download the Word file, edit it, and put it back — the PDF
-            above is rebuilt with your version in front of the same proposal.
-          </p>
-          <input ref={fileRef} type="file" accept=".docx" className="hidden"
-            onChange={e => { putBack(e.target.files?.[0]); e.target.value = ''; }} />
-          <div className="flex items-center gap-2">
-            <button className="btn-secondary px-3 py-1.5 text-xs"
-              onClick={() => proposalIntakeApi.downloadMemoDocx(state.id, state.memo_docx_name)}>
-              <DocumentTextIcon className="w-4 h-4" /> Word memo
-            </button>
-            <button className="btn-secondary px-3 py-1.5 text-xs" disabled={busy}
-              onClick={() => fileRef.current.click()}>
-              {busy
-                ? <><SparklesIcon className="w-4 h-4 animate-pulse" /> Rebuilding…</>
-                : <><ArrowPathRoundedSquareIcon className="w-4 h-4" /> Upload edited memo</>}
-            </button>
-          </div>
-          {error && <p className="text-xs mt-2" style={{ color: '#b91c1c' }}>{error}</p>}
+      <div className="pt-2" style={{ borderTop: '1px solid rgba(6,95,70,0.15)' }}>
+        <p className="text-[11px] leading-relaxed mb-2" style={{ color: '#065f46' }}>
+          Need to change the memo? Download the Word file, edit it, and put it back — the PDF
+          above is rebuilt with your version in front of the same proposal.
+        </p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <MemoEditControls
+            intake={state}
+            onRebuilt={next => { setState(s => ({ ...s, ...next })); setReplaced(true); }}
+          />
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -452,7 +467,9 @@ export default function ProposalIntake() {
                 <p className="text-sm text-gray-400">No proposals processed yet. Use the form to process your first one.</p>
               </div>
             ) : (
-              history.map(h => <HistoryItem key={h.id} item={h} onDelete={handleDelete} />)
+              history.map(h => (
+                <HistoryItem key={h.id} item={h} onDelete={handleDelete} onRebuilt={loadHistory} />
+              ))
             )}
           </div>
         </div>

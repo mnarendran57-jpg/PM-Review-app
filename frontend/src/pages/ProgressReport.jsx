@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   CameraIcon, SparklesIcon, DocumentTextIcon, TrashIcon, ClockIcon, XMarkIcon,
-  PhotoIcon, PlusIcon, ArrowDownTrayIcon,
+  PhotoIcon, PlusIcon, ArrowDownTrayIcon, ArrowUpTrayIcon,
 } from '@heroicons/react/24/outline';
 import { progressReportApi } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -211,6 +211,32 @@ export default function ProgressReport() {
   // Shared Documents. Asked for once per project; without one the PDF is the only deliverable.
   const [template, setTemplate] = useState(null);
 
+  // Editing the report in Word and sending it back. From then on that document is the report —
+  // both downloads come from it — which is why the undo is offered next to the confirmation
+  // rather than hidden somewhere: a PM who uploads the wrong file should not have to wonder.
+  const [uploading, setUploading] = useState(false);
+  const [editNote, setEditNote] = useState(null);
+  const editRef = useRef();
+
+  const putBackEdited = async file => {
+    if (!file) return;
+    setUploading(true); setEditNote(null);
+    try {
+      await progressReportApi.replaceDocx(active.id, file);
+      setEditNote({ text: 'Your edited report is now the report — both downloads come from it.' });
+    } catch (err) {
+      setEditNote({
+        bad: true,
+        text: err?.response?.data?.error || 'Could not rebuild the report from that document.',
+      });
+    } finally { setUploading(false); }
+  };
+
+  const revertEdited = async id => {
+    await progressReportApi.revertDocx(id);
+    setEditNote(null);
+  };
+
   const loadHistory = () => progressReportApi.list(routeProjectId ? { project_id: routeProjectId } : undefined).then(list => {
     setHistory(list);
     // Pre-fill the next sequential report number from history.
@@ -403,14 +429,21 @@ export default function ProgressReport() {
             <>
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">{result ? 'Generated Report' : 'Saved Report'}</h2>
-                <div className="flex items-center gap-2">
-                  {/* Always offered. The PDF is the finished thing; the Word file is the one a PM
-                      can change before sending it, which a site report routinely needs. Which
-                      document it is depends on what is on file — see the note under the form. */}
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  {/* The PDF is the finished thing; the Word file is the one a PM can change before
+                      sending it, which a site report routinely needs. Editing it and putting it
+                      back rebuilds the PDF, so the two never say different things. */}
                   <button className="btn-primary px-3 py-1.5"
                     title={template ? `Your own format — ${template.fileName}` : "Coaster's format, editable"}
                     onClick={() => progressReportApi.downloadDocx(active.id)}>
                     <ArrowDownTrayIcon className="w-4 h-4" /> Download Word
+                  </button>
+                  <button className="btn-secondary px-3 py-1.5" disabled={uploading}
+                    title="Upload the edited Word report — the PDF is rebuilt from it"
+                    onClick={() => editRef.current.click()}>
+                    {uploading
+                      ? <><SparklesIcon className="w-4 h-4 animate-pulse" /> Rebuilding…</>
+                      : <><ArrowUpTrayIcon className="w-4 h-4" /> Upload edited</>}
                   </button>
                   <button className="btn-secondary px-3 py-1.5"
                     onClick={() => progressReportApi.downloadPdf(active.id)}>
@@ -419,6 +452,23 @@ export default function ProgressReport() {
                   <button className="btn-secondary px-3 py-1.5" onClick={() => { setResult(null); setViewing(null); }}>Close</button>
                 </div>
               </div>
+              {/* Hidden until the button above asks for it. */}
+              <input ref={editRef} type="file" accept=".docx" className="hidden"
+                onChange={e => { putBackEdited(e.target.files?.[0]); e.target.value = ''; }} />
+              {editNote && (
+                <div className="p-3 rounded-xl text-[12px] flex items-center justify-between gap-3"
+                  style={editNote.bad
+                    ? { background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c' }
+                    : { background: '#d1fae5', border: '1px solid #6ee7b7', color: '#065f46' }}>
+                  <span>{editNote.text}</span>
+                  {!editNote.bad && (
+                    <button className="btn-secondary px-2.5 py-1 text-[11px] flex-shrink-0"
+                      onClick={() => revertEdited(active.id)}>
+                      Undo — go back to Coaster's version
+                    </button>
+                  )}
+                </div>
+              )}
               <ReportView report={active.report} header={active.header} localPhotos={active.localPhotos} />
             </>
           )}
