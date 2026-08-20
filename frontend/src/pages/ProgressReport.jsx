@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   CameraIcon, SparklesIcon, DocumentTextIcon, TrashIcon, ClockIcon, XMarkIcon,
-  PhotoIcon, PlusIcon, ArrowDownTrayIcon, ArrowUpTrayIcon,
+  PhotoIcon, PlusIcon, ArrowDownTrayIcon, PencilSquareIcon,
 } from '@heroicons/react/24/outline';
 import { progressReportApi } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -165,6 +165,109 @@ function ReportView({ report, header, localPhotos }) {
   );
 }
 
+// Correcting a report and producing it again.
+//
+// What varies in a site report is the wording: an observation Claude phrased from what it could see
+// rather than from what the PM knows, a trade named loosely, a caption that says less than it
+// should. Those are fields, so correcting the field is the edit — and both downloads are made from
+// these values, so the Word file and the PDF cannot end up saying different things.
+//
+// The photographs are not touched. They are already on file, upright and fitted; only the words
+// change.
+function ReportEditForm({ report, header, photos, onDone, onCancel, save }) {
+  const [progress, setProgress] = useState((report.progress || []).slice());
+  const [captions, setCaptions] = useState((photos || []).map(p => p.caption || ''));
+  const [meta, setMeta] = useState({
+    visit_date: header.visitDate || '',
+    visit_time: header.visitTime || '',
+    weather: header.weather || '',
+    submitted_by: header.submittedBy || '',
+    contractor: header.contractor || '',
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const setMetaField = (k, v) => setMeta(s => ({ ...s, [k]: v }));
+  const setLine = (i, v) => setProgress(p => p.map((x, j) => (j === i ? v : x)));
+  const setCaption = (i, v) => setCaptions(c => c.map((x, j) => (j === i ? v : x)));
+
+  const commit = async () => {
+    setBusy(true); setError('');
+    try {
+      onDone(await save({
+        ...meta,
+        progress: progress.map(p => p.trim()).filter(Boolean),
+        captions,
+      }));
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Could not rebuild the report.');
+    } finally { setBusy(false); }
+  };
+
+  const field = (key, label, props = {}) => (
+    <div>
+      <label className="label">{label}</label>
+      <input className="input" value={meta[key]} onChange={e => setMetaField(key, e.target.value)} {...props} />
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-3">
+        {field('visit_date', 'Date', { type: 'date' })}
+        {field('visit_time', 'Time', { placeholder: 'e.g. 12:30 PM' })}
+        {field('weather', 'Weather', { placeholder: 'e.g. Sunny' })}
+        {field('submitted_by', 'Submitted by')}
+        {field('contractor', 'Contractor')}
+      </div>
+
+      <div>
+        <label className="label">Progress observations</label>
+        <div className="space-y-2">
+          {progress.map((line, i) => (
+            <div key={i} className="flex gap-2 items-start">
+              <textarea className="input flex-1" rows={2} value={line}
+                onChange={e => setLine(i, e.target.value)} />
+              <button type="button" className="btn-secondary px-2 py-1 mt-1 flex-shrink-0"
+                title="Remove this observation"
+                onClick={() => setProgress(p => p.filter((_, j) => j !== i))}>
+                <XMarkIcon className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+          <button type="button" className="btn-secondary px-3 py-1.5 text-xs"
+            onClick={() => setProgress(p => [...p, ''])}>
+            <PlusIcon className="w-4 h-4" /> Add an observation
+          </button>
+        </div>
+      </div>
+
+      {captions.length > 0 && (
+        <div>
+          <label className="label">Photo captions</label>
+          <div className="space-y-2">
+            {captions.map((c, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className="text-[10px] text-gray-400 w-14 flex-shrink-0">Photo {i + 1}</span>
+                <input className="input flex-1" value={c} onChange={e => setCaption(i, e.target.value)} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {error && <p className="text-xs" style={{ color: '#b91c1c' }}>{error}</p>}
+
+      <div className="flex justify-end gap-2">
+        <button className="btn-secondary" onClick={onCancel} disabled={busy}>Cancel</button>
+        <button className="btn-primary" onClick={commit} disabled={busy}>
+          {busy ? <><SparklesIcon className="w-4 h-4 animate-pulse" /> Saving…</> : 'Save and rebuild'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function HistoryRow({ item, onView, onDelete }) {
   const date = new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   return (
@@ -211,31 +314,10 @@ export default function ProgressReport() {
   // Shared Documents. Asked for once per project; without one the PDF is the only deliverable.
   const [template, setTemplate] = useState(null);
 
-  // Editing the report in Word and sending it back. From then on that document is the report —
-  // both downloads come from it — which is why the undo is offered next to the confirmation
-  // rather than hidden somewhere: a PM who uploads the wrong file should not have to wonder.
-  const [uploading, setUploading] = useState(false);
+  // Correcting the report. The observations are what Claude wrote from the photographs, and that
+  // is where it can be thin — so they are editable, along with the header and the captions.
+  const [editing, setEditing] = useState(false);
   const [editNote, setEditNote] = useState(null);
-  const editRef = useRef();
-
-  const putBackEdited = async file => {
-    if (!file) return;
-    setUploading(true); setEditNote(null);
-    try {
-      await progressReportApi.replaceDocx(active.id, file);
-      setEditNote({ text: 'Your edited report is now the report — both downloads come from it.' });
-    } catch (err) {
-      setEditNote({
-        bad: true,
-        text: err?.response?.data?.error || 'Could not rebuild the report from that document.',
-      });
-    } finally { setUploading(false); }
-  };
-
-  const revertEdited = async id => {
-    await progressReportApi.revertDocx(id);
-    setEditNote(null);
-  };
 
   const loadHistory = () => progressReportApi.list(routeProjectId ? { project_id: routeProjectId } : undefined).then(list => {
     setHistory(list);
@@ -290,7 +372,7 @@ export default function ProgressReport() {
   const handleView = async id => {
     const rec = await progressReportApi.get(id);
     setResult(null);
-    setViewing({ id: rec.id, report: rec.report, header: rec.header });
+    setViewing({ id: rec.id, report: rec.report, header: rec.header, photos: rec.photos });
   };
 
   const handleDelete = async id => {
@@ -430,20 +512,18 @@ export default function ProgressReport() {
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">{result ? 'Generated Report' : 'Saved Report'}</h2>
                 <div className="flex items-center gap-2 flex-wrap justify-end">
-                  {/* The PDF is the finished thing; the Word file is the one a PM can change before
-                      sending it, which a site report routinely needs. Editing it and putting it
-                      back rebuilds the PDF, so the two never say different things. */}
+                  {/* Correcting the report happens here, in the fields — the observations are what
+                      Claude wrote from the photographs, and that is where it can be thin. Both
+                      downloads are made from these values, so they cannot say different things. */}
+                  <button className="btn-secondary px-3 py-1.5"
+                    title="Correct the observations, header or captions and rebuild"
+                    onClick={() => setEditing(true)}>
+                    <PencilSquareIcon className="w-4 h-4" /> Edit
+                  </button>
                   <button className="btn-primary px-3 py-1.5"
                     title={template ? `Your own format — ${template.fileName}` : "Coaster's format, editable"}
                     onClick={() => progressReportApi.downloadDocx(active.id)}>
                     <ArrowDownTrayIcon className="w-4 h-4" /> Download Word
-                  </button>
-                  <button className="btn-secondary px-3 py-1.5" disabled={uploading}
-                    title="Upload the edited Word report — the PDF is rebuilt from it"
-                    onClick={() => editRef.current.click()}>
-                    {uploading
-                      ? <><SparklesIcon className="w-4 h-4 animate-pulse" /> Rebuilding…</>
-                      : <><ArrowUpTrayIcon className="w-4 h-4" /> Upload edited</>}
                   </button>
                   <button className="btn-secondary px-3 py-1.5"
                     onClick={() => progressReportApi.downloadPdf(active.id)}>
@@ -452,21 +532,12 @@ export default function ProgressReport() {
                   <button className="btn-secondary px-3 py-1.5" onClick={() => { setResult(null); setViewing(null); }}>Close</button>
                 </div>
               </div>
-              {/* Hidden until the button above asks for it. */}
-              <input ref={editRef} type="file" accept=".docx" className="hidden"
-                onChange={e => { putBackEdited(e.target.files?.[0]); e.target.value = ''; }} />
               {editNote && (
-                <div className="p-3 rounded-xl text-[12px] flex items-center justify-between gap-3"
+                <div className="p-3 rounded-xl text-[12px]"
                   style={editNote.bad
                     ? { background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c' }
                     : { background: '#d1fae5', border: '1px solid #6ee7b7', color: '#065f46' }}>
-                  <span>{editNote.text}</span>
-                  {!editNote.bad && (
-                    <button className="btn-secondary px-2.5 py-1 text-[11px] flex-shrink-0"
-                      onClick={() => revertEdited(active.id)}>
-                      Undo — go back to Coaster's version
-                    </button>
-                  )}
+                  {editNote.text}
                 </div>
               )}
               <ReportView report={active.report} header={active.header} localPhotos={active.localPhotos} />
@@ -491,6 +562,27 @@ export default function ProgressReport() {
           )}
         </div>
       </div>
+
+      {/* Correcting the report: the observations, the header block, and the captions. */}
+      {editing && active && (
+        <Modal title="Edit the report" onClose={() => setEditing(false)} size="lg">
+          <ReportEditForm
+            report={active.report}
+            header={active.header}
+            photos={active.photos || active.localPhotos || []}
+            save={fields => progressReportApi.update(active.id, fields)}
+            onCancel={() => setEditing(false)}
+            onDone={next => {
+              const patch = { report: next.report, header: { ...active.header, ...next.header } };
+              if (result) setResult(r => ({ ...r, ...patch }));
+              if (viewing) setViewing(v => ({ ...v, ...patch }));
+              setEditing(false);
+              setEditNote({ text: 'Saved. Both downloads are made from these values.' });
+              loadHistory();
+            }}
+          />
+        </Modal>
+      )}
 
       {showAddPhotos && (
         <AddPhotosModal

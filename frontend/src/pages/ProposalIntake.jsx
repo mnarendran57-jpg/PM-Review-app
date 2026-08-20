@@ -11,6 +11,7 @@ import { useConfirm } from '../components/ConfirmDialog';
 import MemoTemplateEditor from '../components/MemoTemplateEditor';
 import LetterheadEditor from '../components/LetterheadEditor';
 import FileDrop from '../components/FileDrop';
+import Modal from '../components/Modal';
 
 const TYPE_INFO = {
   'New Vendor': { bg: '#eff6ff', color: '#1d4ed8' },
@@ -26,49 +27,80 @@ function formatMoney(n) {
   return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-// Download the memo, edit it, put it back — and the merged PDF is rebuilt around your version.
+// Correcting the details and producing the memo again.
 //
-// Offered both on the package just generated and on any package in the history, because the edit
-// almost never happens in the same minute as the intake. `onRebuilt` lets the caller refresh
-// whatever it is showing.
-function MemoEditControls({ intake, onRebuilt, compact = false }) {
+// What varies in a memo is short: the scope summary, occasionally a name or a figure. Those are the
+// values Coaster read off the proposal, and reading is where it can be wrong — a scope summarised
+// too tightly, a project named as the vendor writes it rather than as the owner does. So the edit
+// is the field, not the prose, and the package is rebuilt around the same proposal and PO.
+function MemoEditForm({ intake, onDone, onCancel }) {
+  const [values, setValues] = useState({
+    vendor_name: intake.vendor_name || '',
+    project_name: intake.project_name || '',
+    proposal_date: intake.proposal_date || '',
+    total_price: intake.total_price || '',
+    scope_of_work: intake.scope_of_work || '',
+    po_number: intake.po_number || '',
+    change_order_price: intake.change_order_price || '',
+    original_po_amount: intake.original_po_amount || '',
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const fileRef = useRef();
+  const set = (k, v) => setValues(s => ({ ...s, [k]: v }));
+  const isChangeOrder = intake.intake_type === 'Change Order';
 
-  const putBack = async file => {
-    if (!file) return;
+  const save = async () => {
     setBusy(true); setError('');
     try {
-      onRebuilt(await proposalIntakeApi.replaceMemoDocx(intake.id, file));
+      onDone(await proposalIntakeApi.regenerate(intake.id, values));
     } catch (err) {
-      setError(err?.response?.data?.error || 'Could not rebuild the package from that document.');
+      setError(err?.response?.data?.error || 'Could not rebuild the memo.');
     } finally { setBusy(false); }
   };
 
-  const size = compact ? 'px-2 py-1' : 'px-3 py-1.5 text-xs';
+  const field = (key, label, props = {}) => (
+    <div>
+      <label className="label">{label}</label>
+      <input className="input" value={values[key]} onChange={e => set(key, e.target.value)} {...props} />
+    </div>
+  );
+
   return (
-    <>
-      <input ref={fileRef} type="file" accept=".docx" className="hidden"
-        onChange={e => { putBack(e.target.files?.[0]); e.target.value = ''; }} />
-      <button className={`btn-secondary ${size}`} title="Download the Word memo to edit"
-        onClick={() => proposalIntakeApi.downloadMemoDocx(intake.id, intake.memo_docx_name)}>
-        <DocumentTextIcon className="w-4 h-4" />{compact ? '' : ' Word memo'}
-      </button>
-      <button className={`btn-secondary ${size}`} disabled={busy}
-        title="Upload the edited Word memo — the PDF is rebuilt with it"
-        onClick={() => fileRef.current.click()}>
-        {busy
-          ? <SparklesIcon className="w-4 h-4 animate-pulse" />
-          : <ArrowPathRoundedSquareIcon className="w-4 h-4" />}
-        {compact ? '' : (busy ? ' Rebuilding…' : ' Upload edited memo')}
-      </button>
-      {error && <p className="text-xs w-full" style={{ color: '#b91c1c' }}>{error}</p>}
-    </>
+    <div className="space-y-3">
+      <p className="text-[11px] text-gray-500 leading-relaxed">
+        Change what Coaster read off the proposal. The memo is written again from these values and
+        the package is rebuilt in front of the same proposal{isChangeOrder ? ' and PO' : ''} —
+        the PDF keeps its name, so any link to it still works.
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        {field('vendor_name', 'Vendor name')}
+        {field('project_name', 'Project name')}
+        {field('proposal_date', 'Proposal date')}
+        {isChangeOrder
+          ? field('change_order_price', 'Change order amount')
+          : field('total_price', 'Total quoted price')}
+        {isChangeOrder && field('original_po_amount', 'Original PO amount')}
+        {isChangeOrder && field('po_number', 'PO number')}
+      </div>
+      <div>
+        <label className="label">Scope of work</label>
+        <textarea className="input" rows={5} value={values.scope_of_work}
+          onChange={e => set('scope_of_work', e.target.value)} />
+      </div>
+      {error && <p className="text-xs" style={{ color: '#b91c1c' }}>{error}</p>}
+      <div className="flex justify-end gap-2">
+        <button className="btn-secondary" onClick={onCancel} disabled={busy}>Cancel</button>
+        <button className="btn-primary" onClick={save} disabled={busy}>
+          {busy
+            ? <><SparklesIcon className="w-4 h-4 animate-pulse" /> Rebuilding…</>
+            : <><ArrowPathRoundedSquareIcon className="w-4 h-4" /> Rebuild the package</>}
+        </button>
+      </div>
+    </div>
   );
 }
 
-function HistoryItem({ item, onDelete, onRebuilt }) {
+function HistoryItem({ item, onDelete, onEdit }) {
   const date = new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const tc = TYPE_INFO[item.intake_type] || TYPE_INFO['New Vendor'];
   const priceLine = item.intake_type === 'Change Order'
@@ -90,7 +122,14 @@ function HistoryItem({ item, onDelete, onRebuilt }) {
       </div>
       <div className="flex items-center gap-3 flex-shrink-0 ml-4">
         <span className="flex items-center gap-1 text-xs text-gray-400"><ClockIcon className="w-3.5 h-3.5" />{date}</span>
-        <MemoEditControls intake={item} onRebuilt={onRebuilt} compact />
+        <button className="btn-secondary px-2 py-1" title="Edit the details and rebuild"
+          onClick={() => onEdit(item)}>
+          <ArrowPathRoundedSquareIcon className="w-4 h-4" />
+        </button>
+        <button className="btn-secondary px-2 py-1" title="Download the Word memo"
+          onClick={() => proposalIntakeApi.downloadMemoDocx(item.id, item.memo_docx_name)}>
+          <DocumentTextIcon className="w-4 h-4" />
+        </button>
         <button className="btn-secondary px-2 py-1" title="Download merged PDF" onClick={() => proposalIntakeApi.download(item.id, item.merged_file_name)}>
           <ArrowDownTrayIcon className="w-4 h-4" />
         </button>
@@ -100,15 +139,16 @@ function HistoryItem({ item, onDelete, onRebuilt }) {
   );
 }
 
-// What comes out of an intake, and the loop back into it.
+// What comes out of an intake, and the way back into it.
 //
-// The PDF is the package that gets circulated. The Word file is the same memo in a form the PM can
-// change — and sending the changed file back rebuilds the package around it, so the two never
-// drift apart. Before this, an edit lived only in the PM's own copy while everyone else kept
-// receiving the memo as first generated.
+// The PDF is the package that gets circulated. If something Coaster read off the proposal is wrong,
+// the fix is to correct that value and let the memo be written again — not to edit prose in Word and
+// hope the formatting survives being turned back into a PDF. The Word copy is still there to print
+// or keep.
 function ResultPanel({ result, onReset }) {
   const [state, setState] = useState(result);
   const [replaced, setReplaced] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   return (
     <div className="p-4 rounded-xl space-y-3" style={{ background: '#d1fae5', border: '1px solid #6ee7b7' }}>
@@ -128,18 +168,33 @@ function ResultPanel({ result, onReset }) {
         <button className="btn-secondary px-3 py-1.5" onClick={onReset}>New</button>
       </div>
 
-      <div className="pt-2" style={{ borderTop: '1px solid rgba(6,95,70,0.15)' }}>
-        <p className="text-[11px] leading-relaxed mb-2" style={{ color: '#065f46' }}>
-          Need to change the memo? Download the Word file, edit it, and put it back — the PDF
-          above is rebuilt with your version in front of the same proposal.
+      <div className="pt-2 flex items-center gap-2 flex-wrap"
+        style={{ borderTop: '1px solid rgba(6,95,70,0.15)' }}>
+        <p className="text-[11px] leading-relaxed w-full" style={{ color: '#065f46' }}>
+          Something read wrong? Correct the details and the memo is written again. The Word copy is
+          there if you want to print or keep it.
         </p>
-        <div className="flex items-center gap-2 flex-wrap">
-          <MemoEditControls
-            intake={state}
-            onRebuilt={next => { setState(s => ({ ...s, ...next })); setReplaced(true); }}
-          />
-        </div>
+        <button className="btn-secondary px-3 py-1.5 text-xs" onClick={() => setEditing(true)}>
+          <ArrowPathRoundedSquareIcon className="w-4 h-4" /> Edit details &amp; rebuild
+        </button>
+        <button className="btn-secondary px-3 py-1.5 text-xs"
+          onClick={() => proposalIntakeApi.downloadMemoDocx(state.id, state.memo_docx_name)}>
+          <DocumentTextIcon className="w-4 h-4" /> Word memo
+        </button>
       </div>
+
+      {editing && (
+        <Modal title="Edit the memo details" onClose={() => setEditing(false)} size="lg">
+          <MemoEditForm
+            intake={state}
+            onCancel={() => setEditing(false)}
+            onDone={next => {
+              setState(s => ({ ...s, ...next }));
+              setEditing(false); setReplaced(true);
+            }}
+          />
+        </Modal>
+      )}
     </div>
   );
 }
@@ -162,6 +217,8 @@ export default function ProposalIntake() {
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   const [history, setHistory] = useState([]);
+  // A package being corrected from the history list.
+  const [editingIntake, setEditingIntake] = useState(null);
 
   const loadHistory = () => proposalIntakeApi.list(routeProjectName ? { project_name: routeProjectName } : undefined).then(setHistory);
   useEffect(() => { loadHistory(); }, [routeProjectName]);
@@ -468,12 +525,24 @@ export default function ProposalIntake() {
               </div>
             ) : (
               history.map(h => (
-                <HistoryItem key={h.id} item={h} onDelete={handleDelete} onRebuilt={loadHistory} />
+                <HistoryItem key={h.id} item={h} onDelete={handleDelete} onEdit={setEditingIntake} />
               ))
             )}
           </div>
         </div>
       </div>
+      )}
+
+      {/* Correcting a package from the history, days after it was made — which is when a wrong
+          scope summary is usually noticed. */}
+      {editingIntake && (
+        <Modal title="Edit the memo details" onClose={() => setEditingIntake(null)} size="lg">
+          <MemoEditForm
+            intake={editingIntake}
+            onCancel={() => setEditingIntake(null)}
+            onDone={() => { setEditingIntake(null); loadHistory(); }}
+          />
+        </Modal>
       )}
     </div>
   );

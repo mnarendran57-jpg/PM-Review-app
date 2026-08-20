@@ -84,8 +84,15 @@ function photoExtent(buffer, maxW, maxH, mimeType) {
 // letterhead logo, a diagram in the customer's template — which is why the relationship ids
 // continue the document's own numbering rather than starting at 1. An id already in use would
 // silently repoint that logo at a site photo.
-function addImages(zip, images, { prefix = 'coasterImage' } = {}) {
-  const rels = zip.file(RELS);
+function addImages(zip, images, { prefix = 'coasterImage', relsPath = RELS } = {}) {
+  // A picture used in a header lives in that header's own relationships part, not the document's.
+  // Pointing it at document.xml.rels makes Word report the file as corrupt.
+  if (!zip.file(relsPath)) {
+    zip.file(relsPath, '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '</Relationships>');
+  }
+  const rels = zip.file(relsPath);
   if (!rels) throw new Error('That Word document has no relationships part and cannot take images.');
   let relsXml = rels.asText();
 
@@ -106,7 +113,7 @@ function addImages(zip, images, { prefix = 'coasterImage' } = {}) {
     );
     added.push(relId);
   });
-  zip.file(RELS, relsXml);
+  zip.file(relsPath, relsXml);
 
   const types = zip.file(CONTENT_TYPES);
   if (types) {

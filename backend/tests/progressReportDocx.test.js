@@ -182,17 +182,56 @@ test('a photo is never drawn wider than the column it sits in', () => {
 
 // --- The letterhead ----------------------------------------------------------------------------
 
-test('the organization\'s logo and address are printed when it has them', () => {
+// The letterhead lives in a Word header part, not in the body.
+//
+// It used to be a table at the top of the body, which looks the same in Word and is wrong
+// everywhere else: reading the edited document back to rebuild the PDF turned the logo into an
+// inline picture mid-page with the company name captioned under it and the address as three stray
+// paragraphs. A customer reported exactly that. These assertions pin the header, so putting it
+// back in the body fails here rather than in someone's memo.
+const headerOf = buffer => {
+  const part = new PizZip(buffer).file('word/header1.xml');
+  return part ? part.asText() : null;
+};
+
+test('the organization\'s logo and address go in the Word header, not the body', () => {
   const out = build({
     companyName: 'Olivier Inc.\n1177 West Loop South\nHouston, TX',
     logo: { buffer: photo(200, 60), mimeType: 'image/jpeg' },
   });
-  const text = textOf(out);
-  assert.ok(text.includes('Olivier Inc.'));
-  assert.ok(text.includes('1177 West Loop South'));
-  // Four drawings now: the logo plus three photos.
-  assert.strictEqual([...doc(out).matchAll(/<w:drawing>/g)].length, 4);
-  assertBalanced(doc(out), 'with letterhead');
+
+  const header = headerOf(out);
+  assert.ok(header, 'no header part was written');
+  assert.ok(header.includes('Olivier Inc.'), 'the company name is not in the header');
+  assert.ok(header.includes('1177 West Loop South'), 'the address is not in the header');
+  assert.strictEqual([...header.matchAll(/<w:drawing>/g)].length, 1, 'the logo is not in the header');
+
+  // And none of it leaked into the body, which is what the PM edits and what gets read back.
+  const body = doc(out);
+  assert.ok(!body.includes('1177 West Loop South'), 'the address leaked into the body');
+  assert.strictEqual([...body.matchAll(/<w:drawing>/g)].length, 3, 'only the three photos belong in the body');
+
+  // The header has to be referenced from sectPr or Word ignores it.
+  assert.ok(/<w:sectPr><w:headerReference w:type="default" r:id="rId\d+"\/>/.test(body),
+    'the header is not referenced from the section properties');
+  assertBalanced(body, 'with letterhead');
+});
+
+test('a logo in the header is related from the header\'s own rels part', () => {
+  // A picture used in a header must be related from word/_rels/header1.xml.rels. Pointing it at
+  // the document's rels makes Word report the whole file as corrupt.
+  const out = build({ logo: { buffer: photo(200, 60), mimeType: 'image/jpeg' } });
+  const zip = new PizZip(out);
+  const headerRels = zip.file('word/_rels/header1.xml.rels');
+  assert.ok(headerRels, 'no header relationships part');
+  assert.ok(/relationships\/image/.test(headerRels.asText()), 'the logo has no relationship');
+
+  const embed = headerOf(out).match(/r:embed="(rId\d+)"/);
+  assert.ok(embed, 'the header drawing has no embed id');
+  assert.ok(headerRels.asText().includes(`Id="${embed[1]}"`), 'the id is not in the header rels');
+
+  // And the content type, without which Word refuses the file.
+  assert.ok(/PartName="\/word\/header1\.xml"/.test(zip.file('[Content_Types].xml').asText()));
 });
 
 test('a customer with no letterhead gets a clean report, not somebody else\'s', () => {
@@ -206,7 +245,8 @@ test('a PNG logo is drawn in its own shape, not squashed into a default box', ()
   // 4:3 box whatever its real proportions — which for a wide letterhead logo is very visibly wrong.
   const png = pngOf(300, 60);
   const out = build({ logo: { buffer: png, mimeType: 'image/png' } });
-  const first = doc(out).match(/<wp:extent cx="(\d+)" cy="(\d+)"\/>/);
+  // The logo is in the header part; the body's first picture is a site photo.
+  const first = headerOf(out).match(/<wp:extent cx="(\d+)" cy="(\d+)"\/>/);
   const ratio = Number(first[1]) / Number(first[2]);
   assert.ok(Math.abs(ratio - 5) < 0.1, `logo drawn at ${ratio}:1, expected 5:1`);
   assert.ok(/Extension="png"/.test(new PizZip(out).file('[Content_Types].xml').asText()),

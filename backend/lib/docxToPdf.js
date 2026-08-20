@@ -154,12 +154,19 @@ async function renderDocxAsPdf(docxBuffer, { branding = {}, confidential = false
 
     if (!block.text) { y -= PARA_GAP; afterImage = false; continue; }
 
-    const caption = afterImage;
+    // A caption is a SHORT line straight after a picture. A long paragraph there is prose that
+    // happens to follow a photograph — centring it in nine-point grey would be wrong, and on a memo
+    // with an inline image it would mangle the first sentence of the letter.
+    const caption = afterImage && block.text.length <= 120;
     const size = caption ? CAPTION_SIZE : BODY_SIZE;
     const f = (!caption && looksLikeHeading(block.text)) ? fontBold : font;
     const color = caption ? rgb(0.35, 0.35, 0.35) : rgb(0.1, 0.1, 0.1);
 
-    for (const line of wrapLine(block.text, f, size, CONTENT_WIDTH)) {
+    // A paragraph can carry its own line breaks — Word's <w:br/>. Each is a new line, not a new
+    // paragraph, so it gets no extra gap after it.
+    const lines = block.text.split('\n')
+      .flatMap(part => wrapLine(part, f, size, CONTENT_WIDTH));
+    for (const line of lines) {
       ensure(size + LINE_GAP);
       const x = caption
         ? MARGIN + (CONTENT_WIDTH - f.widthOfTextAtSize(line, size)) / 2

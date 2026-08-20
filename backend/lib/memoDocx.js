@@ -1,5 +1,6 @@
 const PizZip = require('pizzip');
-const { addImages, drawingParagraph, photoExtent, escapeXml, inches } = require('./docxImages');
+const { escapeXml } = require('./docxImages');
+const { attachLetterhead } = require('./docxLetterhead');
 const { fillPlaceholders } = require('./pdfGen');
 
 // Coaster's own memo, as a Word document.
@@ -48,9 +49,9 @@ const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
 </w:styles>`;
 
-const SECTION = `<w:sectPr><w:pgSz w:w="${PAGE_W}" w:h="${PAGE_H}"/>`
+const SECTION_BODY = `<w:pgSz w:w="${PAGE_W}" w:h="${PAGE_H}"/>`
   + `<w:pgMar w:top="${MARGIN}" w:right="${MARGIN}" w:bottom="${MARGIN}" w:left="${MARGIN}"`
-  + ` w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>`;
+  + ` w:header="720" w:footer="720" w:gutter="0"/>`;
 
 function run(text, { bold, italic, size = 11, color = '1A1A1A' } = {}) {
   return `<w:r><w:rPr>${bold ? '<w:b/>' : ''}${italic ? '<w:i/>' : ''}`
@@ -58,13 +59,25 @@ function run(text, { bold, italic, size = 11, color = '1A1A1A' } = {}) {
     + `<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`;
 }
 
+// One paragraph per line, rather than one paragraph with <w:br/> inside it.
+//
+// A memo section is written with line breaks in it — the To/From/Date block, the two signature
+// lines. Expressing those as breaks inside a single paragraph looks the same in Word and reads as
+// one run of text to anything that walks the XML, so the rebuilt PDF came out with
+// "Date: 08/04/2026To: James WalkerFrom: Devin Roy" on one line. Separate paragraphs survive the
+// round trip, and are what a PM would get if they typed the memo themselves.
+function paras(text, opts = {}) {
+  const lines = String(text ?? '').split('\n');
+  return lines.map((line, i) => para(line, {
+    ...opts,
+    // The gap belongs after the last line of the block, not between its lines.
+    spaceAfter: i === lines.length - 1 ? (opts.spaceAfter ?? 120) : 20,
+  })).join('');
+}
+
 function para(text, { bold, italic, size, color, align, spaceAfter = 120 } = {}) {
   const props = `${align ? `<w:jc w:val="${align}"/>` : ''}<w:spacing w:after="${spaceAfter}"/>`;
-  // Word keeps a paragraph's line breaks; the memo's sections are written with them.
-  const body = String(text ?? '').split('\n')
-    .map((line, i) => (i ? '<w:br/>' : '') + run(line, { bold, italic, size, color }))
-    .join('');
-  return `<w:p><w:pPr>${props}</w:pPr>${body}</w:p>`;
+  return `<w:p><w:pPr>${props}</w:pPr>${run(text, { bold, italic, size, color })}</w:p>`;
 }
 
 function borderlessTable(cells, widths) {
@@ -87,36 +100,17 @@ function renderMemoDocx(template, fields, branding = {}) {
   zip.folder('word').file('styles.xml', STYLES);
   zip.folder('word').folder('_rels').file('document.xml.rels', DOC_RELS);
 
-  const logo = branding.logo?.buffer ? branding.logo : null;
-  const relIds = logo
-    ? addImages(zip, [{ buffer: logo.buffer, mimeType: logo.mimeType }], { prefix: 'coasterMemo' })
-    : [];
+  // The letterhead goes in a Word header part, not into the body. See lib/docxLetterhead.js —
+  // in the body it came back on rebuild as a picture with the company name captioned under it.
+  const headerRef = attachLetterhead(zip, { ...branding, confidential: true });
 
   const body = [];
-  body.push(para('Client Confidential', { italic: true, size: 11, color: '4D4D4D', align: 'center', spaceAfter: 60 }));
-
-  const addressLines = String(branding.companyName || '').split('\n').map(l => l.trim()).filter(Boolean);
-  if (logo || addressLines.length) {
-    const logoCell = logo
-      ? drawingParagraph({
-        relId: relIds[0], id: 800, align: 'left',
-        ...photoExtent(logo.buffer, inches(158 / 72), inches(1.1), logo.mimeType),
-      })
-      : '';
-    const addressCell = addressLines
-      .map(line => para(line, { size: 11, color: '404040', align: 'right', spaceAfter: 0 }))
-      .join('');
-    body.push(borderlessTable([logoCell, addressCell],
-      [Math.floor(CONTENT_W / 2), Math.ceil(CONTENT_W / 2)]));
-    body.push(para('', { spaceAfter: 120 }));
-  }
-
   if (template?.header_title) {
     body.push(para(fillPlaceholders(template.header_title, fields), { bold: true, spaceAfter: 200 }));
   }
 
   for (const section of template?.sections || []) {
-    body.push(para(fillPlaceholders(section.content, fields), { spaceAfter: 220 }));
+    body.push(paras(fillPlaceholders(section.content, fields), { spaceAfter: 220 }));
     if (section.divider_after) {
       // A rule across the page, as the PDF draws. A bottom border on an empty paragraph is how
       // Word expresses one, and it survives editing as a paragraph the PM can delete.
@@ -131,7 +125,7 @@ function renderMemoDocx(template, fields, branding = {}) {
     + `xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" `
     + `xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" `
     + `xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">`
-    + `<w:body>${body.join('')}${SECTION}</w:body></w:document>`);
+    + `<w:body>${body.join('')}<w:sectPr>${headerRef}${SECTION_BODY}</w:sectPr></w:body></w:document>`);
 
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }

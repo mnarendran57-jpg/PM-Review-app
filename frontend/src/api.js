@@ -436,16 +436,10 @@ export const proposalIntakeApi = {
     a.remove();
     window.URL.revokeObjectURL(url);
   },
-  // The edited memo, put back. The memo page is re-typeset from this document and the package is
-  // rebuilt around it, so the PDF everyone receives says what the PM last wrote rather than what
-  // the intake produced.
-  replaceMemoDocx: (id, file) => {
-    const fd = new FormData();
-    fd.append('memo_docx', file);
-    return api.put(`/proposal-intake/${id}/memo.docx`, fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    }).then(r => r.data);
-  },
+  // Correcting the details and producing the memo again. Almost nothing in a memo varies except the
+  // scope summary and the odd name, and those are the values Coaster read off the proposal — so
+  // correcting the field IS the edit, and the package is rebuilt around the same proposal and PO.
+  regenerate: (id, fields) => api.put(`/proposal-intake/${id}`, fields).then(r => r.data),
   // The memo as the organization's own Word document, when a confirmed memo cover exists on
   // the project. Absent otherwise, so callers check before offering it.
   downloadMemoDocx: async (id, fileName) => {
@@ -754,18 +748,9 @@ export const progressReportApi = {
     const res = await api.get(`/progress-report/${id}/report.docx`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `progress_report_${id}.docx`);
   },
-  // The edited report, put back. From then on that document is the report: both the Word file and
-  // the PDF are produced from it, so the PM's copy and the team's copy cannot drift apart.
-  replaceDocx: (id, file) => {
-    const fd = new FormData();
-    fd.append('report_docx', file);
-    return api.put(`/progress-report/${id}/report.docx`, fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    }).then(r => r.data);
-  },
-  // Drops the edit and goes back to what Coaster wrote. The observations and photos were never
-  // touched, so nothing is lost by trying an edit.
-  revertDocx: id => api.delete(`/progress-report/${id}/report.docx`).then(r => r.data),
+  // Correcting the observations, the header or a caption, and producing the report again. Both
+  // downloads are made from these stored values, so the Word file and the PDF cannot drift apart.
+  update: (id, fields) => api.put(`/progress-report/${id}`, fields).then(r => r.data),
   // Asked before the Word button is shown, so the page never offers a download that 404s.
   template: projectId =>
     api.get(`/progress-report/project/${projectId}/template`).then(r => r.data),

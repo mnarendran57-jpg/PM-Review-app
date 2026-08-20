@@ -103,8 +103,16 @@ function readBlocks(buffer) {
       });
     }
 
-    const text = [...body.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)]
-      .map(t => unescapeXml(t[1])).join('').trim();
+    // Word expresses a line break inside a paragraph as <w:br/> and a tab as <w:tab/>, neither of
+    // which is text. Concatenating only the <w:t> runs glued the lines together, so a To/From/Date
+    // block came back as "Date: 08/04/2026To: James WalkerFrom: Devin Roy" on one line. The markers
+    // are turned into the characters they stand for before the runs are read.
+    const text = [...body.replace(/<w:br\s*\/?>/g, '\n').replace(/<w:tab\s*\/?>/g, '\t')
+      .matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|(\n|\t)/g)]
+      .map(t => (t[1] !== undefined ? unescapeXml(t[1]) : t[2]))
+      .join('')
+      .replace(/[ \t]+$/gm, '')
+      .trim();
 
     // A paragraph that held a picture and no words emits the picture alone. Emitting an empty text
     // block after it would read as "the picture, then a blank line", which tells the renderer the

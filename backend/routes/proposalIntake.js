@@ -104,6 +104,92 @@ If any field cannot be found with confidence, use "Not specified" as its value.`
   }
 });
 
+// The memo's values, worked out from what the form said.
+//
+// Pulled out of the create handler so that REGENERATING an existing package runs the same code.
+// The alternative — a second copy of this for the edit path — is how the memo produced on Monday
+// and the memo produced by correcting it on Tuesday come to word the same request differently.
+function memoFieldsFor(body, orgId) {
+  const {
+    intake_type, vendor_name, project_name, po_number,
+    proposal_date, scope_of_work, total_price, memo_template_id,
+    to_name, from_name, change_order_price, original_po_amount,
+  } = body;
+
+  // Scoped to the caller's organization. The unscoped version picked whichever template
+  // happened to be default anywhere in the database, so a second customer's memo came out
+  // on the first customer's letterhead.
+  const templateRow = memo_template_id
+    ? db.prepare('SELECT * FROM memo_templates WHERE id=? AND org_id=?').get(memo_template_id, orgId)
+    : db.prepare('SELECT * FROM memo_templates WHERE org_id=? ORDER BY is_default DESC, id ASC LIMIT 1').get(orgId);
+  if (!templateRow) {
+    const err = new Error('No memo template found');
+    err.status = 400;
+    throw err;
+  }
+  const template = { ...templateRow, sections: JSON.parse(templateRow.sections) };
+
+  let newTotalAmount = null;
+  let requestSentence;
+  if (intake_type === 'Change Order') {
+    newTotalAmount = formatMoney(parseMoney(change_order_price) + parseMoney(original_po_amount));
+    requestSentence = `Kindly increase the existing PO ${po_number || '(number not specified)'} by ${change_order_price}, so that the new PO will have a total of ${newTotalAmount}.`;
+  } else {
+    requestSentence = `Kindly initiate a requisition in the amount of ${total_price || 'Not specified'}.`;
+  }
+
+  const fields = {
+    vendor_name: vendor_name || 'Not specified',
+    project_name: project_name || 'Not specified',
+    po_number: po_number || '',
+    date: proposal_date || 'Not specified',
+    scope_of_work: scope_of_work || 'Not specified',
+    total_price: intake_type === 'Change Order' ? newTotalAmount : (total_price || 'Not specified'),
+    change_order_price: change_order_price || '',
+    original_po_amount: original_po_amount || '',
+    new_total_amount: newTotalAmount || '',
+    request_sentence: requestSentence,
+    to_name: to_name || 'James Walker',
+    from_name: from_name || 'Devin Roy',
+    memo_type: intake_type === 'Change Order' ? 'Change Order Memo' : 'Recommendation Memo',
+    po_reference: intake_type === 'Change Order' && po_number
+      ? ` (against existing PO #${po_number})`
+      : '',
+  };
+  return { template, fields, newTotalAmount };
+}
+
+// The memo page, and the package built around it. Shared by create and regenerate for the same
+// reason as above.
+async function buildPackage({ orgId, projectId, template, fields, proposalBytes, poBytes }) {
+  const branding = await brandingFor(orgId);
+
+  // The organization's own memo cover, where one is on file. Filling their .docx keeps their
+  // exact formatting — their fonts, their letterhead, their signature block.
+  let memoDocx = null;
+  try {
+    const cover = await loadCover({ docType: 'memo-cover', projectId, orgId });
+    if (cover) {
+      const { buffer: prepared } = applyPlaceholders(
+        cover.buffer, cover.terms.replacements || [], 'memo-cover');
+      memoDocx = fillDocx(prepared, fields);
+    }
+  } catch (err) {
+    // A broken cover must not stop the memo going out — the built-in one below still renders.
+    console.error('Memo cover could not be filled (falling back to the built-in memo):', err.message);
+  }
+
+  const memoPdf = memoDocx
+    ? await renderDocxAsPdf(memoDocx, { branding, confidential: true })
+    : await renderMemoPdf(template, fields, branding);
+  const mergedPdf = await mergePdfBuffers([memoPdf, proposalBytes, poBytes]);
+
+  // Every package carries an editable Word memo, whether or not a template was uploaded.
+  if (!memoDocx) memoDocx = renderMemoDocx(template, fields, branding);
+
+  return { mergedPdf, memoDocx };
+}
+
 router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 'po_file', maxCount: 1 }]), async (req, res) => {
   try {
     const {
@@ -125,83 +211,19 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
     }
     const poFile = req.files?.po_file?.[0];
 
-    // Scoped to the caller's organization. The unscoped version picked whichever template
-    // happened to be default anywhere in the database, so a second customer's memo came out
-    // on the first customer's letterhead.
-    const templateRow = memo_template_id
-      ? db.prepare('SELECT * FROM memo_templates WHERE id=? AND org_id=?').get(memo_template_id, req.orgId)
-      : db.prepare('SELECT * FROM memo_templates WHERE org_id=? ORDER BY is_default DESC, id ASC LIMIT 1').get(req.orgId);
-    if (!templateRow) return res.status(400).json({ error: 'No memo template found' });
-    const template = { ...templateRow, sections: JSON.parse(templateRow.sections) };
+    const built = memoFieldsFor(req.body, req.orgId);
+    const template = built.template;
+    const newTotalAmount = built.newTotalAmount;
 
-    let newTotalAmount = null;
-    let requestSentence;
-    if (intake_type === 'Change Order') {
-      newTotalAmount = formatMoney(parseMoney(change_order_price) + parseMoney(original_po_amount));
-      requestSentence = `Kindly increase the existing PO ${po_number || '(number not specified)'} by ${change_order_price}, so that the new PO will have a total of ${newTotalAmount}.`;
-    } else {
-      requestSentence = `Kindly initiate a requisition in the amount of ${total_price || 'Not specified'}.`;
-    }
+    const fields = built.fields;
 
-    const fields = {
-      vendor_name: vendor_name || 'Not specified',
-      project_name: project_name || 'Not specified',
-      po_number: po_number || '',
-      date: proposal_date || 'Not specified',
-      scope_of_work: scope_of_work || 'Not specified',
-      total_price: intake_type === 'Change Order' ? newTotalAmount : (total_price || 'Not specified'),
-      change_order_price: change_order_price || '',
-      original_po_amount: original_po_amount || '',
-      new_total_amount: newTotalAmount || '',
-      request_sentence: requestSentence,
-      to_name: to_name || 'James Walker',
-      from_name: from_name || 'Devin Roy',
-      memo_type: intake_type === 'Change Order' ? 'Change Order Memo' : 'Recommendation Memo',
-      po_reference: intake_type === 'Change Order' && po_number
-        ? ` (against existing PO #${po_number})`
-        : ''
-    };
-
-    // The organization's own memo cover. Filling their .docx keeps their exact formatting — their
-    // fonts, their letterhead, their signature block — which redrawing the memo here cannot do.
-    //
-    // This used to look only at the project. A company that had fed Coaster its memo letter still
-    // got the built-in memo on every project that had not been handed its own copy: the template
-    // was on file and simply never looked for. lib/coverLookup.js checks the project first and the
-    // organization behind it, and is the only place that rule lives.
-    let memoDocx = null;
-    try {
-      const cover = await loadCover({
-        docType: 'memo-cover',
-        projectId: req.body.project_id ? Number(req.body.project_id) : null,
-        orgId: req.orgId,
-      });
-      if (cover) {
-        const { buffer: prepared } = applyPlaceholders(
-          cover.buffer, cover.terms.replacements || [], 'memo-cover');
-        memoDocx = fillDocx(prepared, fields);
-      }
-    } catch (err) {
-      // A broken cover must not stop the memo going out — the PDF below still renders.
-      console.error('Memo cover could not be filled (falling back to the built-in memo):', err.message);
-    }
-
-    const branding = await brandingFor(req.orgId);
-
-    // The memo page in front of the package. Where the organization has given Coaster its own
-    // letterhead template, the page is that letter's words; otherwise it is the built-in memo,
-    // drawn exactly as it always has been.
-    const memoPdf = memoDocx
-      ? await renderDocxAsPdf(memoDocx, { branding, confidential: true })
-      : await renderMemoPdf(template, fields, branding);
-    const mergedPdf = await mergePdfBuffers([memoPdf, proposalFile.buffer, poFile?.buffer]);
-
-    // Every package carries an editable Word memo, whether or not a template was uploaded. Being
-    // able to change the memo is the point — a condition of approval added after reading it back,
-    // a name corrected — and it used to be offered only to customers who had uploaded a letter of
-    // their own, which is most of them never. Without one, the built-in memo's own wording is
-    // written into a Word document the PM can edit and send back.
-    if (!memoDocx) memoDocx = renderMemoDocx(template, fields, branding);
+    const { mergedPdf, memoDocx } = await buildPackage({
+      orgId: req.orgId,
+      projectId: req.body.project_id ? Number(req.body.project_id) : null,
+      template, fields,
+      proposalBytes: proposalFile.buffer,
+      poBytes: poFile?.buffer || null,
+    });
 
     const baseName = proposalFile.originalname.replace(/\.pdf$/i, '');
     const mergedFileName = `${baseName}_processed.pdf`;
@@ -253,7 +275,10 @@ router.get('/', (req, res) => {
   // memo_docx_name travels with the list so the history can offer the Word memo and the
   // put-it-back button on an intake from last week, not only on the one just generated. A PM
   // rarely edits the memo in the same minute they created it.
+  // scope_of_work travels with the list so the history can open the edit form filled in, rather
+  // than fetching the row again the moment the user clicks Edit.
   let sql = `SELECT id, intake_type, vendor_name, project_name, po_number, proposal_date,
+             scope_of_work,
              total_price, change_order_price, original_po_amount, new_total_amount,
              proposal_file_name, po_file_name, merged_file_name, memo_docx_name,
              created_by, created_at
@@ -295,24 +320,27 @@ router.get('/:id/memo.docx', async (req, res) => {
   res.send(bytes);
 });
 
-// An edited memo, put back.
+// Correcting the details and rebuilding the package.
 //
-// The Word file exists so a PM can change the memo after seeing it — a sentence about the scope,
-// a name, a condition of approval that only they know about. Until now that edit lived only in
-// their copy: the PDF everyone else receives was made when the intake ran and never looked at the
-// .docx again, so the edited memo and the circulated package disagreed, silently, with the
-// package winning.
+// Almost nothing in a memo varies: the scope summary, occasionally the project or vendor name, the
+// odd figure. Those are the values Coaster reads off the proposal, and reading is where it can be
+// wrong — a scope summarised too tightly, a project named as the vendor writes it rather than as
+// the owner does. Being able to correct THE FIELD and produce the memo again is the whole of what
+// a PM needs, and it is a far better answer than editing prose in Word and hoping the formatting
+// survives a round trip.
 //
-// Sending the edited file back here re-typesets the memo page from it and rebuilds the package
-// around it. The proposal and the PO are the ones already on file — the only thing that changes
-// is the letter in front of them, which is the only thing the PM changed.
-router.put('/:id/memo.docx', upload.single('memo_docx'), async (req, res) => {
+// The proposal and the PO are the ones already on file; only the memo in front of them changes.
+router.put('/:id', async (req, res) => {
   try {
     const row = visibleRow(req);
     if (!row) return res.status(404).json({ error: 'Not found' });
-    if (!req.file) return res.status(400).json({ error: 'Choose the edited Word memo to upload.' });
-    if (req.file.mimetype !== DOCX_MIME) {
-      return res.status(400).json({ error: 'The memo must be a Word document (.docx).' });
+
+    const intakeType = row.intake_type;
+    if (intakeType === 'Change Order'
+      && (!req.body.change_order_price || !req.body.original_po_amount)) {
+      return res.status(400).json({
+        error: 'A change order needs both the change order amount and the original PO amount.',
+      });
     }
 
     const proposalBytes = await storage.readFile({
@@ -327,42 +355,56 @@ router.put('/:id/memo.docx', upload.single('memo_docx'), async (req, res) => {
       ? await storage.readFile({ key: row.po_file_key, blob: row.po_file })
       : null;
 
-    // Typeset from the edited document, then staple the same proposal and PO behind it.
-    const memoPdf = await renderDocxAsPdf(req.file.buffer, { branding: await brandingFor(req.orgId), confidential: true });
-    const mergedPdf = await mergePdfBuffers([memoPdf, proposalBytes, poBytes]);
+    // The intake type and the memo template are not things this screen edits, so they come from
+    // the row rather than from the request — a form that omits one must not silently turn a change
+    // order into a new-vendor memo.
+    const { template, fields, newTotalAmount } = memoFieldsFor({
+      ...req.body,
+      intake_type: intakeType,
+      memo_template_id: row.memo_template_id,
+    }, req.orgId);
+
+    const { mergedPdf, memoDocx } = await buildPackage({
+      orgId: req.orgId,
+      projectId: req.body.project_id ? Number(req.body.project_id) : null,
+      template, fields, proposalBytes, poBytes,
+    });
 
     const previousMerged = row.merged_pdf_key;
     const previousDocx = row.memo_docx_key;
-    const docxName = row.memo_docx_name || req.file.originalname;
-
     const mergedKey = (await storage.storeFile(
       'proposal', mergedPdf, 'application/pdf', row.merged_file_name || 'processed.pdf')).key;
-    const docxKey = (await storage.storeFile(
-      'proposal', req.file.buffer, DOCX_MIME, docxName)).key;
+    const docxName = row.memo_docx_name
+      || `${(row.proposal_file_name || 'proposal').replace(/\.pdf$/i, '')}_memo.docx`;
+    const docxKey = (await storage.storeFile('proposal', memoDocx, DOCX_MIME, docxName)).key;
 
     db.prepare(`
-      UPDATE proposal_intakes
-      SET merged_pdf = ?, merged_pdf_key = ?, memo_docx = ?, memo_docx_key = ?, memo_docx_name = ?
-      WHERE id = ?
+      UPDATE proposal_intakes SET
+        vendor_name=?, project_name=?, po_number=?, proposal_date=?, scope_of_work=?,
+        total_price=?, change_order_price=?, original_po_amount=?, new_total_amount=?,
+        merged_pdf=?, merged_pdf_key=?, memo_docx=?, memo_docx_key=?, memo_docx_name=?
+      WHERE id=?
     `).run(
+      fields.vendor_name, fields.project_name, fields.po_number, fields.date, fields.scope_of_work,
+      fields.total_price, fields.change_order_price || null, fields.original_po_amount || null,
+      newTotalAmount || null,
       mergedKey ? Buffer.alloc(0) : mergedPdf, mergedKey,
-      docxKey ? Buffer.alloc(0) : req.file.buffer, docxKey, docxName,
+      docxKey ? Buffer.alloc(0) : memoDocx, docxKey, docxName,
       row.id,
     );
 
-    // Only once the replacements are safely stored. A failed write must not cost the package that
-    // was already working.
+    // Only once the replacements are stored. A failed write must not cost a working package.
     const stale = [previousMerged, previousDocx].filter(k => k && k !== mergedKey && k !== docxKey);
     if (stale.length) await storage.remove(stale);
 
     res.json({
-      success: true,
+      id: row.id,
       merged_file_name: row.merged_file_name,
       memo_docx_name: docxName,
-      pages: (await PDFDocument.load(mergedPdf)).getPageCount(),
+      regenerated: true,
     });
   } catch (err) {
-    console.error('Memo replacement error:', err);
+    console.error('Proposal intake regenerate error:', err);
     res.status(err.status || 500).json({ error: err.message });
   }
 });

@@ -2,6 +2,7 @@ const PizZip = require('pizzip');
 const {
   addImages, drawingParagraph, photoExtent, escapeXml, inches,
 } = require('./docxImages');
+const { attachLetterhead } = require('./docxLetterhead');
 
 // Coaster's own progress report, as a Word document.
 //
@@ -106,9 +107,9 @@ const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
 </w:styles>`;
 
-const SECTION = `<w:sectPr><w:pgSz w:w="${PAGE_W}" w:h="${PAGE_H}"/>`
+const SECTION_BODY = `<w:pgSz w:w="${PAGE_W}" w:h="${PAGE_H}"/>`
   + `<w:pgMar w:top="${MARGIN}" w:right="${MARGIN}" w:bottom="${MARGIN}" w:left="${MARGIN}"`
-  + ` w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>`;
+  + ` w:header="720" w:footer="720" w:gutter="0"/>`;
 
 // Builds the report. `photos` are [{ buffer, caption }] in order, already upright; `logo` is the
 // organization's, or null — there is deliberately no default, so a customer who has uploaded none
@@ -120,33 +121,17 @@ function renderProgressReportDocx({ report, header, photos = [], companyName = n
   zip.folder('word').file('styles.xml', STYLES);
   zip.folder('word').folder('_rels').file('document.xml.rels', DOC_RELS);
 
-  // The logo goes in first so it takes the lowest relationship id, keeping the photo ids in the
-  // order they are drawn — easier to follow if anyone ever has to read the XML.
-  const images = [];
-  if (logo?.buffer) images.push({ buffer: logo.buffer, mimeType: logo.mimeType || 'image/jpeg' });
-  for (const photo of photos) images.push({ buffer: photo.buffer, mimeType: 'image/jpeg' });
-  const relIds = images.length ? addImages(zip, images, { prefix: 'coasterReport' }) : [];
+  // The letterhead goes in a Word header part rather than at the top of the body. In the body it
+  // came back on rebuild as an inline picture with the company name captioned underneath — see
+  // lib/docxLetterhead.js.
+  const headerRef = attachLetterhead(zip, { companyName, logo });
 
-  const logoRel = logo?.buffer ? relIds[0] : null;
-  const photoRels = logo?.buffer ? relIds.slice(1) : relIds;
+  const photoRels = photos.length
+    ? addImages(zip, photos.map(p => ({ buffer: p.buffer, mimeType: 'image/jpeg' })),
+      { prefix: 'coasterReport' })
+    : [];
 
   const body = [];
-
-  // --- Letterhead: logo on the left, the address block right-aligned, as the PDF has it.
-  if (logoRel || companyName) {
-    const logoCell = logoRel
-      ? drawingParagraph({
-        relId: logoRel, id: 900, align: 'left',
-        // Matches the PDF, which scales the logo to 158 points wide.
-        ...photoExtent(logo.buffer, inches(158 / 72), inches(1.1), logo.mimeType),
-      })
-      : '';
-    const addressCell = (companyName || '').split('\n')
-      .map(line => para(line, { size: 9, color: '404040', align: 'right', spaceAfter: 0 }))
-      .join('');
-    body.push(table([[logoCell, addressCell]], [Math.floor(CONTENT_W / 2), Math.ceil(CONTENT_W / 2)]));
-    body.push(para('', { spaceAfter: 120 }));
-  }
 
   // --- Title
   const num = header.reportNumber != null ? `-${header.reportNumber}` : '';
@@ -202,7 +187,7 @@ function renderProgressReportDocx({ report, header, photos = [], companyName = n
     + `xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" `
     + `xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" `
     + `xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">`
-    + `<w:body>${body.join('')}${SECTION}</w:body></w:document>`);
+    + `<w:body>${body.join('')}<w:sectPr>${headerRef}${SECTION_BODY}</w:sectPr></w:body></w:document>`);
 
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
