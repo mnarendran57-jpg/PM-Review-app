@@ -131,23 +131,6 @@ function renderMarkdown({ header, plainEnglish, critical, mathErrors, worthNotin
     lines.push('> These are read from the documents rather than calculated, so treat them as items to verify before approving, not as proven errors.');
     lines.push('');
 
-    // Chart 2: every billed line classified against the agreed scope.
-    if (compliance.scopeComparison?.length) {
-      lines.push(`### Billed Scope vs. ${compliance.scopeSource === 'contract' ? 'the Contract' : 'the Original Schedule (App #1)'}`);
-      lines.push('');
-      lines.push('| Item | Scheduled value | Status | Notes |');
-      lines.push('|---|---:|---|---|');
-      for (const r of compliance.scopeComparison) {
-        const status = r.status === 'in_contract' ? 'In contract'
-          : r.status === 'changed' ? 'In contract — value changed'
-          : r.status === 'covered_by_co' ? `Approved change${r.coNumber ? ` (${r.coNumber})` : ''}`
-          : '**NOT IN CONTRACT**';
-        const note = r.status === 'not_in_contract' ? (r.note || 'No scheduled line or change order covers this — challenge before approving.')
-          : (r.matchedTo && r.status !== 'in_contract' ? r.matchedTo : '');
-        lines.push(`| ${r.itemNo ? `#${r.itemNo} ` : ''}${r.description} | ${r.scheduledValue != null ? money(r.scheduledValue) : '—'} | ${status} | ${note} |`);
-      }
-      lines.push('');
-    }
 
     if (compliance.taxFindings?.length) {
       lines.push(`### Tax found${contractTerms?.taxExempt === true ? ' on a tax-exempt project' : ''}`);

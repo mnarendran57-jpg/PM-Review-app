@@ -224,57 +224,6 @@ function SubReconciliationChart({ rows }) {
   );
 }
 
-// Chart 2 — every billed line classified against the agreed scope (contract SOV or App #1).
-function ScopeComparisonChart({ compliance }) {
-  const rows = compliance?.scopeComparison;
-  if (!rows || rows.length === 0) return null;
-  const label = {
-    in_contract: { text: 'In contract', bg: '#d1fae5', color: '#065f46' },
-    changed: { text: 'Value changed', bg: '#fef9c3', color: '#854d0e' },
-    covered_by_co: { text: 'Approved change', bg: '#dbeafe', color: '#1e40af' },
-    not_in_contract: { text: 'NOT IN CONTRACT', bg: '#fef2f2', color: '#b91c1c' },
-  };
-  return (
-    <div className="card p-5">
-      <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2 mb-1">
-        <TableCellsIcon className="w-4 h-4 text-gray-400" />
-        Billed Scope vs. {compliance.scopeSource === 'contract' ? 'the Contract' : 'the Original Schedule (App #1)'}
-      </h3>
-      <p className="text-[11px] text-gray-400 mb-3">Read from the documents — confirm anything outside the contract before approving.</p>
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="text-left text-gray-400 border-b" style={{ borderColor: '#f1f5f9' }}>
-              <th className="py-1.5 pr-2 font-medium">Item</th>
-              <th className="py-1.5 px-2 font-medium text-right">Scheduled value</th>
-              <th className="py-1.5 px-2 font-medium">Status</th>
-              <th className="py-1.5 pl-2 font-medium">Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => {
-              const l = label[r.status] || label.not_in_contract;
-              return (
-                <tr key={i} className="border-b last:border-0" style={{ borderColor: '#f8fafc' }}>
-                  <td className="py-1.5 pr-2 text-gray-900">{r.itemNo ? `#${r.itemNo} ` : ''}{r.description}</td>
-                  <td className="py-1.5 px-2 text-right tabular-nums text-gray-700">{r.scheduledValue != null ? money(r.scheduledValue) : '—'}</td>
-                  <td className="py-1.5 px-2">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
-                      style={{ background: l.bg, color: l.color }}>
-                      {l.text}{r.status === 'covered_by_co' && r.coNumber ? ` · ${r.coNumber}` : ''}
-                    </span>
-                  </td>
-                  <td className="py-1.5 pl-2 text-gray-500">{r.note || (r.status !== 'in_contract' ? r.matchedTo : '') || ''}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
 export default function PayAppReportView({ report }) {
   const { header, plainEnglish, critical, mathErrors, worthNoting = [], warnings, cleanBill, checklist = [], compliance = null, subReconciliation = [] } = report;
   const isClean = critical.length === 0 && mathErrors.length === 0;
@@ -320,7 +269,6 @@ export default function PayAppReportView({ report }) {
       <CheckSection title="Other Calculation Problems Found" icon={ExclamationCircleIcon} items={mathErrors} color="#c2410c" bg="#fff7ed" defaultOpen />
       <CheckSection title="Missed or Worth Noting" icon={InformationCircleIcon} items={worthNoting} color="#7c3aed" bg="#f5f3ff" defaultOpen />
       <SubReconciliationChart rows={subReconciliation} />
-      <ScopeComparisonChart compliance={compliance} />
       <ContractComplianceSection compliance={compliance} />
       <SiteVerificationChecklist items={checklist} />
       <CheckSection title="Checks We Couldn't Fully Complete" icon={InformationCircleIcon} items={warnings} color="#a16207" bg="#fefce8" defaultOpen={false} />
