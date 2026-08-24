@@ -447,30 +447,19 @@ async function selectFrom({ doc, rfi, discipline, budget }) {
   };
 }
 
-function buildAnswerPrompt({ rfi, discipline, selections, extraCount }) {
-  const inventory = selections.map((s, i) => {
-    const what = s.wholeDocument
-      ? 'read in full'
-      : s.sheets.length
-        ? `sheets ${s.sheets.map(x => x.sheetNumber).join(', ')} (${s.pagesUsed} pages)`
-        : `opening ${s.pagesUsed} pages`;
-    return `${i + 1}. "${s.label}" — ${what}${s.note ? ` — ${s.note}` : ''}`;
-  }).join('\n');
-
-  return `You are an experienced MEP construction project manager, acting for the OWNER, reading a
+// The half of the prompt that never changes: who the model is, how to answer, and the rules.
+//
+// In the system block rather than the message because a prompt is cached from the front —
+// tools, then system, then messages — so text sitting in the message is re-sent in full on
+// every RFI. This is about 700 tokens of it, identical every time.
+//
+// MOVED, not rewritten: the same words in a different envelope. Only the order changed, from
+// intro-facts-rules to rules-first, facts-after.
+const ANSWER_SYSTEM = `You are an experienced MEP construction project manager, acting for the OWNER, reading a
 contractor's RFI (Request for Information) against the project documents before the
 architect/engineer answers it. The owner pays for every RFI twice — the A/E's fee to answer it and
 the time the work waits — so the PM's first question is not "what is the answer" but "did the
 contract already answer this?"
-
-THE RFI
-Number: ${rfi.rfi_number}
-Subject: ${rfi.subject}
-Question: ${rfi.question || '(no question text was recorded — go by the subject and the attached RFI document)'}
-Discipline: ${discipline}
-
-THE DOCUMENTS YOU HAVE BEEN GIVEN
-${inventory}${extraCount ? `\n${extraCount} further document(s) attached to this RFI by the PM.` : ''}
 
 Report your comparison as a TABLE, with the report_rfi_against_documents tool. Every row is one
 point the RFI raises; the two columns are what the documents show and what the RFI asks.
@@ -501,6 +490,26 @@ Rules:
   documents show and what the RFI asks; whose fault that is, is the PM's call with information you
   do not have.
 - Write for a reader who is not a specialist in this trade.`;
+
+// Only what differs from one RFI to the next. Everything fixed is in ANSWER_SYSTEM.
+function buildAnswerFacts({ rfi, discipline, selections, extraCount }) {
+  const inventory = selections.map((s, i) => {
+    const what = s.wholeDocument
+      ? 'read in full'
+      : s.sheets.length
+        ? `sheets ${s.sheets.map(x => x.sheetNumber).join(', ')} (${s.pagesUsed} pages)`
+        : `opening ${s.pagesUsed} pages`;
+    return `${i + 1}. "${s.label}" — ${what}${s.note ? ` — ${s.note}` : ''}`;
+  }).join('\n');
+
+  return `THE RFI
+Number: ${rfi.rfi_number}
+Subject: ${rfi.subject}
+Question: ${rfi.question || '(no question text was recorded — go by the subject and the attached RFI document)'}
+Discipline: ${discipline}
+
+THE DOCUMENTS YOU HAVE BEEN GIVEN
+${inventory}${extraCount ? `\n${extraCount} further document(s) attached to this RFI by the PM.` : ''}`;
 }
 
 // How each row and each verdict reads in a document, where colour cannot carry the meaning.
@@ -612,14 +621,17 @@ async function analyzeRfi({ rfi, discipline, documents = [], extraFiles = [] }) 
   for (const extra of extraFiles) content.push(asDocument(extra.buffer));
   content.push({
     type: 'text',
-    text: buildAnswerPrompt({ rfi, discipline, selections, extraCount: extraFiles.length }),
+    text: buildAnswerFacts({ rfi, discipline, selections, extraCount: extraFiles.length }),
   });
 
   const { data: parsed } = await askForJson({
     content,
     tool: VALIDITY_TOOL,
-    // 1,200 tokens of schema on every RFI analysed. RFIs are raised in batches, so this is paid
-    // for once and read back on the rest.
+    // The fixed half of the prompt travels in front of the message, where the cache reaches it.
+    // Only this RFI's own facts and its drawings are re-sent.
+    system: ANSWER_SYSTEM,
+    // 1,200 tokens of schema plus ~700 of instructions on every RFI analysed. RFIs are raised in
+    // batches, so this is paid for once and read back on the rest.
     cacheTool: true,
     maxTokens: 2000,
     label: 'rfi analysis',

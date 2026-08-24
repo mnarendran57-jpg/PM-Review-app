@@ -118,52 +118,20 @@ const COMPARISON_TOOL = {
   },
 };
 
-function buildPrompt({ submittal, analysis, sources, response }) {
-  const read = (sources || []).map((s) => {
-    const what = s.wholeDocument ? 'read in full'
-      : s.sections?.length ? `sections ${s.sections.map(x => x.sectionNumber).filter(Boolean).join(', ')}`
-        : `${s.pagesUsed} pages`;
-    return `  - ${s.label} (${what})`;
-  }).join('\n') || '  (not recorded)';
-
-  const deviations = (analysis.deviations || []).map(d =>
-    `  - ${d.item} [${d.severity}]: specification requires ${d.required}; submitted ${d.submitted}`)
-    .join('\n') || '  (none found)';
-
-  const basis = (analysis.basis || []).map(b =>
-    `  - ${b.document}${b.section ? ` — ${b.section}` : ''}: ${b.requires}`).join('\n') || '  (none recorded)';
-
-  return `You are advising the owner's project manager on a construction submittal that the
+// The half of the prompt that never changes: who the model is, how to answer, and the rules.
+//
+// It lives in the system block rather than in the message because a prompt is cached from the
+// front — tools, then system, then messages — so anything sitting in the message is re-sent in
+// full on every call. This is about 800 tokens of it, identical on every comparison.
+//
+// The wording was MOVED here, not rewritten. The model reads the same text in a different
+// envelope; only the order changed, from intro-facts-rules to rules-first, facts-after.
+const COMPARISON_SYSTEM = `You are advising the owner's project manager on a construction submittal that the
 architect/engineer (A/E) has just reviewed and returned.
 
 Before it went out, Coaster read the submittal against the specification and predicted how it
 would be reviewed. That prediction and the A/E's actual review are both below. Compare them and
 tell the PM what the difference means.
-
-THE SUBMITTAL
-Number: ${submittal.submittal_number}
-Description: ${submittal.description}
-Specification section: ${submittal.spec_section || 'not recorded'}
-Supplier: ${submittal.vendor || 'not recorded'}
-
-WHAT COASTER PREDICTED, FROM THE SPECIFICATION
-Likely action: ${analysis.likelyAction}
-Confidence: ${analysis.confidence}${analysis.confidenceReason ? ` — ${analysis.confidenceReason}` : ''}
-Summary: ${analysis.headline || '(none recorded)'}
-Departures found:
-${deviations}
-${(analysis.missingSubmittalItems || []).length ? `Required but not in the package:\n${analysis.missingSubmittalItems.map(m => `  - ${m}`).join('\n')}\n` : ''}Grounded in:
-${basis}
-${analysis.missingInformation ? `Noted as not read at the time: ${analysis.missingInformation}\n` : ''}
-Documents that prediction was read from:
-${read}
-
-WHAT THE A/E ACTUALLY RETURNED
-Action: ${response.action}
-${response.reviewedBy ? `Reviewed by: ${response.reviewedBy}\n` : ''}${response.dateReturned ? `Returned: ${response.dateReturned}\n` : ''}Comments:
-"""
-${response.notes || '(no written comments were recorded — go by the action alone)'}
-"""
 
 Record your comparison with the record_submittal_review_comparison tool.
 
@@ -199,6 +167,47 @@ Rules:
 - Never state something in the headline that is not also in a row. The headline is one line in
   a panel; the rows are what the PM reads, forwards and prices.
 - Write for a project manager who is not a specialist in this trade.`;
+
+// Only what differs from one comparison to the next. Everything fixed is in COMPARISON_SYSTEM.
+function buildFacts({ submittal, analysis, sources, response }) {
+  const read = (sources || []).map((s) => {
+    const what = s.wholeDocument ? 'read in full'
+      : s.sections?.length ? `sections ${s.sections.map(x => x.sectionNumber).filter(Boolean).join(', ')}`
+        : `${s.pagesUsed} pages`;
+    return `  - ${s.label} (${what})`;
+  }).join('\n') || '  (not recorded)';
+
+  const deviations = (analysis.deviations || []).map(d =>
+    `  - ${d.item} [${d.severity}]: specification requires ${d.required}; submitted ${d.submitted}`)
+    .join('\n') || '  (none found)';
+
+  const basis = (analysis.basis || []).map(b =>
+    `  - ${b.document}${b.section ? ` — ${b.section}` : ''}: ${b.requires}`).join('\n') || '  (none recorded)';
+
+  return `THE SUBMITTAL
+Number: ${submittal.submittal_number}
+Description: ${submittal.description}
+Specification section: ${submittal.spec_section || 'not recorded'}
+Supplier: ${submittal.vendor || 'not recorded'}
+
+WHAT COASTER PREDICTED, FROM THE SPECIFICATION
+Likely action: ${analysis.likelyAction}
+Confidence: ${analysis.confidence}${analysis.confidenceReason ? ` — ${analysis.confidenceReason}` : ''}
+Summary: ${analysis.headline || '(none recorded)'}
+Departures found:
+${deviations}
+${(analysis.missingSubmittalItems || []).length ? `Required but not in the package:\n${analysis.missingSubmittalItems.map(m => `  - ${m}`).join('\n')}\n` : ''}Grounded in:
+${basis}
+${analysis.missingInformation ? `Noted as not read at the time: ${analysis.missingInformation}\n` : ''}
+Documents that prediction was read from:
+${read}
+
+WHAT THE A/E ACTUALLY RETURNED
+Action: ${response.action}
+${response.reviewedBy ? `Reviewed by: ${response.reviewedBy}\n` : ''}${response.dateReturned ? `Returned: ${response.dateReturned}\n` : ''}Comments:
+"""
+${response.notes || '(no written comments were recorded — go by the action alone)'}
+"""`;
 }
 
 const VERDICT_LABEL = {
@@ -282,10 +291,13 @@ specification, change the verdict to match.`;
 // analysis / sources: the stored prediction, as saved by lib/submittalAnalysis.
 // response: { action, notes, reviewedBy, dateReturned } — the A/E's review as logged.
 async function compareToReview({ submittal, analysis, sources, response }) {
-  const content = [{ type: 'text', text: buildPrompt({ submittal, analysis, sources, response }) }];
+  const content = [{ type: 'text', text: buildFacts({ submittal, analysis, sources, response }) }];
   const ask = blocks => askForJson({
     content: blocks,
     tool: COMPARISON_TOOL,
+    // The fixed half of the prompt travels here, in front of the message, where the cache reaches
+    // it. Only this submittal's own facts are re-sent.
+    system: COMPARISON_SYSTEM,
     // 1,250 tokens of schema, and asked twice whenever the first answer contradicts itself — see
     // the corrective pass below. Cached, the second ask costs a tenth.
     cacheTool: true,
