@@ -616,7 +616,13 @@ async function analyzeRfi({ rfi, discipline, documents = [], extraFiles = [] }) 
   });
 
   const { data: parsed } = await askForJson({
-    content, tool: VALIDITY_TOOL, maxTokens: 2000, label: 'rfi analysis',
+    content,
+    tool: VALIDITY_TOOL,
+    // 1,200 tokens of schema on every RFI analysed. RFIs are raised in batches, so this is paid
+    // for once and read back on the rest.
+    cacheTool: true,
+    maxTokens: 2000,
+    label: 'rfi analysis',
   });
 
   const analysis = {

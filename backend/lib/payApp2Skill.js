@@ -1723,6 +1723,9 @@ async function reviewPayApp({
     const { data } = await askForJson({
       content: [asDocument(buffer), { type: 'text', text: readingPrompt(profile, suspects) }],
       tool: READING_TOOL,
+      // 1,500 tokens of schema, re-sent for the current application and again for the previous
+      // one. Two reads in a row inside one review, so it is paid for once.
+      cacheTool: true,
       maxTokens: 8000,
       label: 'payapp2 csp reading',
     });

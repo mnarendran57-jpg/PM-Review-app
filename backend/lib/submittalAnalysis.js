@@ -695,6 +695,10 @@ async function analyzeSubmittal({ submittal, documents = [], submittalFiles = []
   const ask = blocks => askForJson({
     content: blocks,
     tool: REVIEW_TOOL,
+    // 1,280 tokens of schema. This one is asked TWICE inside the same call whenever the first
+    // answer contradicts itself — see the corrective pass below — so the cache pays for itself
+    // within a single review, before any second submittal is even opened.
+    cacheTool: true,
     maxTokens: 3000,
     label: 'submittal review prediction',
   });

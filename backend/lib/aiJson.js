@@ -146,6 +146,11 @@ async function askForJson({
   // Below about a thousand tokens the API declines to cache and simply ignores the marker — no
   // error, no cost, and no saving. Nothing here depends on the exact figure; a schema that grows
   // past it starts being cached on its own.
+  //
+  // Measured against the careful model on 2026-08-20: a 1,110-token schema cached, a 647-token one
+  // did not. That is why cacheTool is set only on the schemas over a thousand tokens — on the
+  // smaller ones it would be a line of code that reads as an optimisation and does nothing. The
+  // fast model's threshold is higher again, so a schema sent to it needs to be larger still.
 
   let response;
   response = await send(request, { attempts, label });

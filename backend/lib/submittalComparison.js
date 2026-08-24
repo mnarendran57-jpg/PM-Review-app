@@ -286,6 +286,9 @@ async function compareToReview({ submittal, analysis, sources, response }) {
   const ask = blocks => askForJson({
     content: blocks,
     tool: COMPARISON_TOOL,
+    // 1,250 tokens of schema, and asked twice whenever the first answer contradicts itself — see
+    // the corrective pass below. Cached, the second ask costs a tenth.
+    cacheTool: true,
     maxTokens: 2000,
     label: 'submittal review comparison',
   });
