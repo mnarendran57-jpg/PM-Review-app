@@ -14,7 +14,8 @@
     "test:payapp2": "node tests/payApp2CrossCheck.test.js",
     "test:photos": "node tests/imageOrientation.test.js",
     "test:covers": "node tests/coverPlaceholders.test.js && node tests/progressCover.test.js && node tests/progressReportDocx.test.js",
-    "test:memo": "node tests/docxToPdf.test.js"
+    "test:memo": "node tests/docxToPdf.test.js",
+    "test:ve": "node tests/veAnalyzer.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

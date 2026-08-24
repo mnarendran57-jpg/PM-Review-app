@@ -778,3 +778,32 @@ export const preconReviewApi = {
   },
   delete: id => api.delete(`/precon-review/${id}`).then(r => r.data),
 };
+
+// Alternatives to what a cost estimate priced.
+//
+// The upload returns a job id rather than the analysis: reading an estimate and then writing an
+// opinion about its costliest rows is minutes of work, and nothing between the browser and the
+// server gets a vote on whether it is allowed to finish. See waitForJob above.
+export const veAnalyzerApi = {
+  list: params => api.get('/ve-analyzer', { params }).then(r => r.data),
+  get: id => api.get(`/ve-analyzer/${id}`).then(r => r.data),
+  create: (formData, onTick) => api.post('/ve-analyzer', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+  }).then(r => waitForJob(r.data.jobId, { onTick, base: '/ve-analyzer' })),
+  // The project manager's keep/drop decisions. Only the decisions travel — never the analysis —
+  // so nothing the model wrote can be altered on its way back through the browser.
+  setKept: (id, kept) => api.put(`/ve-analyzer/${id}/options`, { kept }).then(r => r.data),
+  downloadPdf: async (id, fileName) => {
+    const res = await api.get(`/ve-analyzer/${id}/report.pdf`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `options_${id}.pdf`);
+  },
+  downloadMarkdown: async (id, fileName) => {
+    const res = await api.get(`/ve-analyzer/${id}/report.md`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `options_${id}.md`);
+  },
+  downloadOriginal: async (id, fileName) => {
+    const res = await api.get(`/ve-analyzer/${id}/original.pdf`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `estimate_${id}.pdf`);
+  },
+  delete: id => api.delete(`/ve-analyzer/${id}`).then(r => r.data),
+};

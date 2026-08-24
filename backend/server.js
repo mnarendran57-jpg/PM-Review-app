@@ -48,6 +48,7 @@ app.use('/api/pco-review', require('./routes/pcoReview'));
 app.use('/api/invoice-review', require('./routes/invoiceReview'));
 app.use('/api/progress-report', require('./routes/progressReport'));
 app.use('/api/precon-review', require('./routes/preconReview'));
+app.use('/api/ve-analyzer', require('./routes/veAnalyzer'));
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`PM Review backend running on http://0.0.0.0:${PORT}`);

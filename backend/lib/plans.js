@@ -8,6 +8,7 @@ const FEATURES = [
   { key: 'pco-review', label: 'Change Order Review' },
   { key: 'progress-report', label: 'Progress Report' },
   { key: 'precon-review', label: 'Pre-Construction Review' },
+  { key: 've-analyzer', label: 'VE Analyzer' },
   { key: 'proposal-intake', label: 'Proposal Intake' },
   { key: 'submittal-log', label: 'Submittal Log' },
   { key: 'rfi-log', label: 'RFI Log' },
@@ -37,7 +38,7 @@ const PLANS = [
   {
     key: 'pro',
     name: 'Pro',
-    blurb: 'Everything, including pre-construction review.',
+    blurb: 'Everything, including pre-construction review and the VE Analyzer.',
     features: FEATURE_KEYS,
   },
   {

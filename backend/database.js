@@ -1431,6 +1431,52 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_pay_app_reviews_2_project ON pay_app_reviews_2(project_id);
 `);
 
+// --- VE Analyzer ----------------------------------------------------------------------------
+// Alternatives to what a cost estimate priced, so an owner can go to their design team with a
+// shortlist instead of the question "what else is there?".
+//
+// `entries_json` holds the whole analysis — the line items that were worked, and every option
+// found for each, with the project manager's keep/drop decision stored on the option itself. That
+// is why the curation survives a reload and why the owner's PDF can be regenerated at any time
+// from the record rather than being frozen at the moment it was first produced.
+//
+// The estimate itself is kept the same way every other module keeps an upload: in object storage
+// where that is configured, in the row where it is not.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS ve_analyses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER,
+    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    project_name TEXT,
+    estimate_title TEXT,
+    contractor TEXT,
+    estimate_date TEXT,
+    estimate_total REAL,
+    location TEXT,
+    line_count INTEGER DEFAULT 0,
+    worked_count INTEGER DEFAULT 0,
+    option_count INTEGER DEFAULT 0,
+    coverage REAL,
+    extracted_data TEXT NOT NULL,
+    entries_json TEXT NOT NULL,
+    estimate_file_name TEXT,
+    estimate_file BLOB,
+    estimate_file_key TEXT,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_ve_analyses_project ON ve_analyses(project_id);
+  CREATE INDEX IF NOT EXISTS idx_ve_analyses_org ON ve_analyses(org_id);
+`);
+
+// How much of the estimate's work value the examined rows account for. Added after the table
+// existed, so guarded the same way every other late column in this file is.
+{
+  const cols = db.prepare(`PRAGMA table_info(ve_analyses)`).all().map(c => c.name);
+  if (!cols.includes('coverage')) db.exec(`ALTER TABLE ve_analyses ADD COLUMN coverage REAL`);
+}
+
 // --- AI work that outlives its request ------------------------------------------------------
 // Reading a pay application or a drawing set takes minutes. Held inside an HTTP request, that is a
 // race against every timeout between the browser and the server — and losing it did not just show
