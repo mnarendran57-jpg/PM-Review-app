@@ -598,11 +598,24 @@ const TOO_MANY_LINE_ITEMS = 'One page of this pay application carries more line 
 //
 // One automatic retry after a short wait — this account's rate limit window is narrow
 // (requests/min), so a brief pause often clears it without bothering the user.
-async function callClaudeWithRetry(content, hasPrevious, { fast = true } = {}) {
+async function callClaudeWithRetry(content, hasPrevious, { fast = true, system = null } = {}) {
   const { data } = await askForJson({
     content,
     tool: payAppTool(hasPrevious),
-    // 5,356 tokens of schema, re-sent on every pass of a document read in passes.
+    // THE INSTRUCTIONS TRAVEL IN THE SYSTEM BLOCK, NOT IN THE MESSAGE.
+    //
+    // Not a stylistic choice. A prompt is cached from the front, and the API orders a request
+    // tools -> system -> messages, so everything before the cache breakpoint is what gets reused.
+    // With the instructions in the message they sat AFTER the breakpoint and were re-sent in full
+    // on every pass; in the system block they sit inside the cached prefix, which grows it from
+    // the 5,356-token schema to about 7,000 tokens.
+    //
+    // The page-range notice stays in the message, because it is the one part that differs between
+    // passes. Putting it in the system block would change the cached prefix on every pass and
+    // cache nothing at all.
+    system,
+    // 5,356 tokens of schema plus ~1,650 of instructions, re-sent on every pass of a document
+    // read in passes.
     cacheTool: true,
     maxTokens: 20000,
     label: `pay app extract${fast ? '' : ' (scanned)'}`,
@@ -669,11 +682,14 @@ async function analyzePayApps(currentRaw, previousRaw) {
   // backup) is read one document at a time, in page-range passes. Header values come from
   // whichever pass shows them; continuation-sheet line items concatenate in page order.
   const readOne = fast => async (buffer, context) => {
+    const notice = partNotice(context);
     const content = [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
-      { type: 'text', text: buildPrompt(false) + partNotice(context) },
+      // Only what differs between passes. An empty text block is not valid content, so a pass that
+      // is the whole document sends the document alone.
+      ...(notice ? [{ type: 'text', text: notice.trim() }] : []),
     ];
-    return (await callClaudeWithRetry(content, false, { fast })).current;
+    return (await callClaudeWithRetry(content, false, { fast, system: buildPrompt(false) })).current;
   };
 
   // The two applications are read at the same time. They have nothing to do with each other until
@@ -712,11 +728,12 @@ async function analyzePayApps(currentRaw, previousRaw) {
   if (currentParts.length === 1) {
     const content = [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: currentBuffer.toString('base64') } },
-      { type: 'text', text: buildPrompt(false) },
     ];
 
     try {
-      const parsed = await callClaudeWithRetry(content, false, { fast: currentIsDigital });
+      const parsed = await callClaudeWithRetry(content, false, {
+        fast: currentIsDigital, system: buildPrompt(false),
+      });
       return { current: parsed.current, previous: null, orientation };
     } catch (err) {
       if (!err?.truncated) throw err;
