@@ -5,7 +5,7 @@ import {
   ClipboardDocumentCheckIcon, Squares2X2Icon, ScaleIcon, ArrowLeftIcon,
   Cog6ToothIcon, EnvelopeIcon, FolderIcon, ReceiptPercentIcon, CameraIcon, UserGroupIcon,
   ClipboardDocumentListIcon, QuestionMarkCircleIcon, CheckCircleIcon, FolderOpenIcon,
-  ChevronUpDownIcon, BeakerIcon, LightBulbIcon,
+  ChevronUpDownIcon, BeakerIcon, LightBulbIcon, SparklesIcon,
 } from '@heroicons/react/24/outline';
 import { authApi, selectedOrg, selectedProgram, orgsApi, programsApi, projectsApi } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -78,6 +78,9 @@ const projectTools = [
 
 const globalNav = [
   { to: '/projects', label: 'Projects', icon: FolderIcon, color: '#3b82f6', glow: 'rgba(37,99,235,0.2)' },
+  // Not a project tool: a question about a term or a method belongs to the person asking, not
+  // to a job, so it sits beside Projects rather than inside one.
+  { to: '/coaster-ai', label: 'Coaster AI', feature: 'coaster-ai', icon: SparklesIcon, color: '#818cf8', glow: 'rgba(99,102,241,0.2)' },
 ];
 
 // Everything about the person rather than about the work, reached from their own initials at the
@@ -340,7 +343,11 @@ export default function Sidebar() {
             {/* No heading: with Team, Settings and Contact moved to the account menu, a "Menu"
                 label sits over a single row. */}
             <div className="space-y-1 pt-2">
-              {globalNav.filter(n => !n.adminOnly || isAdmin).map(n => (
+              {/* `feature` gates the same way the project tools do — the route refuses without
+                  the plan, and offering a tab that answers 403 is worse than not offering it. */}
+              {globalNav
+                .filter(n => (!n.adminOnly || isAdmin) && (!n.feature || hasFeature(n.feature)))
+                .map(n => (
                 <NavRow key={n.to} to={n.to} end={n.to === '/projects'}
                   label={n.label} Icon={n.icon} color={n.color} glow={n.glow} />
               ))}

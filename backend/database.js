@@ -1477,6 +1477,52 @@ db.exec(`
   if (!cols.includes('coverage')) db.exec(`ALTER TABLE ve_analyses ADD COLUMN coverage REAL`);
 }
 
+// --- Coaster AI ------------------------------------------------------------------------------
+// The general question tab: terminology, methods, a drawing somebody wants a second opinion on.
+//
+// A conversation belongs to the PERSON who wrote it, not to a project — which is the one place this
+// differs from every other table here. A review is a work product the team shares; a chat is
+// somebody thinking out loud, and the rest of the office has no business reading it. The
+// organization is still recorded, so isolation works the same way everywhere.
+//
+// Usage is stored per message rather than per conversation. A chat re-sends its whole history on
+// every turn, so the cost of a conversation is not the sum of anything visible on screen, and the
+// only way to answer "why did that thread cost what it did" is to have kept the numbers.
+//
+// Rows here are TRANSIENT. A day after its last message a conversation is deleted outright, along
+// with every file attached to it — see lib/chatHistory.js. Nobody returns to a chat about what a
+// term meant, and a list of several hundred of them is a burden rather than a history.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS ai_chats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER,
+    user_id INTEGER NOT NULL,
+    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    title TEXT,
+    document_ids TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_ai_chats_owner ON ai_chats(org_id, user_id, updated_at);
+
+  CREATE TABLE IF NOT EXISTS ai_chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL REFERENCES ai_chats(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    tier TEXT,
+    model TEXT,
+    reason TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_read INTEGER,
+    cache_write INTEGER,
+    attachments TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_chat ON ai_chat_messages(chat_id, id);
+`);
+
 // --- AI work that outlives its request ------------------------------------------------------
 // Reading a pay application or a drawing set takes minutes. Held inside an HTTP request, that is a
 // race against every timeout between the browser and the server — and losing it did not just show

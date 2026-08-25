@@ -13,6 +13,7 @@ const FEATURES = [
   { key: 'submittal-log', label: 'Submittal Log' },
   { key: 'rfi-log', label: 'RFI Log' },
   { key: 'meeting-actions', label: 'Meeting Actions' },
+  { key: 'coaster-ai', label: 'Coaster AI' },
 ];
 
 const FEATURE_KEYS = FEATURES.map(f => f.key);

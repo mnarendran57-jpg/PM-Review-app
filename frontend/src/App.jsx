@@ -5,6 +5,7 @@ import ProjectWorkspace from './pages/ProjectWorkspace';
 import OrgSelect from './pages/OrgSelect';
 import ProgramSelect from './pages/ProgramSelect';
 import Team from './pages/Team';
+import CoasterAi from './pages/CoasterAi';
 import Settings from './pages/Settings';
 import Contact from './pages/Contact';
 import Login from './pages/Login';
@@ -56,6 +57,7 @@ export default function App() {
               <Route path="/organizations" element={<OrgSelect />} />
               <Route path="/programs" element={<RequireOrg><ProgramSelect /></RequireOrg>} />
               <Route path="/projects" element={<RequireProgram><Layout><Home /></Layout></RequireProgram>} />
+              <Route path="/coaster-ai" element={<RequireOrg><Layout><CoasterAi /></Layout></RequireOrg>} />
               <Route path="/team" element={<RequireOrg><Layout><Team /></Layout></RequireOrg>} />
               <Route path="/settings" element={<RequireOrg><Layout><Settings /></Layout></RequireOrg>} />
               <Route path="/contact" element={<Layout><Contact /></Layout>} />

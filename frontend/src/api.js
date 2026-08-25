@@ -807,3 +807,73 @@ export const veAnalyzerApi = {
   },
   delete: id => api.delete(`/ve-analyzer/${id}`).then(r => r.data),
 };
+
+// Coaster AI — the general question tab.
+//
+// Everything else here goes through axios. The answer does not: it arrives a fragment at a time,
+// and axios has no way to hand back a response body while it is still being written. EventSource
+// cannot do it either — it only issues GET requests and cannot carry the Authorization header this
+// API requires — so the streaming call is a bare fetch reading the body as it comes.
+export const coasterAiApi = {
+  listChats: () => api.get('/coaster-ai/chats').then(r => r.data),
+  getChat: id => api.get(`/coaster-ai/chats/${id}`).then(r => r.data),
+  createChat: body => api.post('/coaster-ai/chats', body || {}).then(r => r.data),
+  updateChat: (id, body) => api.put(`/coaster-ai/chats/${id}`, body).then(r => r.data),
+  deleteChat: id => api.delete(`/coaster-ai/chats/${id}`).then(r => r.data),
+
+  upload: (file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return api.post('/coaster-ai/attachments', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+    }).then(r => r.data);
+  },
+
+  // Calls onEvent(name, data) for each frame: 'start' with the model chosen and why, 'text' for
+  // each fragment, 'done' with what it cost, 'error' if the answer failed after the reply had
+  // already begun — by which point no HTTP status can be sent, so the page has to hear about it
+  // in the stream itself.
+  async ask(chatId, { text, attachments = [], deep = false, signal }, onEvent) {
+    const token = localStorage.getItem(TOKEN_KEY);
+    const org = localStorage.getItem(ORG_KEY);
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (org) {
+      try { headers['X-Org-Id'] = String(JSON.parse(org).id); } catch { /* ignore */ }
+    }
+
+    const res = await fetch(`${apiBaseUrl}/coaster-ai/chats/${chatId}/messages`, {
+      method: 'POST', headers, signal, body: JSON.stringify({ text, attachments, deep }),
+    });
+
+    if (!res.ok || !res.body) {
+      let message = 'Coaster could not answer that.';
+      try { message = (await res.json()).error || message; } catch { /* not JSON */ }
+      throw new Error(message);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // Frames are separated by a blank line. A partial frame stays in the buffer until the rest
+      // of it arrives — a fragment can and does split across network chunks.
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary !== -1) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const name = /^event: (.+)$/m.exec(frame)?.[1];
+        const raw = /^data: (.*)$/m.exec(frame)?.[1];
+        if (name && raw !== undefined) {
+          try { onEvent(name, JSON.parse(raw)); } catch { /* ignore a malformed frame */ }
+        }
+        boundary = buffer.indexOf('\n\n');
+      }
+    }
+  },
+};
