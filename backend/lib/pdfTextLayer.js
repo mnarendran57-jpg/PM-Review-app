@@ -71,4 +71,42 @@ function readTextPages(buffer) {
   return eachPage(buffer, async (page, p) => ({ page: p, text: await textOf(page) }));
 }
 
-module.exports = { eachPage, textOf, readTextPages, bytesOf };
+// The same text, but kept in rows.
+//
+// textOf joins a page into one string, which is all most callers need and is exactly wrong for a
+// document laid out as a table. A cost estimate is rows: a description, a quantity, a rate, and an
+// extended amount, and which number belongs to which row is the whole content. Collapsed to one
+// line that structure is gone, and the only way back is to pay the model to rebuild it.
+//
+// pdfjs gives every text item a transform matrix whose last two entries are its position on the
+// page. Items sharing a baseline are one row. That is free, exact, and it is what lets the ranking
+// stay in code — see lib/veExtract.js, where asking the model to rank instead was measured missing
+// five to eight of the twenty biggest rows on every attempt.
+const ROW_TOLERANCE = 2.5;   // points of vertical drift still counted as the same baseline
+
+async function rowsOf(page) {
+  const content = await page.getTextContent();
+  const buckets = [];
+  for (const item of content.items) {
+    const str = String(item.str || '');
+    if (!str.trim()) continue;
+    const y = item.transform?.[5] ?? 0;
+    const x = item.transform?.[4] ?? 0;
+    // Items arrive in reading order but not reliably grouped, so a row is found by its baseline
+    // rather than assumed from the order.
+    const row = buckets.find(b => Math.abs(b.y - y) <= ROW_TOLERANCE);
+    if (row) row.items.push({ x, str });
+    else buckets.push({ y, items: [{ x, str }] });
+  }
+  return buckets
+    .sort((a, b) => b.y - a.y)                        // top of the page downwards
+    .map(b => b.items.sort((p, q) => p.x - q.x).map(i => i.str).join(' ').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+}
+
+// [{ page, rows: [string] }]
+function readTextRows(buffer) {
+  return eachPage(buffer, async (page, p) => ({ page: p, rows: await rowsOf(page) }));
+}
+
+module.exports = { eachPage, textOf, rowsOf, readTextPages, readTextRows, bytesOf };

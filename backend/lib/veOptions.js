@@ -219,15 +219,39 @@ function buildLinesText(lines, { estimateTitle, contractor, location, proposal }
   ].filter(Boolean).join('\n\n');
 }
 
-// Lines are worked in small groups rather than one call for all of them, for two independent
-// reasons. A group of twenty-five produces more JSON than one reply holds, and hitting that ceiling
-// loses the whole run rather than one group. And groups run at the same time, so the wall clock is
-// the slowest group rather than the sum — which matters here because what makes this slow is the
-// model writing prose, at roughly a hundred tokens a second.
-const GROUP_SIZE = 5;
-const CONCURRENCY = 4;
+// Lines are worked in groups rather than one call for all of them, for two independent reasons. A
+// group of forty produces more JSON than one reply holds, and hitting that ceiling loses the whole
+// run rather than one group. And groups run at the same time, so the wall clock is the slowest
+// group rather than the sum — what makes this slow is the model writing prose, at roughly a hundred
+// tokens a second.
+//
+// Every group re-sends the same instructions and schema — about 1,650 tokens the model has to be
+// given before it can answer — so the group count is a small cost as well as a speed dial. It is
+// dominated by the other effect: a group's wall clock is however long the model spends WRITING its
+// answer, at roughly a hundred tokens a second, and groups run side by side.
+//
+// Eight to a group was measured and was the wrong way round: twenty items came back in three calls,
+// one of which wrote 2,600 tokens and held the whole stage open for 54 seconds. Four to a group
+// splits the same work into five calls that all run at once, so the stage costs what its slowest
+// quarter costs. The extra prefix repetitions are worth well under a cent.
+const GROUP_SIZE = 4;
+const CONCURRENCY = 8;
 
-async function askForGroup(lines, context) {
+// How many of the costliest items go to the careful model.
+//
+// This stage is where the money goes — almost all of it output tokens, and the careful model charges
+// three times as much for those. Measured head to head on the same eight items, the fast model
+// matched it on every rule that matters: silence on all three commodity lines, no dollar figures, no
+// unexpanded jargon. Where it fell short was insight — it offered white oak and bamboo against the
+// walnut panel, where the careful model found the substrate-and-finish trades (site-finished
+// plywood, real veneer on a cheaper backing) that an estimator would actually raise.
+//
+// So the split follows the money rather than the calendar: the biggest items, where a better idea is
+// worth the most, get the careful model; the tail gets the fast one. An ordinary estimate has fewer
+// items than this and goes entirely to the careful model, which is the behaviour that was signed off.
+const CAREFUL_LINES = 8;
+
+async function askForGroup(lines, context, fast) {
   const { data } = await askForJson({
     content: [{ type: 'text', text: buildLinesText(lines, context) }],
     system: OPTIONS_SYSTEM,
@@ -235,12 +259,19 @@ async function askForGroup(lines, context) {
     // The rules above are identical on every group of every estimate, so the cached prefix is the
     // whole invariant part and only the handful of line items is paid for per call.
     cacheTool: true,
+    fast,
     maxTokens: 8000,
-    label: 've options',
+    label: `ve options ${fast ? 'tail' : 'top'}`,
     truncatedMessage: 'The answer for one group of line items ran long. Try the same estimate again.',
   });
   return data.items || [];
 }
+
+const chunk = (items, size) => {
+  const out = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+};
 
 async function inParallel(groups, work) {
   const out = new Array(groups.length);
@@ -267,10 +298,13 @@ const optionId = (lineIndex, position) => `L${lineIndex}-O${position}`;
 // owner. Defaulting the other way was tempting and wrong: a PM who runs the analysis and goes to
 // lunch would produce an empty report for their client with no indication anything had gone missing.
 async function buildOptions(lines, context = {}) {
-  const groups = [];
-  for (let i = 0; i < lines.length; i += GROUP_SIZE) groups.push(lines.slice(i, i + GROUP_SIZE));
+  // `lines` arrives ranked biggest first, so the split is just a slice.
+  const groups = [
+    ...chunk(lines.slice(0, CAREFUL_LINES), GROUP_SIZE).map(g => ({ lines: g, fast: false })),
+    ...chunk(lines.slice(CAREFUL_LINES), GROUP_SIZE).map(g => ({ lines: g, fast: true })),
+  ];
 
-  const answered = (await inParallel(groups, group => askForGroup(group, context))).flat();
+  const answered = (await inParallel(groups, g => askForGroup(g.lines, context, g.fast))).flat();
   const byIndex = new Map(answered.map(item => [item.lineIndex, item]));
 
   return lines.map((line) => {
@@ -298,5 +332,5 @@ async function buildOptions(lines, context = {}) {
 
 module.exports = {
   buildOptions, buildLinesText, optionId,
-  OPTIONS_TOOL, OPTIONS_SYSTEM, GROUP_SIZE,
+  OPTIONS_TOOL, OPTIONS_SYSTEM, GROUP_SIZE, CAREFUL_LINES,
 };

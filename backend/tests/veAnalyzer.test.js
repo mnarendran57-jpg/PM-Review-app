@@ -17,7 +17,7 @@
 //      must be handed to the owner rather than re-invented as suggestions.
 const assert = require('assert');
 const {
-  workLines, selectLines, alternateLines, proposalContext, hasProposalContext,
+  workLines, selectLines, alternateLines, proposalContext, hasProposalContext, pricedRows, shortlist, looksLegible, usableText,
   MAX_LINES, MIN_LINES,
 } = require('../lib/veExtract');
 const { buildVeReport, keptEntries, costBand } = require('../lib/veReport');
@@ -90,6 +90,41 @@ check('markup rows are never selected either', () => {
     'a markup row was offered up for value engineering');
 });
 
+console.log('\nVE Analyzer — markup rows the model mislabelled as work');
+
+check('a markup row labelled "work" by the model is still kept out', () => {
+  // Found on a real customer budget: "General Conditions — $50,000" came back labelled work and
+  // reached the review as the third largest item on the job. An alternative to a markup line is a
+  // meaningless suggestion, printed next to real ones.
+  const mislabelled = { lines: [
+    { description: 'General Conditions', amount: 50_000, rowKind: 'work' },
+    { description: 'Overhead and profit @ 11%', amount: 113_179, rowKind: 'work' },
+    { description: 'Contingency', amount: 32_013, rowKind: 'work' },
+    { description: 'Payment and performance bond', amount: 12_760, rowKind: 'work' },
+    { description: 'Subtotal of all trades', amount: 881_160, rowKind: 'work' },
+    { description: 'TOTAL ESTIMATE', amount: 1_101_112, rowKind: 'work' },
+    { description: 'Sales tax', amount: 8_000, rowKind: 'work' },
+    { description: 'Terrazzo flooring, poured in place', amount: 248_000, rowKind: 'work' },
+  ] };
+  const work = workLines(mislabelled);
+  assert.deepStrictEqual(work.map(l => l.description), ['Terrazzo flooring, poured in place'],
+    `let through: ${work.map(l => l.description).join(' | ')}`);
+});
+
+check('real line items that merely contain those words survive', () => {
+  // The cost of over-matching is silently dropping a genuine item, which is worse than the problem.
+  const genuine = { lines: [
+    { description: 'Overhead coiling service doors', amount: 29_400, rowKind: 'work' },
+    { description: 'Overhead crane rail and supports', amount: 84_000, rowKind: 'work' },
+    { description: 'Total station survey equipment', amount: 18_000, rowKind: 'work' },
+    { description: 'Bond breaker at construction joints', amount: 4_200, rowKind: 'work' },
+    { description: 'General purpose receptacles and devices', amount: 62_000, rowKind: 'work' },
+    { description: 'Conditioned air distribution ductwork', amount: 76_880, rowKind: 'work' },
+  ] };
+  assert.strictEqual(workLines(genuine).length, 6,
+    `dropped: ${genuine.lines.filter(l => !workLines(genuine).some(w => w.description === l.description)).map(l => l.description).join(' | ')}`);
+});
+
 check('nothing has to be asked of the project manager', () => {
   // The whole point of the change: one argument in, a decision out.
   assert.strictEqual(selectLines.length, 1);
@@ -159,9 +194,144 @@ check('an estimate with no extended amounts still produces something', () => {
   assert.strictEqual(coverage, null);
 });
 
+check('the estimate\'s own trade subtotal is the denominator, not the rows in hand', () => {
+  // On the shortlist path only the biggest rows are classified, so summing them would give a
+  // denominator far smaller than the job — and the coverage rule would stop early believing it had
+  // covered the estimate when it had covered the shortlist.
+  const shortlisted = {
+    tradeSubtotal: 1_000_000,
+    lines: Array.from({ length: 10 }, (_, i) => (
+      { description: `Item ${i}`, amount: 30_000, rowKind: 'work' })),
+  };
+  const { coverage, totalWorkValue, lines } = selectLines(shortlisted);
+  assert.strictEqual(totalWorkValue, 1_000_000, 'summed the shortlist instead of reading the estimate');
+  assert.ok(coverage < 0.35, `claimed ${Math.round(coverage * 100)}% coverage of a job it barely touched`);
+  // And with the true denominator it keeps going rather than stopping at the coverage target.
+  assert.strictEqual(lines.length, 10);
+});
+
+check('a trade subtotal smaller than the rows in hand is not believed', () => {
+  // A misread subtotal must never shrink the denominator below what is demonstrably there.
+  const wrong = {
+    tradeSubtotal: 1_000,
+    lines: [{ description: 'A', amount: 500_000, rowKind: 'work' }],
+  };
+  assert.strictEqual(selectLines(wrong).totalWorkValue, 500_000);
+});
+
 check('coverage is reported honestly, never as "we read everything"', () => {
   const { coverage } = selectLines(ESTIMATE);
   assert.ok(coverage > 0 && coverage <= 1, `coverage was ${coverage}`);
+});
+
+console.log('\nVE Analyzer — is the text layer actually readable?');
+
+// Taken from a real customer estimate. The PDF embeds subset fonts with no character map, so the
+// text layer is plentiful — two thousand characters a page — and completely meaningless. Every
+// check that only counts characters passes it, and the model is then asked to price a document
+// nobody can see.
+const GARBLED = `3 4 5 6 3 7 8 8 3 9 : ; ; 3 <= > ? 3 : @ A B 3 C D E E F 3 G E H H I 3 4 J K F J L B 3 3 M 4 5 G N
+? Y ? ? ] Z ? Z ? \\? ? ? Z ? \\ ? ?[ ? f ? \\ ? g ? d? ? h i ? Y ? ?Z ? ^ ] g ? d W a d ? [ ? \\[ ? j ? ? j
+5 6 7 58 9 : ; < = 8 > ; ? 8 = @ < A B : B ? A C 8 A B D ? = E 8 B > 8 ? F B D 8 < G ; < ; D H A 8
+t u v w x t yx z u { | x u } t ~ ? ~ ~ ? ? ? ? ? ? ? ? ~ ? ? ? ? ? ? ? ? ? ? ? ? ? ? ~ ? ? ? ? ?`.repeat(6);
+
+const REAL_TEXT = `MERIDIAN BUILDERS INCORPORATED - Northline Regional Health Campus Phase 2
+DIVISION 06 - WOOD AND PLASTICS
+DESCRIPTION QTY UNIT UNIT COST AMOUNT
+Walnut veneer wall panel system, floor to ceiling 2,400 SF 77.50 186,000.00
+Custom millwork reception desk, solid surface top 1 LS 68,400.00 68,400.00
+Architectural wood ceiling, linear slat 1,850 SF 62.00 114,700.00
+DIVISION 06 Subtotal 456,840.00`;
+
+check('glyph soup is not mistaken for a readable estimate', () => {
+  assert.ok(GARBLED.length > 1000, 'the sample needs to be long enough to pass a length check');
+  assert.strictEqual(looksLegible(GARBLED), false,
+    'a document with no character map would have been read as text and priced from nonsense');
+});
+
+check('a real estimate reads as legible', () => {
+  assert.strictEqual(looksLegible(REAL_TEXT), true);
+});
+
+check('a terse estimate that is mostly numbers still reads as legible', () => {
+  // The test must not demand prose: estimates are terse by nature.
+  const terse = ['Concrete 1200 CY 185.00 222,000.00', 'Rebar 44000 LB 1.95 85,800.00',
+    'Formwork 8600 SF 12.40 106,640.00', 'Curing compound 8600 SF 0.42 3,612.00'].join('\n').repeat(8);
+  assert.strictEqual(looksLegible(terse), true);
+});
+
+check('an empty or tiny text layer is not legible', () => {
+  assert.strictEqual(looksLegible(''), false);
+  assert.strictEqual(looksLegible('Page 1 of 4'), false);
+});
+
+check('the gate both text paths go through rejects a garbled document', () => {
+  // The real one: four pages, two thousand characters each, none of it meaning anything. It passes
+  // any check that counts characters, which is exactly how it reached the model.
+  assert.strictEqual(usableText(GARBLED, 4), false,
+    'garbled text would be sent to be priced');
+  assert.strictEqual(usableText(REAL_TEXT.repeat(4), 4), true);
+});
+
+check('the gate also rejects a scan, which has almost no text at all', () => {
+  assert.strictEqual(usableText('Page 1', 4), false);
+  assert.strictEqual(usableText('', 0), false);
+});
+
+console.log('\nVE Analyzer — reading the rows locally, before anything is paid for');
+
+// The shortlist is chosen from rows rebuilt out of the PDF's own text layer, at no cost. Getting the
+// amount off a row wrong here does not put a wrong number in a report — the model re-reads whatever
+// is shortlisted — but it can cost a row its place, so the parse has to hold on the layouts
+// estimating software actually produces.
+const page = rows => [{ page: 1, rows }];
+
+check('the amount is the last money column, not the rate or the quantity', () => {
+  const [row] = pricedRows(page(['Walnut veneer wall panel system 2,400 SF 77.50 186,000.00']));
+  assert.strictEqual(row.amount, 186000);
+});
+
+check('an estimate that prints amounts without decimals still reads', () => {
+  const [row] = pricedRows(page(['Terrazzo flooring 3,100 SF 80 248,000']));
+  assert.strictEqual(row.amount, 248000);
+});
+
+check('a lump sum row with no quantity reads', () => {
+  const [row] = pricedRows(page(['Building automation and controls 1 LS 386,000.00 386,000.00']));
+  assert.strictEqual(row.amount, 386000);
+});
+
+check('a subtotal row is picked up too, so it can be ruled out later', () => {
+  // Deliberately kept: it has to reach the model to be labelled a subtotal. Dropping totals here on
+  // a guess is how a work row called "Total station survey equipment" would vanish.
+  const [row] = pricedRows(page(['DIVISION 06 Subtotal 456,840.00']));
+  assert.strictEqual(row.amount, 456840);
+});
+
+check('a heading with no money on it is not a row', () => {
+  assert.strictEqual(pricedRows(page(['DIVISION 09 - FINISHES', 'DESCRIPTION QTY UNIT AMOUNT'])).length, 0);
+});
+
+check('a negative-looking deduct still yields its magnitude', () => {
+  const [row] = pricedRows(page(['Alternate No. 3 - Substitute epoxy terrazzo (42,000.00)']));
+  assert.strictEqual(row.amount, 42000);
+});
+
+check('the shortlist takes the biggest rows and over-fetches', () => {
+  // Subtotals crowd the top of any ranking by amount, so the shortlist has to be several times the
+  // number of items actually wanted or filtering them out leaves too few.
+  const many = page(Array.from({ length: 200 }, (_, i) => `Item ${i} 1 LS ${(i + 1) * 1000}.00`));
+  const picked = shortlist(pricedRows(many), 20);
+  // Three times what is wanted. On the measured estimate 27 of the 60 biggest figures were totals
+  // or markup, so a shortlist the same size as the wanted count leaves far too few real rows.
+  assert.strictEqual(picked.length, 60, `shortlisted ${picked.length} for 20 wanted`);
+  assert.strictEqual(picked[0].amount, 200000);
+  assert.ok(picked.every((r, i) => i === 0 || r.amount <= picked[i - 1].amount), 'not sorted');
+});
+
+check('a short estimate is shortlisted whole rather than truncated', () => {
+  const few = page(['A 1 LS 100.00', 'B 1 LS 200.00', 'C 1 LS 300.00']);
+  assert.strictEqual(shortlist(pricedRows(few), 20).length, 3);
 });
 
 console.log('\nVE Analyzer — an estimate bound inside a proposal');
@@ -237,6 +407,70 @@ check('the contractor\'s own alternates are collected, not discarded', () => {
   const alts = alternateLines(PROPOSAL);
   assert.strictEqual(alts.length, 3);
   assert.ok(alts.some(a => a.amount === -42_000), 'the deduct alternate was lost');
+});
+
+check('the string "null" where a list belongs does not take the analysis down', () => {
+  // Found on a real 22-page estimate with no exclusions section: the model wrote the STRING "null"
+  // into exclusions, assumptions and scopeNotes rather than omitting them. "null" is truthy, so
+  // `(x || []).filter(...)` threw and the whole job died after the document had been read and paid
+  // for. Worst on the most ordinary documents — a plain estimate has none of those sections.
+  const stringy = {
+    lines: 'null',
+    exclusions: 'null',
+    assumptions: 'null',
+    scopeNotes: 'null',
+  };
+  const ctx = proposalContext(stringy);
+  assert.deepStrictEqual(ctx.exclusions, []);
+  assert.deepStrictEqual(ctx.assumptions, []);
+  assert.deepStrictEqual(ctx.scopeNotes, []);
+  assert.deepStrictEqual(ctx.alternates, []);
+  assert.strictEqual(hasProposalContext(ctx), false);
+  assert.deepStrictEqual(workLines(stringy), []);
+  assert.deepStrictEqual(selectLines(stringy).lines, []);
+});
+
+check('the same alternate found by both reading paths is listed once', () => {
+  // The shortlist path reads alternates twice — once as a section, once as rows that happened to
+  // rank in. The two spell them differently ("No. 1 — Upgrade" against "No. 1 - Upgrade"), so
+  // matching on the text as written listed every alternate on the proposal twice.
+  const both = {
+    lines: [
+      { description: 'Alternate No. 1 - Upgrade lobby lighting to tunable white LED', amount: 48_600, rowKind: 'work', priceBasis: 'alternate' },
+      { description: 'Alternate No. 3 - Substitute epoxy terrazzo', amount: -42_000, rowKind: 'work', priceBasis: 'alternate' },
+    ],
+    alternateItems: [
+      { itemNumber: 'Alternate No. 1', description: 'Upgrade lobby lighting to tunable white LED', amount: 48_600 },
+      { itemNumber: 'Alternate No. 3', description: 'Substitute epoxy terrazzo', amount: -42_000 },
+    ],
+  };
+  const { alternates } = proposalContext(both);
+  assert.strictEqual(alternates.length, 2, `listed ${alternates.length}: ${alternates.map(a => a.description).join(' | ')}`);
+  assert.ok(alternates.some(a => a.amount === -42_000), 'the deduct was lost');
+});
+
+check('the same alternate with a disagreeing sign is listed once, as a deduct', () => {
+  // The real failure: one pass read "(42,000.00)" as a deduct and the other as a positive, so the
+  // owner was shown the same alternate twice — once as money off and once as money added.
+  const disagreeing = {
+    lines: [{ description: 'Alternate No. 3 - Substitute epoxy terrazzo', amount: 42_000, rowKind: 'work', priceBasis: 'alternate' }],
+    alternateItems: [{ itemNumber: 'Alternate No. 3', description: 'Substitute epoxy terrazzo', amount: -42_000 }],
+  };
+  const { alternates } = proposalContext(disagreeing);
+  assert.strictEqual(alternates.length, 1, `listed ${alternates.length}`);
+  assert.strictEqual(alternates[0].amount, -42_000, 'the section reading did not win');
+});
+
+check('an alternate only the context pass saw is still kept', () => {
+  // A deduct alternate is routinely too small to rank into the biggest rows, so the shortlist path
+  // would never see it. It must come through the context read regardless.
+  const contextOnly = {
+    lines: [],
+    alternateItems: [{ itemNumber: 'Alternate No. 3', description: 'Substitute epoxy terrazzo', amount: -42_000 }],
+  };
+  const { alternates } = proposalContext(contextOnly);
+  assert.strictEqual(alternates.length, 1);
+  assert.match(alternates[0].description, /Alternate No\. 3/);
 });
 
 check('a bare estimate carries no proposal context at all', () => {

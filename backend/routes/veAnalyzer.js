@@ -134,7 +134,10 @@ async function analyze({ file, projectId, projectName, orgId, createdBy }) {
       extracted.estimateDate || null,
       typeof extracted.estimateTotal === 'number' ? extracted.estimateTotal : null,
       location,
-      allWork.length, entries.length, optionCount, selection.coverage,
+      // How many priced rows the estimate actually has, where the local read counted them — not
+      // just how many were classified.
+      extracted.pricedRowCount ?? allWork.length,
+      entries.length, optionCount, selection.coverage,
       JSON.stringify(extracted), JSON.stringify(entries),
       file.originalname, key ? Buffer.alloc(0) : file.buffer, key,
       createdBy,
