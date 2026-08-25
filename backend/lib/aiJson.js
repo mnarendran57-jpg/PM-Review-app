@@ -57,7 +57,15 @@ function fillDeclaredNulls(value, schema) {
   if (!schema || typeof schema !== 'object') return unescapeStrayQuotes(value);
 
   if (schema.type === 'array') {
-    return Array.isArray(value) ? value.map(item => fillDeclaredNulls(item, schema.items)) : value;
+    // A declared array that comes back as anything else becomes an empty one. The model does not
+    // always omit a list it has nothing for — it sometimes writes the STRING "null" into it, which
+    // is truthy, so `(result.exclusions || []).filter(...)` throws rather than skipping.
+    //
+    // Found in the VE Analyzer on a plain cost estimate: no exclusions section to read, the string
+    // arrived, and the whole analysis died after the document had already been read and paid for.
+    // The failure is worst on the documents that are most ordinary, and every module here does
+    // .map or .filter straight off these lists.
+    return Array.isArray(value) ? value.map(item => fillDeclaredNulls(item, schema.items)) : [];
   }
   if (schema.type !== 'object' || !schema.properties) return unescapeStrayQuotes(value);
   // An absent object stays absent rather than becoming a hollow shell of nulls: callers
