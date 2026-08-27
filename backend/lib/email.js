@@ -29,17 +29,23 @@ function smtpTransport() {
   return transport;
 }
 
-async function send({ to, subject, html, text }) {
+// `replyTo` matters for anything a person is expected to answer. Mail sent by an application goes
+// out as EMAIL_FROM, so hitting reply on a contact-form message would write back to the application
+// rather than to whoever asked the question.
+async function send({ to, subject, html, text, replyTo }) {
   if (!isConfigured()) return { sent: false, reason: 'not-configured' };
   try {
     if (hasSmtp()) {
-      await smtpTransport().sendMail({ from: EMAIL_FROM, to, subject, html, text });
+      await smtpTransport().sendMail({ from: EMAIL_FROM, to, subject, html, text, replyTo });
       return { sent: true, via: 'smtp' };
     }
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: EMAIL_FROM, to: [to], subject, html, text }),
+      body: JSON.stringify({
+        from: EMAIL_FROM, to: [to], subject, html, text,
+        ...(replyTo ? { reply_to: [replyTo] } : {}),
+      }),
     });
     if (!res.ok) {
       const body = await res.text();
@@ -110,4 +116,38 @@ function sendPasswordReset({ to, name, link, minutes }) {
   return send({ to, subject, html, text });
 }
 
-module.exports = { isConfigured, send, sendInvitation, sendPasswordReset };
+// A message somebody typed into the Contact Us page.
+//
+// Their address goes in Reply-To rather than in From: mail providers reject or quarantine a message
+// claiming to come from a domain the sender does not control, so this is sent as Coaster's own
+// address and replies land where they should.
+function sendContactMessage({ to, name, email, message, account, org }) {
+  const who = name || email || 'Someone';
+  const subject = `Coaster contact — ${who}`;
+  const facts = [
+    `From: ${name || '(no name given)'} <${email}>`,
+    account ? `Signed in as: ${account}` : null,
+    org ? `Organization: ${org}` : null,
+  ].filter(Boolean);
+
+  const text = `${facts.join('\n')}\n\n${message}\n`;
+  const html = `
+    <div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:560px">
+      <h2 style="margin:0 0 12px">Message from the Contact Us page</h2>
+      <p style="color:#6b7280;font-size:13px;line-height:1.7;margin:0 0 16px">
+        ${facts.map(escapeHtml).join('<br>')}
+      </p>
+      <div style="color:#111827;line-height:1.7;white-space:pre-wrap;border-left:3px solid #e5e7eb;padding-left:14px">
+${escapeHtml(message)}
+      </div>
+    </div>`;
+
+  // Reply-To is the whole point: answering this should write back to them, not to Coaster.
+  return send({ to, subject, html, text, replyTo: email });
+}
+
+const escapeHtml = s => String(s ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+module.exports = { isConfigured, send, sendInvitation, sendPasswordReset, sendContactMessage };

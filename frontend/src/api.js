@@ -808,6 +808,13 @@ export const veAnalyzerApi = {
   delete: id => api.delete(`/ve-analyzer/${id}`).then(r => r.data),
 };
 
+export const contactApi = {
+  // Where messages go, and whether this deployment can actually send one. The page asks first so it
+  // can show a form that works rather than one that quietly goes nowhere.
+  details: () => api.get('/contact').then(r => r.data),
+  send: body => api.post('/contact', body).then(r => r.data),
+};
+
 // Coaster AI — the general question tab.
 //
 // Everything else here goes through axios. The answer does not: it arrives a fragment at a time,
