@@ -13,6 +13,7 @@ const { loadCover } = require('../lib/coverLookup');
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const { brandingFor } = require('../lib/orgBranding');
 const { friendlyAiError } = require('../lib/aiErrors');
+const { pageCount, firstPages, MAX_PDF_PAGES } = require('../lib/chatDocuments');
 const storage = require('../lib/storage');
 
 
@@ -82,10 +83,23 @@ router.post('/extract', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Proposal must be a PDF' });
     }
 
-    const base64 = file.buffer.toString('base64');
+    // The API refuses a PDF of more than a hundred pages outright, and refuses the whole request
+    // rather than the excess. A proposal that arrives with its specifications bound in behind it
+    // would have failed here with the provider's raw error.
+    //
+    // The fields wanted — who it is from, what it prices, how much — are on the front pages of any
+    // proposal ever written, so the first hundred are read and the rest are not. Nothing is lost
+    // from the OUTPUT: the merged package is built from the whole file, not from this.
+    const pages = await pageCount(file.buffer);
+    const readable = pages && pages > MAX_PDF_PAGES
+      ? await firstPages(file.buffer, MAX_PDF_PAGES)
+      : file.buffer;
+
+    const base64 = readable.toString('base64');
     const prompt = `You are reviewing a vendor proposal PDF for a construction project at an MEP
 consulting firm. Record the key fields with the record_proposal tool.
-
+${pages && pages > MAX_PDF_PAGES
+    ? `\nThis proposal is ${pages} pages; you are being shown the first ${MAX_PDF_PAGES}.\n` : ''}
 If any field cannot be found with confidence, use "Not specified" as its value.`;
 
     const { data: extracted } = await askForJson({

@@ -10,6 +10,7 @@ const { friendlyAiError } = require('../lib/aiErrors');
 const { chooseTier } = require('../lib/chatRouting');
 const { sweepChats, KEEP_HOURS } = require('../lib/chatHistory');
 const { toApiMessages, streamAnswer, titleFrom } = require('../lib/chatAnswer');
+const { blocksForFile } = require('../lib/chatDocuments');
 
 router.use(requireOrg);
 router.use(requireFeature('coaster-ai'));
@@ -30,6 +31,7 @@ async function sweep() {
 }
 
 const ATTACHMENT_MB = 20;
+const MAX_ATTACHMENTS = 5;
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: ATTACHMENT_MB * 1024 * 1024 },
@@ -140,6 +142,14 @@ router.post('/chats/:id/messages', async (req, res) => {
   if (!question && !attachments.length) {
     return res.status(400).json({ error: 'Type a question or attach a file.' });
   }
+  // A file is held in memory as base64 while the request is built, which is a third larger than the
+  // file itself. The service runs with a 256 MB heap, so a handful of large attachments on one
+  // message is enough to run it out — and nobody needs ten drawings to ask one question.
+  if (attachments.length > MAX_ATTACHMENTS) {
+    return res.status(400).json({
+      error: `Attach at most ${MAX_ATTACHMENTS} files to one message.`,
+    });
+  }
 
   const documentIds = safeParse(chat.document_ids, []);
   const projectDocs = chat.project_id ? await loadProjectDocuments(chat.project_id, documentIds) : [];
@@ -239,9 +249,14 @@ async function loadProjectDocuments(projectId, documentIds) {
   const out = [];
   for (const row of rows) {
     const bytes = await storage.readFile({ key: row.file_key, blob: row.file_blob }).catch(() => null);
-    if (bytes && bytes.length) {
-      out.push({ name: row.label || row.file_name, data: Buffer.from(bytes).toString('base64') });
-    }
+    if (!bytes || !bytes.length) continue;
+    const name = row.label || row.file_name || 'Project document';
+    // Read rather than looked at: a contract is there to be quoted from, and its text has no page
+    // ceiling. A 168-page contract sent as pages failed the entire conversation.
+    const blocks = await blocksForFile({
+      buffer: Buffer.from(bytes), name, mediaType: 'application/pdf', preferText: true,
+    }).catch(() => null);
+    if (blocks) out.push({ name, blocks });
   }
   return out;
 }
@@ -250,29 +265,39 @@ async function loadProjectDocuments(projectId, documentIds) {
 // lives. An attachment is written to object storage on upload and only its key is kept on the
 // message, so without this the model would be handed a conversation that talks about a drawing
 // nobody gave it.
+// Every file anyone attached anywhere in this conversation, fetched once and turned into the blocks
+// that represent it. An attachment is written to object storage on upload and only its key is kept
+// on the message, so without this the model would be handed a conversation that talks about a
+// drawing nobody gave it.
 async function loadAttachments(stored) {
   const files = stored.flatMap(row => safeParse(row.attachments, []));
-  const bytes = new Map();
+  const blocks = new Map();
   for (const file of files) {
     if (!file) continue;
     const id = file.key || file.name;
-    if (!id || bytes.has(id)) continue;
-    if (file.inline) { bytes.set(id, file.inline); continue; }
-    const buffer = await storage.readFile({ key: file.key, blob: null }).catch(() => null);
-    if (buffer && buffer.length) bytes.set(id, Buffer.from(buffer).toString('base64'));
+    if (!id || blocks.has(id)) continue;
+
+    const buffer = file.inline
+      ? Buffer.from(file.inline, 'base64')
+      : await storage.readFile({ key: file.key, blob: null }).catch(() => null);
+    if (!buffer || !buffer.length) continue;
+
+    // Not preferText: somebody who attaches a file in a chat usually means the picture — a drawing,
+    // a photograph of a detail. Only a document past the page ceiling falls back to its words.
+    const made = await blocksForFile({
+      buffer: Buffer.from(buffer), name: file.name, mediaType: file.mediaType,
+    }).catch(() => null);
+    if (made) blocks.set(id, made);
   }
-  return bytes;
+  return blocks;
 }
 
 // Content blocks for one stored message: the files first, then the words.
-function blocksFor(row, bytes) {
+function blocksFor(row, byFile) {
   const blocks = [];
   for (const file of safeParse(row.attachments, [])) {
-    const data = bytes.get(file?.key || file?.name);
-    if (!data) continue;
-    blocks.push(file.mediaType === 'application/pdf'
-      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
-      : { type: 'image', source: { type: 'base64', media_type: file.mediaType, data } });
+    const made = byFile.get(file?.key || file?.name);
+    if (made) blocks.push(...made);
   }
   return blocks;
 }
@@ -286,10 +311,7 @@ function blocksFor(row, bytes) {
 // break the cache on every turn and be paid for in full each time.
 function documentsTurn(docs) {
   if (!docs.length) return [];
-  const content = docs.map(doc => ({
-    type: 'document',
-    source: { type: 'base64', media_type: 'application/pdf', data: doc.data },
-  }));
+  const content = docs.flatMap(doc => doc.blocks);
   content.push({
     type: 'text',
     text: 'These are the project documents for this conversation: '
