@@ -111,11 +111,15 @@ function programsForUser(user, orgId) {
 }
 
 // Same rule one level down.
-function projectsForUser(user, orgId, programId = null) {
+function projectsForUser(user, orgId, programId = null, { includeArchived = false } = {}) {
   const admin = isOrgAdmin(user, orgId);
   const params = [orgId];
   let sql = `SELECT p.* FROM projects p WHERE p.org_id = ?`;
   if (programId) { sql += ` AND p.program_id = ?`; params.push(programId); }
+  // An archived project is still a project — it keeps its reviews, its documents and its history,
+  // and every direct link to it still works. It is simply not in the way. Callers that want it
+  // back ask for it, which is how the "Show archived" toggle is served.
+  if (!includeArchived) { sql += ` AND COALESCE(p.status, '') != 'Archived'`; }
   if (!admin) {
     sql += ` AND p.id IN (${VISIBLE_PROJECT_IDS})`;
     params.push(user.id, user.id);

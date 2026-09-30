@@ -221,7 +221,19 @@ export const projectsApi = {
   get: id => api.get(`/projects/${id}`).then(r => r.data),
   create: data => api.post('/projects', data).then(r => r.data),
   update: (id, data) => api.put(`/projects/${id}`, data).then(r => r.data),
-  delete: id => api.delete(`/projects/${id}`).then(r => r.data),
+
+  // Hiding a project, reversibly. Nothing is destroyed and every link to it still works.
+  archive: (id, archived = true) => api.patch(`/projects/${id}/archive`, { archived }).then(r => r.data),
+
+  // What deleting would destroy, and what it would merely unassign. Read-only, and the dialog is
+  // built from it — the delete below is refused unless the typed name matches, so this is always
+  // seen first.
+  deletionPreview: id => api.get(`/projects/${id}/deletion-preview`).then(r => r.data),
+
+  // Permanent. `confirmName` must be the project's exact name or the server refuses.
+  delete: (id, confirmName) => api.delete(`/projects/${id}`, {
+    data: { confirm_name: confirmName },
+  }).then(r => r.data),
 };
 
 // The RFI log. Same shape as the submittal log — one entry per RFI with a revision behind it

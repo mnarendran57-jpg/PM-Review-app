@@ -3,6 +3,8 @@ const router = express.Router();
 const db = require('../database');
 const access = require('../lib/access');
 const { requireOrg, requireOrgAdmin, programInOrg } = require('../middleware/auth');
+const storage = require('../lib/storage');
+const removal = require('../lib/projectRemoval');
 
 // Extra columns the project cards show. Kept separate so the two queries below stay
 // readable rather than repeating the sub-selects.
@@ -47,7 +49,8 @@ function decorate(project) {
 // Org Admin, otherwise only those they hold a Project Member row for.
 router.get('/', requireOrg, (req, res) => {
   const programId = req.query.program_id ? Number(req.query.program_id) : null;
-  res.json(access.projectsForUser(req.user, req.orgId, programId).map(decorate));
+  const includeArchived = req.query.include_archived === 'true';
+  res.json(access.projectsForUser(req.user, req.orgId, programId, { includeArchived }).map(decorate));
 });
 
 // Answering 404 rather than 403 for a project they cannot reach keeps ids unprobeable.
@@ -184,9 +187,75 @@ router.put('/:id', (req, res) => {
   res.json({ success: true });
 });
 
-router.delete('/:id', requireOrgAdmin, (req, res) => {
-  db.prepare('DELETE FROM projects WHERE id=? AND org_id=?').run(req.params.id, req.orgId);
-  res.json({ success: true });
+// Hiding a finished or mistaken project, reversibly. This is the one almost everybody wants:
+// nothing is destroyed, nothing is orphaned, and it can be undone by the same people who did it.
+router.patch('/:id/archive', requireOrgAdmin, (req, res) => {
+  const project = access.projectForUser(req.user, req.params.id);
+  if (!project || project.org_id !== req.orgId) return res.status(404).json({ error: 'Not found' });
+
+  const wanted = req.body?.archived !== false;
+  (wanted ? removal.archive : removal.restore)(project.id, req.orgId);
+  res.json({ success: true, archived: wanted });
+});
+
+// What a delete would actually cost, before anybody commits to it.
+//
+// Read-only, and the delete below refuses to run without the caller having been shown it — the two
+// are the same dialog, and a confirmation that does not say what it destroys is not a confirmation.
+router.get('/:id/deletion-preview', requireOrgAdmin, (req, res) => {
+  const project = access.projectForUser(req.user, req.params.id);
+  if (!project || project.org_id !== req.orgId) return res.status(404).json({ error: 'Not found' });
+  res.json({ projectName: project.project_name, ...removal.deletionPreview(project.id) });
+});
+
+// Deleting a project, permanently.
+//
+// Guarded three ways, because this is the only irreversible action in the application:
+//
+//   1. Org admins only, as before.
+//   2. The caller must send back the project's exact name. Not a flourish — a project is deleted
+//      from a grid of cards that look alike, and typing the name is the difference between meaning
+//      THIS one and meaning the one next to it.
+//   3. The stored files are collected BEFORE the rows go. A cascade removes the row that names a
+//      file and leaves the file in the bucket for ever; the previous version of this endpoint did
+//      exactly that, silently, on every delete.
+router.delete('/:id', requireOrgAdmin, async (req, res) => {
+  const project = access.projectForUser(req.user, req.params.id);
+  if (!project || project.org_id !== req.orgId) return res.status(404).json({ error: 'Not found' });
+
+  const typed = String(req.body?.confirm_name || '').trim();
+  if (typed !== String(project.project_name || '').trim()) {
+    return res.status(400).json({
+      error: 'Type the project name exactly as it appears to confirm the deletion.',
+      expected: project.project_name,
+    });
+  }
+
+  // Read the preview one last time, so what is reported as deleted is what was there at the moment
+  // of deletion rather than whatever the browser was shown a minute ago.
+  const preview = removal.deletionPreview(project.id);
+  const keys = removal.storedFileKeys(project.id);
+
+  db.prepare('DELETE FROM projects WHERE id=? AND org_id=?').run(project.id, req.orgId);
+
+  // After the rows, and never before: a failure here leaves files behind, which is untidy. A
+  // failure the other way round would delete files belonging to a project that still exists.
+  let filesRemoved = 0;
+  if (keys.length) {
+    try {
+      await storage.remove(keys);
+      filesRemoved = keys.length;
+    } catch (err) {
+      console.error('Project delete: files could not be removed from storage:', err);
+    }
+  }
+
+  console.log(`[projects] ${req.user?.email || 'unknown'} deleted project ${project.id} `
+    + `"${project.project_name}" (org ${req.orgId}) — `
+    + `${preview.destroyed.reduce((n, d) => n + d.count, 0)} records destroyed, `
+    + `${preview.orphaned.reduce((n, d) => n + d.count, 0)} unassigned, ${filesRemoved} files removed`);
+
+  res.json({ success: true, deleted: preview, filesRemoved });
 });
 
 // --- Project membership --------------------------------------------------------------
