@@ -808,6 +808,35 @@ export const veAnalyzerApi = {
   delete: id => api.delete(`/ve-analyzer/${id}`).then(r => r.data),
 };
 
+// Pay App Reviewer 3 — its own module, sharing no review logic with the other pay application
+// tools. The slug stays `cmar-pay-app-audit` because it is the stored feature key and the route
+// path; renaming it would orphan every saved audit and every plan that includes it.
+export const cmarAuditApi = {
+  list: params => api.get('/cmar-pay-app-audit', { params }).then(r => r.data),
+  get: id => api.get(`/cmar-pay-app-audit/${id}`).then(r => r.data),
+  // The governing documents already filed against the project, so the contract never has to be
+  // uploaded a second time.
+  contracts: projectId => api.get('/cmar-pay-app-audit/contracts', {
+    params: { project_id: projectId },
+  }).then(r => r.data),
+  create: (formData, onTick) => api.post('/cmar-pay-app-audit', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+  }).then(r => waitForJob(r.data.jobId, { onTick, base: '/cmar-pay-app-audit' })),
+  downloadPdf: async (id, fileName) => {
+    const res = await api.get(`/cmar-pay-app-audit/${id}/report.pdf`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `pay_app_audit_${id}.pdf`);
+  },
+  downloadMarkdown: async (id, fileName) => {
+    const res = await api.get(`/cmar-pay-app-audit/${id}/report.md`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `pay_app_audit_${id}.md`);
+  },
+  downloadOriginal: async (id, fileName) => {
+    const res = await api.get(`/cmar-pay-app-audit/${id}/original.pdf`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `pay_application_${id}.pdf`);
+  },
+  delete: id => api.delete(`/cmar-pay-app-audit/${id}`).then(r => r.data),
+};
+
 export const contactApi = {
   // Where messages go, and whether this deployment can actually send one. The page asks first so it
   // can show a form that works rather than one that quietly goes nowhere.

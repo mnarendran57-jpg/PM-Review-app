@@ -9,6 +9,7 @@ const FEATURES = [
   { key: 'progress-report', label: 'Progress Report' },
   { key: 'precon-review', label: 'Pre-Construction Review' },
   { key: 've-analyzer', label: 'VE Analyzer' },
+  { key: 'cmar-pay-app-audit', label: 'Pay App Reviewer 3' },
   { key: 'proposal-intake', label: 'Proposal Intake' },
   { key: 'submittal-log', label: 'Submittal Log' },
   { key: 'rfi-log', label: 'RFI Log' },

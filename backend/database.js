@@ -1523,6 +1523,56 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_chat ON ai_chat_messages(chat_id, id);
 `);
 
+// --- CMAR pay application audits ---------------------------------------------------------------
+// A pay application checked against the agreement it is billed under, on a CMAR or GMP job.
+//
+// Four JSON columns rather than a normalised set of tables, for the same reason the VE analyser
+// keeps its entries that way: an audit is a record of what was found on one day against one packet,
+// and it has to stay readable years later even after the checks themselves have changed. Normalised
+// rows would migrate with the code and quietly rewrite history; a stored document does not.
+//
+//   packet_json     what was transcribed off the forms
+//   terms_json      what the contract said (null on a math-only check)
+//   checks_json     the arithmetic findings, which are deterministic and reproducible
+//   judgement_json  the calls arithmetic cannot make
+//
+// The counts are denormalised onto the row so the list can show how an audit came out without
+// parsing four documents per entry.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cmar_audits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER,
+    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    project_name TEXT,
+    contractor TEXT,
+    owner_name TEXT,
+    application_number TEXT,
+    period_to TEXT,
+    payment_due REAL,
+    contract_sum_to_date REAL,
+    completed_to_date REAL,
+    math_only INTEGER DEFAULT 0,
+    contract_id INTEGER REFERENCES project_contracts(id) ON DELETE SET NULL,
+    contract_name TEXT,
+    issue_count INTEGER DEFAULT 0,
+    note_count INTEGER DEFAULT 0,
+    unchecked_count INTEGER DEFAULT 0,
+    tax_total REAL DEFAULT 0,
+    packet_json TEXT NOT NULL,
+    checks_json TEXT NOT NULL,
+    judgement_json TEXT,
+    terms_json TEXT,
+    packet_file_name TEXT,
+    packet_file BLOB,
+    packet_file_key TEXT,
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_cmar_audits_project ON cmar_audits(project_id);
+  CREATE INDEX IF NOT EXISTS idx_cmar_audits_org ON cmar_audits(org_id);
+`);
+
 // --- AI work that outlives its request ------------------------------------------------------
 // Reading a pay application or a drawing set takes minutes. Held inside an HTTP request, that is a
 // race against every timeout between the browser and the server — and losing it did not just show

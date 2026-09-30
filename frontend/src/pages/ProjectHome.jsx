@@ -3,7 +3,7 @@ import {
   InboxArrowDownIcon, DocumentMagnifyingGlassIcon, ClipboardDocumentCheckIcon,
   ScaleIcon, ArrowRightIcon, ReceiptPercentIcon, CameraIcon,
   ClipboardDocumentListIcon, QuestionMarkCircleIcon, CheckCircleIcon, FolderOpenIcon,
-  LightBulbIcon,
+  LightBulbIcon, ShieldCheckIcon,
 } from '@heroicons/react/24/outline';
 import { useProject } from '../context/ProjectContext';
 import { usePlanFeatures } from '../hooks/usePlanFeatures';
@@ -38,6 +38,9 @@ const TOOLS = [
   { slug: 've-analyzer', label: 'VE Analyzer',
     description: 'Upload a cost estimate and get alternatives your client can take to their architect.',
     icon: LightBulbIcon, bg: 'linear-gradient(135deg, #6366f1, #4f46e5)', glow: 'rgba(99,102,241,0.28)' },
+  { slug: 'cmar-pay-app-audit', label: 'Pay App Reviewer 3',
+    description: 'Audit a pay application against the contract it is billed under — math, backup, notary and tax.',
+    icon: ShieldCheckIcon, bg: 'linear-gradient(135deg, #2563eb, #1d4ed8)', glow: 'rgba(37,99,235,0.28)' },
   { slug: 'submittal-log', label: 'Submittal Log',
     description: 'Track every submittal from the contractor to the A/E and back, with each revision on the record.',
     icon: ClipboardDocumentListIcon, bg: 'linear-gradient(135deg, #a78bfa, #7c3aed)', glow: 'rgba(139,92,246,0.28)' },

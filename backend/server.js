@@ -49,6 +49,7 @@ app.use('/api/invoice-review', require('./routes/invoiceReview'));
 app.use('/api/progress-report', require('./routes/progressReport'));
 app.use('/api/precon-review', require('./routes/preconReview'));
 app.use('/api/ve-analyzer', require('./routes/veAnalyzer'));
+app.use('/api/cmar-pay-app-audit', require('./routes/cmarPayAppAudit'));
 app.use('/api/coaster-ai', require('./routes/coasterAi'));
 app.use('/api/contact', require('./routes/contact'));
 

@@ -24,7 +24,8 @@ const check = (name, ok, detail = '') => {
 const rows = r => (Array.isArray(r.body) ? r.body.length : 0);
 
 const TOOLS = ['/pay-app-review', '/progress-report', '/proposal-intake',
-               '/precon-review', '/invoice-review', '/pco-review', '/ve-analyzer'];
+               '/precon-review', '/invoice-review', '/pco-review', '/ve-analyzer',
+               '/cmar-pay-app-audit'];
 
 async function main() {
   // A throwaway organization with its own admin, entirely unrelated to the real data.

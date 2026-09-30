@@ -12,6 +12,7 @@ import InvoiceReview from './InvoiceReview';
 import ProgressReport from './ProgressReport';
 import PreconReview from './PreconReview';
 import VeAnalyzer from './VeAnalyzer';
+import CmarPayAppAudit from './CmarPayAppAudit';
 import SubmittalLog from './SubmittalLog';
 import RfiLog from './RfiLog';
 import MeetingActions from './MeetingActions';
@@ -50,6 +51,7 @@ export default function ProjectWorkspace() {
             <Route path="progress-report" element={<ProgressReport />} />
             <Route path="precon-review" element={<PreconReview />} />
             <Route path="ve-analyzer" element={<VeAnalyzer />} />
+            <Route path="cmar-pay-app-audit" element={<CmarPayAppAudit />} />
             <Route path="submittal-log" element={<SubmittalLog />} />
             <Route path="rfi-log" element={<RfiLog />} />
             <Route path="meeting-actions" element={<MeetingActions />} />
