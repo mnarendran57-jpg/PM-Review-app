@@ -842,6 +842,14 @@ export const cmarAuditApi = {
     const res = await api.get(`/cmar-pay-app-audit/${id}/report.md`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `pay_app_audit_${id}.md`);
   },
+  // The contractor's own packet with the findings circled on it. Reading the page positions
+  // takes a moment on a long packet, so this one gets the longer timeout.
+  downloadMarkedUp: async (id, fileName) => {
+    const res = await api.get(`/cmar-pay-app-audit/${id}/marked-up.pdf`, {
+      responseType: 'blob', timeout: AI_TIMEOUT,
+    });
+    triggerDownload(res.data, fileName || `marked_up_packet_${id}.pdf`);
+  },
   downloadOriginal: async (id, fileName) => {
     const res = await api.get(`/cmar-pay-app-audit/${id}/original.pdf`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `pay_application_${id}.pdf`);

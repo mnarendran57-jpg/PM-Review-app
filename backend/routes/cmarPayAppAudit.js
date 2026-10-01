@@ -14,6 +14,7 @@ const { runChecks } = require('../lib/cmarChecks');
 const { judge } = require('../lib/cmarJudgement');
 const { buildReport } = require('../lib/cmarReport');
 const { renderCmarReportPdf } = require('../lib/cmarReportPdf');
+const { buildMarkedUpPacket } = require('../lib/cmarAnnotate');
 
 // The CMAR pay application audit.
 //
@@ -246,6 +247,35 @@ router.get('/:id/report.pdf', async (req, res) => {
   } catch (err) {
     console.error('CMAR report PDF error:', err);
     res.status(500).json({ error: 'The report could not be produced.' });
+  }
+});
+
+// The contractor's own packet with the findings circled on it.
+//
+// Built here rather than stored: it is derived from the audit and the original upload, both of
+// which are kept, so a second copy of a long packet in object storage buys nothing — and reading
+// the page positions is the heaviest thing this module does, which is better spent on a download
+// than added to every audit's memory peak.
+router.get('/:id/marked-up.pdf', async (req, res) => {
+  const row = visibleRow(req);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  try {
+    const original = await storage.readFile({ key: row.packet_file_key, blob: row.packet_file });
+    if (!original) return res.status(404).json({ error: 'The original packet is no longer on file.' });
+
+    const { report } = recordView(row);
+    const { buffer, findingCount, placedCount } = await buildMarkedUpPacket({ pdfBuffer: original, report });
+
+    console.log(`[cmar] marked-up packet for audit ${row.id}: `
+      + `${placedCount}/${findingCount} findings placed on the page`);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition',
+      `attachment; filename="Marked_Up_${safeName(row.project_name)}_${safeName(row.application_number || '')}.pdf"`);
+    res.send(buffer);
+  } catch (err) {
+    console.error('CMAR marked-up PDF error:', err);
+    res.status(500).json({ error: 'The marked-up packet could not be produced.' });
   }
 });
 

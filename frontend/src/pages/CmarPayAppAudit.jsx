@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   ShieldCheckIcon, SparklesIcon, ArrowDownTrayIcon, TrashIcon, ClockIcon,
   CloudArrowUpIcon, DocumentTextIcon, CheckCircleIcon, XCircleIcon,
-  ExclamationTriangleIcon, QuestionMarkCircleIcon,
+  ExclamationTriangleIcon, QuestionMarkCircleIcon, PencilSquareIcon,
 } from '@heroicons/react/24/outline';
 import { cmarAuditApi } from '../api';
 import { useProject } from '../context/ProjectContext';
@@ -83,6 +83,10 @@ function HistoryItem({ item, onView, onDelete }) {
 function AuditView({ record, onClose, onNew }) {
   const r = record.report;
   const h = record.header || {};
+  // Marking up reads the position of every figure on every page, which takes a moment on a long
+  // packet — so the button says so rather than appearing to do nothing.
+  const [marking, setMarking] = useState(false);
+  const [markError, setMarkError] = useState('');
 
   return (
     <>
@@ -97,19 +101,52 @@ function AuditView({ record, onClose, onNew }) {
               h.mathOnly ? 'math check only' : h.contractName].filter(Boolean).join(' · ')}
           </p>
         </div>
+        {/* Two outputs, and they answer different questions. The REVIEW is what is wrong; the
+            MARKED-UP PACKET is where — the contractor's own pages with each figure circled and a
+            comment attached, which is what a reviewer actually works from and what goes back to
+            the contractor. The untouched original stays available because a marked-up copy is an
+            opinion written on somebody else's document, and the clean one is the record. */}
         <div className="flex items-center gap-2 flex-shrink-0 ml-4">
-          <button className="btn-primary px-3 py-1.5" onClick={() => cmarAuditApi.downloadPdf(record.id)}>
-            <ArrowDownTrayIcon className="w-4 h-4" /> Download PDF
+          <button className="btn-primary px-3 py-1.5" disabled={marking}
+            onClick={() => cmarAuditApi.downloadPdf(record.id)}>
+            <ArrowDownTrayIcon className="w-4 h-4" /> Review PDF
           </button>
-          <button className="btn-secondary px-3 py-1.5"
+          <button className="btn-primary px-3 py-1.5" disabled={marking}
+            title="The contractor's packet with every finding circled on the page it belongs to"
+            onClick={async () => {
+              setMarking(true);
+              setMarkError('');
+              try {
+                await cmarAuditApi.downloadMarkedUp(record.id);
+              } catch {
+                setMarkError('The marked-up packet could not be produced. The review PDF above is unaffected.');
+              } finally {
+                setMarking(false);
+              }
+            }}>
+            {marking
+              ? <><svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+              </svg> Marking up…</>
+              : <><PencilSquareIcon className="w-4 h-4" /> Marked-Up Packet</>}
+          </button>
+          <button className="btn-secondary px-3 py-1.5" title="The packet exactly as the contractor sent it"
             onClick={() => cmarAuditApi.downloadOriginal(record.id, record.packet_file_name)}>
-            Packet
+            Original
           </button>
           <button className="btn-secondary px-3 py-1.5" onClick={onClose || onNew}>
             {onClose ? 'Close' : 'New'}
           </button>
         </div>
       </div>
+
+      {markError && (
+        <div className="p-3 rounded-xl text-sm"
+          style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c' }}>
+          {markError}
+        </div>
+      )}
 
       {/* The verdict, first and unmissable. */}
       <div className="card p-5" style={{
