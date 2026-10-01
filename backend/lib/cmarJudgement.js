@@ -47,42 +47,41 @@ const JUDGEMENT_TOOL = {
                 + 'one, change-order draws in a contingency or allowance bucket. List them all.',
               items: { type: 'string' },
             },
-            // THE RETAINAGE-BASIS TRAP.
+            // NOTHING HERE IS A SUM.
             //
-            // A subcontractor's G702 "AMOUNT CERTIFIED" is the payment due — NET of retainage. The
-            // prime's G703 "THIS APPLICATION" column is GROSS. Compared directly, every
-            // subcontractor on a 5% job shows a variance of exactly 5% of their billing, and a PM
-            // shown four phantom variances stops reading the ones that are real.
+            // Two traps live in this one comparison, and both were hit on a real packet.
             //
-            // So both figures are asked for separately and named by their basis, and whether they
-            // tie is decided in code from the gross pair. The model is not asked to hold the
-            // distinction in its head while also doing the subtraction.
-            subGrossThisPeriod: {
-              type: 'number',
-              description: 'What this firm billed this period BEFORE retainage — the total of their '
-                + 'own G703 "this period" column, or their G702 Line 4 progression. Gross, not the '
-                + 'amount certified.',
-            },
-            subAmountCertified: {
-              type: 'number',
-              description: 'The AMOUNT CERTIFIED / payment due on this firm\'s own G702 — which is '
-                + 'normally NET of their retainage. Record it as printed; it is cross-checked '
-                + 'against the gross figure rather than compared to the prime\'s schedule directly.',
-            },
-            sovThisPeriod: {
-              type: 'number',
-              description: 'What the matched schedule-of-values item(s) on the PRIME\'s continuation '
-                + 'sheet show this period, added up. This column is gross.',
+            // THE BASIS. A subcontractor's G702 "AMOUNT CERTIFIED" is the payment due, NET of
+            // retainage; the prime's G703 column is GROSS. Compared directly, every subcontractor
+            // on a 5% job shows a variance of exactly 5% of their billing.
+            //
+            // THE SUBTOTALS. Asking for the firm's own billing "added up" returned exactly double
+            // for all four subcontractors on a 67-page packet: their continuation sheets carry
+            // subtotal rows, and those were added to the detail rows that produced them. Four
+            // firms reconciling to the penny were each reported as a variance — the precise
+            // failure this reconciliation exists to prevent.
+            //
+            // So the model is asked for no arithmetic at all. It says WHICH prime rows belong to
+            // this firm; every total is computed in code from the transcription, where subtotal
+            // rows are excluded by a flag rather than by judgement.
+            sovRowIndexes: {
+              type: 'array',
+              description: 'The index numbers, from the SCHEDULE OF VALUES list you were given, of '
+                + 'every row this firm\'s billing belongs to. A firm is often spread across '
+                + 'several — base scope in one row, change-order draws in separate allowance or '
+                + 'contingency rows — and one change event can appear more than once, under each '
+                + 'allowance it draws from. List every one. Do not add them up.',
+              items: { type: 'integer' },
             },
             explanation: {
               type: 'string',
-              description: 'What the relationship between this firm and those line items is, in one '
-                + 'or two sentences — including when you could not find a matching line at all, '
-                + 'which is a different problem from one that disagrees. Do not state whether the '
-                + 'figures tie; that is worked out from the numbers you record.',
+              description: 'What the relationship between this firm and those rows is, in one or '
+                + 'two sentences — including when you could find no matching row at all, which is '
+                + 'a different problem from one that disagrees. Do not say whether anything ties; '
+                + 'that is worked out from the rows you name.',
             },
           },
-          required: ['firmName', 'ties'],
+          required: ['firmName', 'sovRowIndexes'],
         },
       },
       untraceable: {
@@ -250,23 +249,29 @@ function describePacket(packet, checks, terms) {
 
 async function judge({ packet, checks, terms }) {
   const text = describePacket(packet, checks, terms);
-  return askForJson({
+  const { data } = await askForJson({
     content: [{
       type: 'text',
       text: `${text}\n\n---\n\nRecord your judgement using the tool.\n\n`
-        + 'Match each subcontractor to the schedule-of-values line items their billing should land '
-        + 'in, by firm name and scope. Remember that one firm\'s billing is often split across '
-        + 'several items. Then look at the invoices for anything inflated, duplicated or out of '
-        + 'scope, and write the action checklist.\n\n'
+        + 'For each subcontractor, give the INDEX NUMBERS of every schedule-of-values row their '
+        + 'billing belongs to, using the numbers in square brackets above. Match on firm and '
+        + 'scope, not on amount — the names rarely agree between the two documents, and a firm is '
+        + 'commonly spread across a base scope row plus one row per allowance its change orders '
+        + 'draw from. Each firm\'s gross figure for this period is printed beside it: check that '
+        + 'the rows you pick account for it, and keep looking if they do not. Do not add anything '
+        + 'up — the totals are computed from the indexes you give.\n\n'
+        + 'Then look at the invoices for anything inflated, duplicated or out of scope, and write '
+        + 'the action checklist.\n\n'
         + (terms ? '' : 'No contract was provided. Say so in the summary, and do not speculate about '
           + 'contracted rates, tax exemption or change-order limits — note them as unchecked instead.'),
     }],
     tool: JUDGEMENT_TOOL,
     system: SYSTEM,
     cacheTool: true,
-    maxTokens: 8000,
+    maxTokens: 16000,
     label: 'cmar judgement',
   });
+  return data;
 }
 
 module.exports = { judge, describePacket, JUDGEMENT_TOOL };

@@ -223,7 +223,9 @@ const READ_SYSTEM = 'You are reading a construction pay application packet so it
 // across calls would throw it away.
 async function readPacket(buffer, name) {
   const blocks = await blocksForFile({ buffer, name });
-  return askForJson({
+  // askForJson answers with an envelope — { data, usage, stopReason } — and the caller wants the
+  // transcription. Returning the envelope made every field the audit reads come back undefined.
+  const { data } = await askForJson({
     content: [
       ...blocks,
       {
@@ -238,9 +240,18 @@ async function readPacket(buffer, name) {
     tool: READ_TOOL,
     system: READ_SYSTEM,
     cacheTool: true,
-    maxTokens: 16000,
+    // A full packet transcribes into a lot of fields: a hundred schedule-of-values rows, each
+    // subcontractor's own continuation sheet, and every invoice in the backup. At 16,000 the
+    // ceiling was reached before the sheet was finished and the whole read failed. This is the
+    // model's maximum, and it costs nothing unless it is used.
+    maxTokens: 64000,
+    // The packet transcription is the one answer in this module long enough to need streaming.
+    stream: true,
     label: 'cmar read',
+    truncatedMessage: 'This packet is longer than one reading pass can transcribe. '
+      + 'Nothing was saved — tell us about it, as this is a case worth handling properly.',
   });
+  return data;
 }
 
 // --- The contract ------------------------------------------------------------------------
@@ -361,7 +372,7 @@ async function readContractTerms(buffer, name) {
   // signed pay app does, and at a fraction of the tokens. blocksForFile falls back to pages on its
   // own when the text is missing or illegible, so a scanned contract still works.
   const blocks = await blocksForFile({ buffer, name, preferText: true });
-  return askForJson({
+  const { data } = await askForJson({
     content: [
       ...blocks,
       {
@@ -374,9 +385,10 @@ async function readContractTerms(buffer, name) {
     tool: CONTRACT_TOOL,
     system: CONTRACT_SYSTEM,
     cacheTool: true,
-    maxTokens: 8000,
+    maxTokens: 16000,
     label: 'cmar contract',
   });
+  return data;
 }
 
 module.exports = { readPacket, readContractTerms, READ_TOOL, CONTRACT_TOOL };

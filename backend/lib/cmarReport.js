@@ -145,6 +145,10 @@ function buildReport({ header, packet, checks, judgement, terms }) {
       // invents a variance of exactly the retainage rate on every subcontractor at once.
       const match = reconcileSub(raw, {
         retainagePercent: terms?.retainagePercent ?? packet.retainagePercent ?? sub.retainagePercent ?? null,
+        // The transcription itself, so both sides of the comparison are added up from rows rather
+        // than taken as totals from the model.
+        sub,
+        primeRows: packet.sovRows,
       });
       return {
         ...match,

@@ -60,6 +60,17 @@ function compare({ section, title, stated, computed, formula, amountLabel = 'Dif
 // single most common way a reconciliation comes out wrong for a reason that is not a real finding.
 const workRows = rows => (Array.isArray(rows) ? rows : []).filter(r => r && !r.isSubtotal);
 
+// The rows a subcontractor's billing can be matched to, in one fixed order.
+//
+// Both the prompt and the reconciliation index into THIS list, so an index means the same row on
+// both sides. They did not agree before: the prompt numbered every work row but printed only the
+// active ones, so the model saw brackets like [0] [2] [7] and matched by position in what it could
+// see. Sendero came back matched to a GreenScape row. One list, built once, removes the whole
+// class of error.
+const matchableRows = rows => workRows(rows)
+  .filter(r => (typeof r.thisPeriod === 'number' && r.thisPeriod)
+    || (typeof r.completedToDate === 'number' && r.completedToDate));
+
 const sumOf = (rows, field) => workRows(rows)
   .reduce((total, r) => (has(r[field]) ? total + r[field] : total), 0);
 
@@ -540,6 +551,86 @@ function changeOrderChecks(packet, terms) {
   return out;
 }
 
+// --- Finding a firm's rows on the prime's schedule ------------------------------------------------
+
+// The names never agree between the two documents. On a real packet the schedule said "IDR",
+// "GreenScape" and "Greenrise" while the applications said "Integrated Demolition and Remediation
+// Inc.", "Greenscape Associates" and "GREENRISE TECHNOLOGIES LLC FKA CONSTRUCTION ECO SERVICES II
+// LLC" — and one of those firms was spread over eleven rows.
+//
+// Asked to match them, the model got every firm wrong or partly wrong. The reason is not that the
+// task is hard to understand: it is that the task is exhaustive search over seventy-five rows plus
+// addition, which is what code is for. What the schedule actually carries is the firm's SHORT
+// NAME, written into the row description — "Earthwork (Building Pad) - Sendero", "AEA 08 CPR 009 -
+// Additional Pier Removal (IDR)". So the aliases are derived from the firm name, every row is
+// searched for each, and the arithmetic settles which alias was the right one.
+//
+// Words that identify nobody. "Industries", "Associates" and "Technologies" appear in half the
+// firm names on a job and would match rows belonging to other trades.
+const FIRM_NOISE = new Set([
+  'inc', 'llc', 'ltd', 'lp', 'llp', 'co', 'company', 'corp', 'corporation', 'the', 'and', 'of',
+  'industries', 'associates', 'technologies', 'services', 'service', 'group', 'enterprises',
+  'contractors', 'contracting', 'construction', 'constructors', 'systems', 'solutions', 'fka',
+  'dba', 'ii', 'iii', 'a', 'l',
+]);
+
+const firmWords = name => String(name || '')
+  .toLowerCase()
+  .replace(/[^a-z0-9 ]/g, ' ')
+  .split(/\s+/)
+  .filter(w => w && !FIRM_NOISE.has(w));
+
+// What this firm might be called on the schedule: each distinctive word, and the initials of those
+// words — which is how "Integrated Demolition and Remediation" becomes "IDR".
+function aliasesFor(firmName, extra = null) {
+  const words = firmWords(firmName);
+  const acronym = words.map(w => w[0]).join('');
+  const candidates = [
+    ...(extra ? [String(extra).toLowerCase().trim()] : []),
+    ...words.filter(w => w.length > 3),
+    ...(acronym.length >= 2 ? [acronym] : []),
+  ];
+  return [...new Set(candidates.filter(a => a && a.length >= 2))];
+}
+
+// Rows whose description mentions this alias as a word of its own, so "idr" does not match
+// "bridge" and "sendero" does not match a longer word containing it.
+const escapeRe = text => String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const rowsMatching = (rows, alias) => {
+  const re = new RegExp(`(^|[^a-z0-9])${escapeRe(alias)}([^a-z0-9]|$)`, 'i');
+  return rows.filter(r => re.test(String(r.description || '')));
+};
+
+// The firm's rows on the prime's schedule, and how confident that is.
+//
+// When one alias's rows add up to exactly what the firm billed, that is not a guess — two
+// independent documents agreeing to the penny is about as strong as evidence gets in a pay
+// application. Where nothing adds up exactly, the fullest match is offered and said to be
+// approximate rather than presented as fact.
+function findFirmRows(firmName, primeRows, { gross = null, alias = null } = {}) {
+  const rows = matchableRows(primeRows);
+  if (!rows.length) return { rows: [], total: null, alias: null, exact: false };
+
+  const tried = aliasesFor(firmName, alias)
+    .map(a => {
+      const hit = rowsMatching(rows, a);
+      const total = Math.round(hit.reduce((t, r) => t + (num(r.thisPeriod) || 0), 0) * 100) / 100;
+      return { alias: a, rows: hit, total };
+    })
+    .filter(t => t.rows.length);
+
+  if (!tried.length) return { rows: [], total: null, alias: null, exact: false };
+
+  const exact = has(gross) && tried.find(t => near(t.total, gross));
+  if (exact) return { ...exact, exact: true };
+
+  // Otherwise the alias that accounts for the most money, which is the one most likely to be the
+  // firm's real short name rather than a word that happens to appear somewhere.
+  const best = [...tried].sort((a, b) => Math.abs(b.total) - Math.abs(a.total))[0];
+  return { ...best, exact: false };
+}
+
 // --- Reconciling a subcontractor to the prime's schedule of values --------------------------------
 
 // THE TRAP THIS EXISTS FOR
@@ -552,11 +643,47 @@ function changeOrderChecks(packet, terms) {
 // application is worse than no reviewer at all, because the PM stops reading the findings — and the
 // next one is real. So the comparison is made here, in code, from the gross pair, rather than being
 // left to a model holding the distinction in its head while also doing the subtraction.
-function reconcileSub(match, { retainagePercent = null } = {}) {
+function reconcileSub(match, { retainagePercent = null, sub = null, primeRows = null } = {}) {
   const rate = num(retainagePercent);
-  const certified = num(match.subAmountCertified);
-  const sov = num(match.sovThisPeriod);
-  let gross = num(match.subGrossThisPeriod);
+
+  // Both sides are added up HERE, from rows the model transcribed but did not total. On a real
+  // packet, asking it for the totals returned exactly double for all four subcontractors: their
+  // continuation sheets carry subtotal rows that repeat the detail. workRows drops those by the
+  // flag recorded during transcription, which is a fact about each row rather than a judgement
+  // made while adding.
+  const fromRows = rows => {
+    const work = workRows(rows);
+    if (!work.length) return null;
+    const total = work.reduce((t, r) => t + (num(r.thisPeriod) || 0), 0);
+    return Math.round(total * 100) / 100;
+  };
+
+  const certified = num(sub?.certificate?.line8CurrentPaymentDue) ?? num(match.subAmountCertified);
+
+  let gross = fromRows(sub?.sovRows) ?? num(match.subGrossThisPeriod);
+
+  // The prime's side, found by searching every row for the firm's short name. See findFirmRows:
+  // this is exhaustive search plus addition over seventy-five rows, which code does exactly and a
+  // model does not. The firm's own gross is handed in, so an alias whose rows add up to it can be
+  // recognised as the right one rather than merely the plausible one.
+  let found = Array.isArray(primeRows)
+    ? findFirmRows(match.firmName, primeRows, { gross, alias: match.sovAlias })
+    : { rows: [], total: null, exact: false };
+
+  let sov = found.total;
+  let matchedRows = found.rows;
+
+  // Only if no alias matched anything: the indexes the model named. A firm genuinely absent from
+  // the schedule has no alias to find, and this is what distinguishes that from a naming quirk.
+  if (!has(sov) && Array.isArray(match.sovRowIndexes)) {
+    const work = matchableRows(primeRows || []);
+    const picked = [...new Set(match.sovRowIndexes)].map(i => work[i]).filter(Boolean);
+    if (picked.length) {
+      matchedRows = picked;
+      sov = Math.round(picked.reduce((t, r) => t + (num(r.thisPeriod) || 0), 0) * 100) / 100;
+    }
+  }
+  if (!has(sov)) sov = num(match.sovThisPeriod);
   let derived = false;
 
   // The sub's form may only show the certified figure. Grossing it back up is exact when the rate
@@ -591,9 +718,18 @@ function reconcileSub(match, { retainagePercent = null } = {}) {
     }
   }
 
+  const names = matchedRows.length
+    ? [...new Set(matchedRows.map(r => r.description).filter(Boolean))]
+    : (match.sovItems || []);
+
   return {
     ...match,
+    sovItems: names,
+    matchedBy: found.alias || (matchedRows.length ? 'the rows identified in the packet' : null),
+    matchExact: !!found.exact,
     subGrossThisPeriod: gross,
+    subAmountCertified: certified,
+    sovThisPeriod: sov,
     ties,
     variance,
     basis: 'gross',
@@ -647,6 +783,7 @@ function runChecks(packet, terms = null) {
 }
 
 module.exports = {
-  runChecks, certificateChecks, taxChecks, parseDate, reconcileSub,
+  runChecks, certificateChecks, taxChecks, parseDate, reconcileSub, matchableRows,
+  findFirmRows, aliasesFor,
   workRows, sumOf, PASS, FAIL, NOTE, UNKNOWN, ROUNDING_TOLERANCE,
 };

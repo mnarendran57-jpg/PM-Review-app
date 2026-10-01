@@ -1,5 +1,8 @@
 const assert = require('assert');
-const { runChecks, reconcileSub, PASS, FAIL, NOTE, UNKNOWN } = require('../lib/cmarChecks');
+const {
+  runChecks, reconcileSub, findFirmRows, aliasesFor,
+  PASS, FAIL, NOTE, UNKNOWN,
+} = require('../lib/cmarChecks');
 const { buildReport, HEADLINE_QUESTIONS } = require('../lib/cmarReport');
 const { renderCmarReportPdf } = require('../lib/cmarReportPdf');
 
@@ -547,6 +550,114 @@ check('with nothing comparable, it says so rather than guessing', () => {
   const out = reconcileSub({ firmName: 'Mystery Co', sovThisPeriod: 1000 }, {});
   assert.strictEqual(out.ties, null);
   assert.strictEqual(out.basis, 'not-comparable');
+});
+
+console.log('\nFinding a firm on the prime schedule, by the name the schedule uses:');
+
+// The four firms from the Carver High School packet, with the names each document actually uses.
+// The schedule and the applications never agree, and one firm is spread over eleven rows.
+const CARVER_ROWS = [
+  { description: 'Earthwork (Building Pad) - Sendero', thisPeriod: 170216, scheduledValue: 500000, isSubtotal: false },
+  { description: 'Tree Protection - GreenScape', thisPeriod: 4959.36, scheduledValue: 20000, isSubtotal: false },
+  { description: 'BC-32.91 Watering, Protection Maintenance - GreenScape', thisPeriod: 2841.64, scheduledValue: 20000, isSubtotal: false },
+  { description: 'Abatement - Greenrise', thisPeriod: 1120, scheduledValue: 9000, isSubtotal: false },
+  { description: 'AEA 11 CPR 010 - Unforseen Asbestos - Underground Pipe (IDR)', thisPeriod: 18046, scheduledValue: 18046, isSubtotal: false, isContingencyOrAllowance: true },
+  { description: 'AEA 08 CPR 009 - Additional Pier Removal (IDR)', thisPeriod: 7040, scheduledValue: 7040, isSubtotal: false, isContingencyOrAllowance: true },
+  { description: 'AEA 11 CPR 010 - Unforseen Asbestos - Underground Pipe (IDR)', thisPeriod: 6393, scheduledValue: 6393, isSubtotal: false, isContingencyOrAllowance: true },
+  { description: 'AEA 11 CPR 010 - Unforseen Asbestos - Underground Pipe (IDR)', thisPeriod: 5256, scheduledValue: 5256, isSubtotal: false, isContingencyOrAllowance: true },
+  // Another trade entirely. Nothing below may pull this in.
+  { description: 'Structural Steel Erection - Ironworks Industries', thisPeriod: 92000, scheduledValue: 400000, isSubtotal: false },
+  { description: 'TOTAL', thisPeriod: 307872, scheduledValue: 978735, isSubtotal: true },
+];
+
+check('an acronym finds a firm the schedule abbreviates', () => {
+  // "Integrated Demolition and Remediation Inc." appears on the schedule only as "IDR", across
+  // four separate allowance rows. Matching on words finds nothing; matching on initials finds it.
+  const found = findFirmRows('Integrated Demolition and Remediation Inc.', CARVER_ROWS, { gross: 36735 });
+  assert.strictEqual(found.alias, 'idr');
+  assert.strictEqual(found.total, 36735);
+  assert.strictEqual(found.rows.length, 4);
+  assert.strictEqual(found.exact, true);
+});
+
+check('a firm spread across several rows is found whole', () => {
+  const found = findFirmRows('Greenscape Associates', CARVER_ROWS, { gross: 7801 });
+  assert.strictEqual(found.total, 7801);
+  assert.strictEqual(found.rows.length, 2, 'both GreenScape rows, not just the larger one');
+});
+
+check('a firm named in one row is found exactly', () => {
+  const found = findFirmRows('Sendero Industries, L.L.C.', CARVER_ROWS, { gross: 170216 });
+  assert.strictEqual(found.total, 170216);
+  assert.strictEqual(found.rows.length, 1);
+});
+
+check('a renamed firm is found by the part of its name that is used', () => {
+  const found = findFirmRows(
+    'GREENRISE TECHNOLOGIES LLC FKA CONSTRUCTION ECO SERVICES II LLC', CARVER_ROWS, { gross: 1120 },
+  );
+  assert.strictEqual(found.total, 1120);
+  assert.strictEqual(found.alias, 'greenrise');
+});
+
+check('a generic word in a firm name does not drag in another trade', () => {
+  // "Industries" appears in both Sendero's and Ironworks' names. Matching on it would hand
+  // Sendero the steel erection row and invent a six-figure variance.
+  const found = findFirmRows('Sendero Industries, L.L.C.', CARVER_ROWS, { gross: 170216 });
+  assert.ok(!found.rows.some(r => /Ironworks/.test(r.description)),
+    'a noise word must not match a different firm');
+  assert.ok(!aliasesFor('Sendero Industries, L.L.C.').includes('industries'));
+});
+
+check('subtotal rows are never matched to a firm', () => {
+  const found = findFirmRows('Integrated Demolition and Remediation Inc.', CARVER_ROWS, { gross: 36735 });
+  assert.ok(!found.rows.some(r => r.isSubtotal));
+});
+
+check('the four real firms all reconcile to zero, as the gold standard requires', () => {
+  const cases = [
+    ['Sendero Industries, L.L.C.', 170216],
+    ['Integrated Demolition and Remediation Inc.', 36735],
+    ['Greenscape Associates', 7801],
+    ['GREENRISE TECHNOLOGIES LLC FKA CONSTRUCTION ECO SERVICES II LLC', 1120],
+  ];
+  for (const [firm, gross] of cases) {
+    // Their own sheet: detail rows plus the subtotal row that repeats them, which is what made
+    // every one of these read as double before.
+    const sub = {
+      firmName: firm,
+      sovRows: [
+        { description: 'work', thisPeriod: gross, isSubtotal: false },
+        { description: 'TOTAL', thisPeriod: gross, isSubtotal: true },
+      ],
+      certificate: { line8CurrentPaymentDue: Math.round(gross * 0.95 * 100) / 100 },
+    };
+    const out = reconcileSub({ firmName: firm }, { retainagePercent: 5, sub, primeRows: CARVER_ROWS });
+    assert.strictEqual(out.subGrossThisPeriod, gross, `${firm}: gross should be ${gross}, got ${out.subGrossThisPeriod}`);
+    assert.strictEqual(out.variance, 0, `${firm}: variance should be 0, got ${out.variance}`);
+    assert.strictEqual(out.ties, true, `${firm} should reconcile`);
+  }
+});
+
+check('a firm genuinely not on the schedule is reported, not invented', () => {
+  const out = reconcileSub({ firmName: 'Nowhere Plumbing Co' }, {
+    retainagePercent: 5,
+    sub: { sovRows: [{ description: 'work', thisPeriod: 5000, isSubtotal: false }] },
+    primeRows: CARVER_ROWS,
+  });
+  assert.strictEqual(out.ties, null, 'with no row to compare against, there is no verdict to give');
+});
+
+check('a real overbilling still shows once the matching is right', () => {
+  const sub = {
+    firmName: 'Sendero Industries, L.L.C.',
+    sovRows: [{ description: 'work', thisPeriod: 190216, isSubtotal: false }],   // $20,000 over
+  };
+  const out = reconcileSub({ firmName: 'Sendero Industries, L.L.C.' }, {
+    retainagePercent: 5, sub, primeRows: CARVER_ROWS,
+  });
+  assert.strictEqual(out.ties, false);
+  assert.strictEqual(out.variance, 20000);
 });
 
 console.log('\nThe prime certificate from the gold-standard case:');

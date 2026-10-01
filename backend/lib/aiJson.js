@@ -99,9 +99,19 @@ function fillDeclaredNulls(value, schema) {
 //                    call for different things from the user.
 // One place that actually calls the API, so the retry behaviour is the same whatever shape of
 // answer is being asked for.
-async function send(request, { attempts = 2, label = 'ai' } = {}) {
+// A long answer has to be streamed, whether or not anybody is watching it arrive.
+//
+// The SDK refuses a plain create() whose max_tokens implies the request could outrun ten minutes,
+// and it is right to: a single HTTP response held open that long is at the mercy of every proxy
+// between here and the API. Streaming keeps bytes moving, so the connection stays alive.
+//
+// Nothing downstream changes. finalMessage() assembles the same Message object create() would have
+// returned, so stop_reason, usage and the tool call are all read exactly as before — this is how
+// the answer travels, not what it is.
+async function send(request, { attempts = 2, label = 'ai', stream = false } = {}) {
   for (let attempt = 1; ; attempt++) {
     try {
+      if (stream) return await client.messages.stream(request).finalMessage();
       return await client.messages.create(request);
     } catch (err) {
       if (!RETRYABLE.has(err?.status) || attempt >= attempts) throw err;
@@ -126,6 +136,9 @@ async function askForJson({
   attempts = 2,
   label = 'ai',
   truncatedMessage = null,
+  // Set where the answer itself can be long — see send(). Off by default so every existing
+  // caller behaves exactly as it did.
+  stream = false,
   // Transcription only. See FAST_MODEL above for where the line is drawn.
   fast = false,
 }) {
@@ -161,7 +174,7 @@ async function askForJson({
   // fast model's threshold is higher again, so a schema sent to it needs to be larger still.
 
   let response;
-  response = await send(request, { attempts, label });
+  response = await send(request, { attempts, label, stream });
 
   if (response.usage) {
     const read = response.usage.cache_read_input_tokens;
