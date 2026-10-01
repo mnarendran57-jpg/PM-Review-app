@@ -430,10 +430,10 @@ export default function SharedDocuments() {
 
       {docs && docs.length > 0 && !hasPrimaryContract && (
         <div className="card p-4 mb-5 text-sm" style={{ background: '#fffbeb', borderColor: '#fde68a', color: '#92400e' }}>
-          No contract or purchase order is marked for reviews yet. Pay App Review, Invoice Review
-          and Change Order Review still run without one — they just check the arithmetic and leave
-          the contract sum, retainage and tax rules unchecked. Add one, or mark an existing one
-          with the star, if you want those checked too.
+          No contract or purchase order is marked for reviews yet. Pay App Reviewer 3, Invoice
+          Review and Change Order Review still run without one — they just check the arithmetic and
+          leave the contract sum, retainage and tax rules unchecked. Add one, or mark an existing
+          one with the star, if you want those checked too.
         </div>
       )}
 

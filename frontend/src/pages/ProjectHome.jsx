@@ -20,9 +20,7 @@ const TOOLS = [
   { slug: 'proposal-intake', label: 'Proposal Intake',
     description: 'Turn a vendor proposal or change order into a signed-ready memo package.',
     icon: InboxArrowDownIcon, bg: 'linear-gradient(135deg, #f59e0b, #f97316)', glow: 'rgba(245,158,11,0.28)' },
-  { slug: 'pay-app-review', label: 'Pay App Review',
-    description: 'Catch math errors and over-billing on pay applications before you verify work on site.',
-    icon: DocumentMagnifyingGlassIcon, bg: 'linear-gradient(135deg, #3b82f6, #2563eb)', glow: 'rgba(59,130,246,0.28)' },
+  // Pay App Review is not offered — see the sidebar. Pay App Reviewer 3 below does this job.
   { slug: 'pco-review', label: 'Change Order Review',
     description: 'Check a proposed change order against the contract before you approve it.',
     icon: ScaleIcon, bg: 'linear-gradient(135deg, #fb923c, #f97316)', glow: 'rgba(249,115,22,0.28)' },

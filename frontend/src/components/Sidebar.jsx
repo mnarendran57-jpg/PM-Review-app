@@ -60,12 +60,15 @@ function useSwitchTarget(org, program) {
 // active project (/project/:id/...) so they always carry the project context with them.
 const projectTools = [
   { slug: 'proposal-intake', label: 'Proposal Intake', icon: InboxArrowDownIcon, color: '#fbbf24', glow: 'rgba(245,158,11,0.16)' },
-  { slug: 'pay-app-review', label: 'Pay App Review', icon: DocumentMagnifyingGlassIcon, color: '#60a5fa', glow: 'rgba(59,130,246,0.16)' },
-  // The sandbox. `feature` points at the real module because this is not something Coaster
-  // sells — it rides along wherever Pay App Review is enabled and must never become a plan
-  // feature of its own. Named and coloured so it cannot be mistaken for the real one.
-  { slug: 'pay-app-review-2', label: 'Pay App Reviewer 2', feature: 'pay-app-review',
-    icon: BeakerIcon, color: '#f59e0b', glow: 'rgba(245,158,11,0.16)' },
+  // Pay App Review and Pay App Reviewer 2 are deliberately absent. Pay App Reviewer 3 replaced
+  // them; the other two were giving errors and are not offered while that is true. Nothing has
+  // been deleted — their routers, their tables and every review ever run through them are intact,
+  // and restoring either one is this entry coming back.
+  //
+  // THE `pay-app-review` FEATURE KEY MUST STAY. Shared Documents is served from
+  // /api/pay-app-review/project/:id/documents and gated on that key, so removing it takes the
+  // project's filing cabinet away from every tool — including Pay App Reviewer 3, which reads the
+  // contract from it.
   { slug: 'pco-review', label: 'Change Order Review', icon: ScaleIcon, color: '#fb923c', glow: 'rgba(249,115,22,0.16)' },
   { slug: 'invoice-review', label: 'Invoice Review', icon: ReceiptPercentIcon, color: '#2dd4bf', glow: 'rgba(20,184,166,0.16)' },
   { slug: 'progress-report', label: 'Progress Report', icon: CameraIcon, color: '#fb7185', glow: 'rgba(244,63,94,0.16)' },

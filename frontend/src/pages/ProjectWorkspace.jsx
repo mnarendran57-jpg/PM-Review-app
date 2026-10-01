@@ -5,8 +5,6 @@ import { ProjectContext } from '../context/ProjectContext';
 import { projectsApi } from '../api';
 import ProjectHome from './ProjectHome';
 import ProposalIntake from './ProposalIntake';
-import PayAppReview from './PayAppReview';
-import PayAppReview2 from './PayAppReview2';
 import PcoReview from './PcoReview';
 import InvoiceReview from './InvoiceReview';
 import ProgressReport from './ProgressReport';
@@ -43,9 +41,8 @@ export default function ProjectWorkspace() {
           <Routes>
             <Route index element={<ProjectHome />} />
             <Route path="proposal-intake" element={<ProposalIntake />} />
-            <Route path="pay-app-review" element={<PayAppReview />} />
-            {/* Sandbox copy on its own table — see PayAppReview2.jsx. */}
-            <Route path="pay-app-review-2" element={<PayAppReview2 />} />
+            {/* pay-app-review and pay-app-review-2 are withdrawn — see the sidebar. The pages
+                and their APIs are untouched; only the way in is gone. */}
             <Route path="pco-review" element={<PcoReview />} />
             <Route path="invoice-review" element={<InvoiceReview />} />
             <Route path="progress-report" element={<ProgressReport />} />
