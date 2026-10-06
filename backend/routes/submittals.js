@@ -5,6 +5,7 @@ const multer = require('multer');
 const db = require('../database');
 const access = require('../lib/access');
 const storage = require('../lib/storage');
+const jobs = require('../lib/jobs');
 const {
   analyzeSubmittal, renderMarkdown: renderSubmittalMarkdown,
 } = require('../lib/submittalAnalysis');
@@ -886,23 +887,36 @@ router.post('/:id/analysis', uploadForAnalysis.fields([
       });
     }
 
-    const { analysis, sources, markdown } = await analyzeSubmittal({ submittal, documents, submittalFiles });
+    // Searching a project manual and then reading the pages it found is the longest thing in this
+    // module — the frontend used to allow twenty minutes for it on one held-open connection.
+    // Everything above is cheap and has already answered where it needed to.
+    const createdBy = req.user.name || req.user.email;
+    const jobId = jobs.startFrom(req, 'submittal-analysis', async () => {
+      try {
+        const { analysis, sources, markdown } = await analyzeSubmittal({ submittal, documents, submittalFiles });
 
-    const saved = db.prepare(`
-      INSERT INTO submittal_analyses (submittal_id, revision_id, spec_section, sources_json,
-        analysis_json, analysis_markdown, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      submittal.id, current?.id || null, submittal.spec_section || null, JSON.stringify(sources),
-      JSON.stringify(analysis), markdown, req.user.name || req.user.email
-    );
+        const saved = db.prepare(`
+          INSERT INTO submittal_analyses (submittal_id, revision_id, spec_section, sources_json,
+            analysis_json, analysis_markdown, created_by)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          submittal.id, current?.id || null, submittal.spec_section || null, JSON.stringify(sources),
+          JSON.stringify(analysis), markdown, createdBy
+        );
 
-    res.json({
-      id: saved.lastInsertRowid, analysis, sources, analysis_markdown: markdown,
-      submittal: detail(submittal, optionsFor(submittal)),
+        return {
+          id: saved.lastInsertRowid, analysis, sources, analysis_markdown: markdown,
+          submittal: detail(submittal, optionsFor(submittal)),
+        };
+      } catch (err) {
+        console.error('Submittal analysis error:', err);
+        err.friendlyMessage = friendlyAiError(err);
+        throw err;
+      }
     });
+    res.status(202).json({ jobId });
   } catch (err) {
-    console.error('Submittal analysis error:', err);
+    console.error('Submittal analysis setup error:', err);
     res.status(err.status === 429 ? 429 : err.status || 500).json({ error: friendlyAiError(err) });
   }
 });

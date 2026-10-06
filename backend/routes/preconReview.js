@@ -12,6 +12,7 @@ const storage = require('../lib/storage');
 
 
 const access = require('../lib/access');
+const jobs = require('../lib/jobs');
 const { requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../lib/plans');
 
@@ -34,30 +35,45 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024, files: 100 }
 });
 
+// Reading a set of drawings and specifications takes minutes, and it used to happen on this
+// request — the connection held open throughout, the uploaded documents in memory the whole time,
+// and every bit of it lost without trace if the service restarted before it finished.
+//
+// What is cheap to check is still checked here, so a missing file is still an immediate 400. The
+// reading itself is handed to the job queue and the answer is a job id; see routes/jobs.js.
 router.post('/', upload.array('documents', 100), async (req, res) => {
-  try {
-    const files = req.files;
-    if (!files || files.length === 0) {
-      return res.status(400).json({ error: 'At least one document is required.' });
-    }
+  const files = req.files;
+  if (!files || files.length === 0) {
+    return res.status(400).json({ error: 'At least one document is required.' });
+  }
 
-    const projectName = req.body.project_name || null;
-    const reviewFocus = req.body.review_focus || null;
+  const projectName = req.body.project_name || null;
+  const reviewFocus = req.body.review_focus || null;
 
-    // Which project's Shared Documents to compare the proposal against. Verified rather than
-    // trusted: an id from another organization reads as no project at all.
-    const project = req.body.project_id
-      ? access.projectForUser(req.user, Number(req.body.project_id)) : null;
-    const projectId = project && project.org_id === req.orgId ? project.id : null;
-    const documentIds = String(req.body.document_ids || '')
-      .split(',').map(v => Number(v.trim())).filter(n => Number.isInteger(n) && n > 0);
+  // Which project's Shared Documents to compare the proposal against. Verified rather than
+  // trusted: an id from another organization reads as no project at all.
+  const project = req.body.project_id
+    ? access.projectForUser(req.user, Number(req.body.project_id)) : null;
+  const projectId = project && project.org_id === req.orgId ? project.id : null;
+  const documentIds = String(req.body.document_ids || '')
+    .split(',').map(v => Number(v.trim())).filter(n => Number.isInteger(n) && n > 0);
 
+  const jobId = jobs.startFrom(req, 'precon-review', () => runReview({
+    files, projectName, reviewFocus, projectId, documentIds,
+    orgId: req.orgId, createdBy: req.body.created_by || null,
+  }));
+  res.status(202).json({ jobId });
+});
+
+async function runReview({ files, projectName, reviewFocus, projectId, documentIds, orgId, createdBy }) {
+  {
     let analysis;
     try {
       analysis = await analyzePreconDocuments(files, { projectName, reviewFocus });
     } catch (err) {
       console.error('Precon analysis error:', err);
-      return res.status(err.status === 429 ? 429 : 502).json({ error: friendlyAiError(err) || 'Document analysis failed. Please try again.' });
+      err.friendlyMessage = friendlyAiError(err) || 'The documents could not be analysed. Please try again.';
+      throw err;
     }
 
     const fileNames = files.map(f => f.originalname);
@@ -121,11 +137,11 @@ router.post('/', upload.array('documents', 100), async (req, res) => {
         insufficient_info, created_by, comparison_json, comparison_markdown
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      req.orgId, projectId,
+      orgId, projectId,
       projectName, reviewFocus, JSON.stringify(fileNames),
       JSON.stringify(analysis), markdown,
       analysis.insufficientInfo ? 1 : 0,
-      req.body.created_by || null,
+      createdBy,
       comparison ? JSON.stringify(comparison) : null,
       comparisonMarkdown
     );
@@ -139,17 +155,14 @@ router.post('/', upload.array('documents', 100), async (req, res) => {
       insertFile.run(reviewId, file.originalname, file.mimetype, key, key ? Buffer.alloc(0) : file.buffer);
     }
 
-    res.json({
+    return {
       id: reviewId,
       report: { projectName, reviewFocus, fileNames, ...analysis },
       comparison,
       comparisonError,
-    });
-  } catch (err) {
-    console.error('Precon review error:', err);
-    res.status(500).json({ error: err.message });
+    };
   }
-});
+}
 
 router.get('/', (req, res) => {
   const { search, project_name } = req.query;

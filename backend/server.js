@@ -51,6 +51,9 @@ app.use('/api/invitations', require('./routes/invitations'));
 // Everything below requires a valid login session
 app.use('/api', requireAuth);
 
+// Background work, for every module that has any. See routes/jobs.js.
+app.use('/api/jobs', require('./routes/jobs'));
+
 app.use('/api/programs', require('./routes/programs'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/projects', require('./routes/projects'));

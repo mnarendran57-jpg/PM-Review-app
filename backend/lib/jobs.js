@@ -112,4 +112,19 @@ function sweep() {
   `).run(DONE, FAILED, `-${KEEP_HOURS} hours`);
 }
 
-module.exports = { start, get, view, sweep, RUNNING, DONE, FAILED, STALE_AFTER_MINUTES };
+// Starting the slow half of a request as a job, from inside a route handler.
+//
+// The shape every converted route takes: validate as before, answering 400 immediately for
+// anything cheap to check, then hand the slow part over and answer 202 with a job id. The caller
+// polls /api/jobs/:id. Nothing about the work changes — only whether an HTTP connection is held
+// open for the minutes it takes.
+//
+// Why that matters: a request held open for a long read is memory and a socket occupied the whole
+// time, and when the service restarts — a deploy, or another request exhausting the instance —
+// the work dies with no record that it ever happened. A job survives the request, and a failure is
+// written down where the person who started it can be told.
+function startFrom(req, kind, work) {
+  return start({ orgId: req.orgId, userId: req.user?.id, kind }, work);
+}
+
+module.exports = { start, startFrom, get, view, sweep, RUNNING, DONE, FAILED, STALE_AFTER_MINUTES };

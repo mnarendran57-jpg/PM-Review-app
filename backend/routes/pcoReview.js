@@ -9,6 +9,7 @@ const { friendlyAiError } = require('../lib/aiErrors');
 const { GOVERNING_SQL } = require('../lib/docTypes');
 const { ensureTermsRead } = require('../lib/contractTerms');
 const storage = require('../lib/storage');
+const jobs = require('../lib/jobs');
 
 
 const access = require('../lib/access');
@@ -90,60 +91,72 @@ router.post('/', upload.fields([
       if (contractRow) contractTerms = await ensureTermsRead(contractRow);
     }
 
-    const { pco, reference, observations } = await analyzePco({
-      pcoBuffer: pcoFile.buffer,
-      referenceBuffer: referenceFile?.buffer,
-      contractTerms,
+    // The reading no longer happens on this request. Everything above is cheap and has
+    // already answered where it needed to; what follows takes minutes, held the connection
+    // open throughout, and was lost without trace whenever the service restarted mid-read.
+    const jobId = jobs.startFrom(req, 'pco-review', async () => {
+      try {
+      const { pco, reference, observations } = await analyzePco({
+        pcoBuffer: pcoFile.buffer,
+        referenceBuffer: referenceFile?.buffer,
+        contractTerms,
+      });
+
+      // The uploader knows better than the document whether this is an allowance —
+      // an explicit flag from the form overrides the model's reading.
+      if (req.body.is_allowance === 'true') pco.isAllowance = true;
+      if (req.body.is_allowance === 'false') pco.isAllowance = false;
+
+      const data = { pco, contractTerms, markupPolicy: null };
+      const results = runPcoChecks(data);
+      const report = buildPcoReport({ data, results, observations, reference });
+
+      const criticalCount = results.filter(r => r.critical && r.status === 'FAIL').length;
+      const failCount = results.filter(r => r.status === 'FAIL').length;
+
+      const pcoKey = (await storage.storeFile('pco', pcoFile.buffer, pcoFile.mimetype, pcoFile.originalname)).key;
+      const refKey = referenceFile
+        ? (await storage.storeFile('pco', referenceFile.buffer, referenceFile.mimetype, referenceFile.originalname)).key
+        : null;
+
+      const insert = db.prepare(`
+        INSERT INTO pco_reviews (
+          org_id, project_id, contract_id, contract_label,
+          pco_number, title, contractor, total_amount, is_allowance,
+          extracted_data, checks_result, ai_observations, report_markdown,
+          pco_file_name, pco_file, pco_file_key, reference_file_name, reference_file, reference_file_key,
+          critical_count, fail_count, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        req.orgId, projectId,
+        // Copied rather than joined, so a saved review still says whose terms it applied even
+        // after that contract is renamed or removed.
+        contractRow?.id ?? null,
+        contractRow ? (contractRow.label || contractRow.file_name) : null,
+        pco.pcoNumber || null,
+        pco.title || null,
+        pco.contractor || null,
+        pco.totalAmount ?? null,
+        pco.isAllowance ? 1 : 0,
+        JSON.stringify({ pco, reference }),
+        JSON.stringify(results),
+        JSON.stringify(observations),
+        report.markdown,
+        pcoFile.originalname, pcoKey ? Buffer.alloc(0) : pcoFile.buffer, pcoKey,
+        referenceFile?.originalname || null,
+        referenceFile ? (refKey ? Buffer.alloc(0) : referenceFile.buffer) : null, refKey,
+        criticalCount, failCount,
+        req.body.created_by || null
+      );
+
+    return { id: insert.lastInsertRowid, report, results };
+      } catch (err) {
+        console.error('pco-review failed:', err);
+        err.friendlyMessage = friendlyAiError(err);
+        throw err;
+      }
     });
-
-    // The uploader knows better than the document whether this is an allowance —
-    // an explicit flag from the form overrides the model's reading.
-    if (req.body.is_allowance === 'true') pco.isAllowance = true;
-    if (req.body.is_allowance === 'false') pco.isAllowance = false;
-
-    const data = { pco, contractTerms, markupPolicy: null };
-    const results = runPcoChecks(data);
-    const report = buildPcoReport({ data, results, observations, reference });
-
-    const criticalCount = results.filter(r => r.critical && r.status === 'FAIL').length;
-    const failCount = results.filter(r => r.status === 'FAIL').length;
-
-    const pcoKey = (await storage.storeFile('pco', pcoFile.buffer, pcoFile.mimetype, pcoFile.originalname)).key;
-    const refKey = referenceFile
-      ? (await storage.storeFile('pco', referenceFile.buffer, referenceFile.mimetype, referenceFile.originalname)).key
-      : null;
-
-    const insert = db.prepare(`
-      INSERT INTO pco_reviews (
-        org_id, project_id, contract_id, contract_label,
-        pco_number, title, contractor, total_amount, is_allowance,
-        extracted_data, checks_result, ai_observations, report_markdown,
-        pco_file_name, pco_file, pco_file_key, reference_file_name, reference_file, reference_file_key,
-        critical_count, fail_count, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      req.orgId, projectId,
-      // Copied rather than joined, so a saved review still says whose terms it applied even
-      // after that contract is renamed or removed.
-      contractRow?.id ?? null,
-      contractRow ? (contractRow.label || contractRow.file_name) : null,
-      pco.pcoNumber || null,
-      pco.title || null,
-      pco.contractor || null,
-      pco.totalAmount ?? null,
-      pco.isAllowance ? 1 : 0,
-      JSON.stringify({ pco, reference }),
-      JSON.stringify(results),
-      JSON.stringify(observations),
-      report.markdown,
-      pcoFile.originalname, pcoKey ? Buffer.alloc(0) : pcoFile.buffer, pcoKey,
-      referenceFile?.originalname || null,
-      referenceFile ? (refKey ? Buffer.alloc(0) : referenceFile.buffer) : null, refKey,
-      criticalCount, failCount,
-      req.body.created_by || null
-    );
-
-    res.json({ id: insert.lastInsertRowid, report, results });
+    res.status(202).json({ jobId });
   } catch (err) {
     console.error('PCO review error:', err);
     res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });

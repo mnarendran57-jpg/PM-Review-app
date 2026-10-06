@@ -5,6 +5,7 @@ const multer = require('multer');
 const db = require('../database');
 const access = require('../lib/access');
 const storage = require('../lib/storage');
+const jobs = require('../lib/jobs');
 const { requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../lib/plans');
 const { friendlyAiError } = require('../lib/aiErrors');
@@ -762,24 +763,37 @@ router.post('/:id/analysis', upload.array('files', 4), async (req, res) => {
       });
     }
 
-    const { analysis, sources, markdown } = await analyzeRfi({ rfi, discipline, documents, extraFiles });
+    // Reading a drawing set to answer a question is the longest thing this module does — the
+    // frontend used to allow it twenty minutes on one held-open connection. Everything above is
+    // cheap and has already answered 400 where it needed to; only the reading goes to the queue.
+    const createdBy = req.user.name || req.user.email;
+    const jobId = jobs.startFrom(req, 'rfi-analysis', async () => {
+      try {
+        const { analysis, sources, markdown } = await analyzeRfi({ rfi, discipline, documents, extraFiles });
 
-    const revisions = revisionsOf(rfi.id);
-    const current = revisions[revisions.length - 1];
-    const saved = db.prepare(`
-      INSERT INTO rfi_analyses (rfi_id, revision_id, discipline, sources_json, analysis_json,
-        analysis_markdown, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      rfi.id, current?.id || null, discipline, JSON.stringify(sources),
-      JSON.stringify(analysis), markdown, req.user.name || req.user.email
-    );
+        const revisions = revisionsOf(rfi.id);
+        const current = revisions[revisions.length - 1];
+        const saved = db.prepare(`
+          INSERT INTO rfi_analyses (rfi_id, revision_id, discipline, sources_json, analysis_json,
+            analysis_markdown, created_by)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          rfi.id, current?.id || null, discipline, JSON.stringify(sources),
+          JSON.stringify(analysis), markdown, createdBy
+        );
 
-    res.json({
-      id: saved.lastInsertRowid, discipline, analysis, sources, analysis_markdown: markdown,
+        return {
+          id: saved.lastInsertRowid, discipline, analysis, sources, analysis_markdown: markdown,
+        };
+      } catch (err) {
+        console.error('RFI analysis error:', err);
+        err.friendlyMessage = friendlyAiError(err);
+        throw err;
+      }
     });
+    res.status(202).json({ jobId });
   } catch (err) {
-    console.error('RFI analysis error:', err);
+    console.error('RFI analysis setup error:', err);
     res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });
   }
 });

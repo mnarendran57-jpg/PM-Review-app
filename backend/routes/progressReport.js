@@ -6,6 +6,7 @@ const { analyzeProgress, renderMarkdown } = require('../lib/progressReport');
 const { renderProgressReportPdf } = require('../lib/progressReportPdf');
 const { friendlyAiError } = require('../lib/aiErrors');
 const storage = require('../lib/storage');
+const jobs = require('../lib/jobs');
 const access = require('../lib/access');
 const { requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../lib/plans');
@@ -102,58 +103,70 @@ router.post('/', upload.array('images', 100), async (req, res) => {
     });
     if (turned) console.log(`[progress] ${turned} of ${files.length} photo(s) turned upright`);
 
-    const report = await analyzeProgress({
-      images, projectName, contractor, periodLabel, visitDate, notes: req.body.notes || null,
-    });
+    // The reading no longer happens on this request. Everything above is cheap and has
+    // already answered where it needed to; what follows takes minutes, held the connection
+    // open throughout, and was lost without trace whenever the service restarted mid-read.
+    const jobId = jobs.startFrom(req, 'progress-report', async () => {
+      try {
+      const report = await analyzeProgress({
+        images, projectName, contractor, periodLabel, visitDate, notes: req.body.notes || null,
+      });
 
-    const header = {
-      projectName, reportNumber, frequency, periodLabel,
-      visitDate, visitTime, weather, submittedBy, contractor, imageCount: images.length,
-    };
-    const markdown = renderMarkdown({ report, header, photos: images });
+      const header = {
+        projectName, reportNumber, frequency, periodLabel,
+        visitDate, visitTime, weather, submittedBy, contractor, imageCount: images.length,
+      };
+      const markdown = renderMarkdown({ report, header, photos: images });
 
-    const insert = db.prepare(`
-      INSERT INTO progress_reports (
-        org_id, project_id, report_number, frequency, period_label, visit_date, visit_time, weather,
-        submitted_by, contractor, notes, image_count, report_json, report_markdown, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      req.orgId, projectId, reportNumber, frequency, periodLabel, visitDate, visitTime, weather,
-      submittedBy, contractor, req.body.notes || null, images.length,
-      JSON.stringify(report), markdown, req.body.created_by || null
-    );
-    const reportId = insert.lastInsertRowid;
-
-    const insertFile = db.prepare(`
-      INSERT INTO progress_report_files
-        (report_id, sort_order, file_name, mime_type, caption, file_key, file_blob, display_key, display_blob)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      // The upright bytes, not the ones that were uploaded. Storing the original would mean
-      // every reprint of this report had to rotate it again — and the report the PM downloads
-      // a month from now would depend on code that could have changed since.
-      const bytes = images[i].buffer;
-      const { key } = await storage.storeFile('progress', bytes, f.mimetype, f.originalname);
-
-      // And a second copy at the size the report prints it, made once here rather than on every
-      // download. Both are kept: the original is what the viewer shows and what a PM would want
-      // back if they ever needed the full-resolution picture.
-      const display = fitJpeg(bytes);
-      const displayStored = display === bytes
-        ? { key: null }   // already small enough — no second copy is worth keeping
-        : await storage.storeFile('progress', display, f.mimetype, `display_${f.originalname}`);
-
-      insertFile.run(
-        reportId, i, f.originalname, f.mimetype, images[i].caption || null,
-        key, key ? Buffer.alloc(0) : bytes,
-        displayStored.key,
-        displayStored.key || display === bytes ? null : display,
+      const insert = db.prepare(`
+        INSERT INTO progress_reports (
+          org_id, project_id, report_number, frequency, period_label, visit_date, visit_time, weather,
+          submitted_by, contractor, notes, image_count, report_json, report_markdown, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        req.orgId, projectId, reportNumber, frequency, periodLabel, visitDate, visitTime, weather,
+        submittedBy, contractor, req.body.notes || null, images.length,
+        JSON.stringify(report), markdown, req.body.created_by || null
       );
-    }
+      const reportId = insert.lastInsertRowid;
 
-    res.json({ id: reportId, report, header });
+      const insertFile = db.prepare(`
+        INSERT INTO progress_report_files
+          (report_id, sort_order, file_name, mime_type, caption, file_key, file_blob, display_key, display_blob)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        // The upright bytes, not the ones that were uploaded. Storing the original would mean
+        // every reprint of this report had to rotate it again — and the report the PM downloads
+        // a month from now would depend on code that could have changed since.
+        const bytes = images[i].buffer;
+        const { key } = await storage.storeFile('progress', bytes, f.mimetype, f.originalname);
+
+        // And a second copy at the size the report prints it, made once here rather than on every
+        // download. Both are kept: the original is what the viewer shows and what a PM would want
+        // back if they ever needed the full-resolution picture.
+        const display = fitJpeg(bytes);
+        const displayStored = display === bytes
+          ? { key: null }   // already small enough — no second copy is worth keeping
+          : await storage.storeFile('progress', display, f.mimetype, `display_${f.originalname}`);
+
+        insertFile.run(
+          reportId, i, f.originalname, f.mimetype, images[i].caption || null,
+          key, key ? Buffer.alloc(0) : bytes,
+          displayStored.key,
+          displayStored.key || display === bytes ? null : display,
+        );
+      }
+
+    return { id: reportId, report, header };
+      } catch (err) {
+        console.error('progress-report failed:', err);
+        err.friendlyMessage = friendlyAiError(err);
+        throw err;
+      }
+    });
+    res.status(202).json({ jobId });
   } catch (err) {
     console.error('Progress report error:', err);
     res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });

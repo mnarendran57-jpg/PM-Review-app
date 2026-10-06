@@ -267,9 +267,12 @@ export const rfisApi = {
 
   // Reads the RFI against the chosen documents and suggests how the A/E is likely to answer.
   // Two AI passes over a drawing set, so it is slow — hence the long timeout.
-  analyze: (id, formData) => api.post(`/rfis/${id}/analysis`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
-  }).then(r => r.data),
+  // Reading a drawing set to answer the question no longer happens on this connection: the
+  // server answers with a job id and the result is collected from /api/jobs. The upload keeps its
+  // timeout, because a stall transferring a file is a real fault.
+  analyze: (id, formData, onTick) => api.post(`/rfis/${id}/analysis`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+  }).then(r => waitForJob(r.data.jobId, { onTick })),
   // The same two passes, run while the RFI is still being entered. Saves nothing until the
   // token it returns is handed back to create().
   previewAnalysis: formData => api.post('/rfis/preview-analysis', formData, {
@@ -339,9 +342,11 @@ export const submittalsApi = {
   // Reads the submittal against the chosen specification and predicts how the A/E will
   // review it. LONG_AI_TIMEOUT because a project manual is searched before it is read, and the
   // account's per-minute allowance puts a wait between the two calls.
-  analyze: (id, formData) => api.post(`/submittals/${id}/analysis`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }, timeout: LONG_AI_TIMEOUT,
-  }).then(r => r.data),
+  // As with the RFI log: the manual is searched and the located pages read on the job queue, not
+  // on a connection held open for twenty minutes.
+  analyze: (id, formData, onTick) => api.post(`/submittals/${id}/analysis`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+  }).then(r => waitForJob(r.data.jobId, { onTick })),
   // Compares the A/E's actual review with that prediction. Runs automatically when a review is
   // recorded; this is the retry, for when it did not.
   compareReview: (id, revId) =>
@@ -515,7 +520,9 @@ function triggerDownload(blob, fileName) {
 // request that either says "running" or hands back the result.
 // `base` is required in spirit: Reviewer 1 is held at its August behaviour and has no jobs
 // endpoint, so a caller that forgets to name its own module would poll a 404 for ever.
-async function waitForJob(jobId, { onTick, base = '/pay-app-review-2' } = {}) {
+// `base` is the module's own /jobs endpoint for the three that grew one before there was a shared
+// one. Everything converted since polls /api/jobs, which is the same rule written once.
+async function waitForJob(jobId, { onTick, base = '/jobs' } = {}) {
   const started = Date.now();
   // Quick at first — a small pay application is read in seconds and should not sit waiting on a
   // slow poll — then easing off so a twenty-minute read is not a thousand requests.
@@ -708,9 +715,11 @@ export const projectDocumentsApi = {
 export const pcoReviewApi = {
   list: params => api.get('/pco-review', { params }).then(r => r.data),
   get: id => api.get(`/pco-review/${id}`).then(r => r.data),
-  create: formData => api.post('/pco-review', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
-  }).then(r => r.data),
+  // The reading happens on the job queue, not on this connection. The upload keeps its
+  // timeout — a stall transferring a file is a real fault — but the review itself has none.
+  create: (formData, onTick) => api.post('/pco-review', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+  }).then(r => waitForJob(r.data.jobId, { onTick })),
   downloadMarkdown: async (id, fileName) => {
     const res = await api.get(`/pco-review/${id}/report.md`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `pco_review_${id}.md`);
@@ -725,9 +734,11 @@ export const pcoReviewApi = {
 export const invoiceReviewApi = {
   list: params => api.get('/invoice-review', { params }).then(r => r.data),
   get: id => api.get(`/invoice-review/${id}`).then(r => r.data),
-  create: formData => api.post('/invoice-review', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
-  }).then(r => r.data),
+  // The reading happens on the job queue, not on this connection. The upload keeps its
+  // timeout — a stall transferring a file is a real fault — but the review itself has none.
+  create: (formData, onTick) => api.post('/invoice-review', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+  }).then(r => waitForJob(r.data.jobId, { onTick })),
   downloadMarkdown: async (id, fileName) => {
     const res = await api.get(`/invoice-review/${id}/report.md`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `invoice_review_${id}.md`);
@@ -742,9 +753,11 @@ export const invoiceReviewApi = {
 export const progressReportApi = {
   list: params => api.get('/progress-report', { params }).then(r => r.data),
   get: id => api.get(`/progress-report/${id}`).then(r => r.data),
-  create: formData => api.post('/progress-report', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
-  }).then(r => r.data),
+  // The reading happens on the job queue, not on this connection. The upload keeps its
+  // timeout — a stall transferring a file is a real fault — but the review itself has none.
+  create: (formData, onTick) => api.post('/progress-report', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+  }).then(r => waitForJob(r.data.jobId, { onTick })),
   fileUrl: (reportId, fileId) => `${apiBaseUrl}/progress-report/${reportId}/files/${fileId}`,
   downloadPdf: async (id, fileName) => {
     const res = await api.get(`/progress-report/${id}/report.pdf`, { responseType: 'blob' });
@@ -772,9 +785,12 @@ export const progressReportApi = {
 export const preconReviewApi = {
   list: params => api.get('/precon-review', { params }).then(r => r.data),
   get: id => api.get(`/precon-review/${id}`).then(r => r.data),
-  create: formData => api.post('/precon-review', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }, timeout: LONG_AI_TIMEOUT
-  }).then(r => r.data),
+  // The upload still has a timeout — that part is a file transfer and a stall there is a real
+  // fault. The READING has none, because it is no longer happening on this connection: the server
+  // answers with a job id and the result is collected from /api/jobs.
+  create: (formData, onTick) => api.post('/precon-review', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+  }).then(r => waitForJob(r.data.jobId, { onTick })),
   comparisonMarkdownUrl: id => `${apiBaseUrl}/precon-review/${id}/comparison.md`,
   downloadMarkdown: async (id, fileName) => {
     const res = await api.get(`/precon-review/${id}/report.md`, { responseType: 'blob' });
