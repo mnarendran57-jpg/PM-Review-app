@@ -31,7 +31,7 @@ function visibleRow(req) {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 500 * 1024 * 1024 },
+  limits: { fileSize: 100 * 1024 * 1024 },
 });
 
 // One-shot analysis: extract the PCO (and its generating RFI/ASI, if supplied) in a

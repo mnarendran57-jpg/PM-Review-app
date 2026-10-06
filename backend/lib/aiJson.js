@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const { aiLimiter } = require('./workLimit');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -116,7 +117,15 @@ function fillDeclaredNulls(value, schema) {
 // Nothing downstream changes. finalMessage() assembles the same Message object create() would have
 // returned, so stop_reason, usage and the tool call are all read exactly as before — this is how
 // the answer travels, not what it is.
-async function send(request, { attempts = 2, label = 'ai', stream = false } = {}) {
+async function send(request, opts = {}) {
+  // Every AI call in the application passes through here, which makes it the one place a limit on
+  // how much happens at once can be applied without touching thirteen modules. See workLimit.js:
+  // unbounded, five simultaneous uploads exhaust the instance and Render restarts it, ending every
+  // request in flight rather than the one that was too much.
+  return aiLimiter.run(() => sendNow(request, opts));
+}
+
+async function sendNow(request, { attempts = 2, label = 'ai', stream = false } = {}) {
   for (let attempt = 1; ; attempt++) {
     try {
       if (stream) return await client.messages.stream(request).finalMessage();

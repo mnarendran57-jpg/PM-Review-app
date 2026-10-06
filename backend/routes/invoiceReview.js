@@ -31,7 +31,7 @@ function visibleRow(req) {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 500 * 1024 * 1024, files: 100 },
+  limits: { fileSize: 100 * 1024 * 1024, files: 100 },
 });
 
 // One-shot analysis: extract the invoice(s) in a single AI call, then run the

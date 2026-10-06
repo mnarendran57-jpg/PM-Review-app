@@ -41,7 +41,7 @@ function visibleRow(req) {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 500 * 1024 * 1024 }
+  limits: { fileSize: 100 * 1024 * 1024 }
 });
 
 // The fields lifted off a vendor proposal. A scope summary routinely carries a pipe size or a

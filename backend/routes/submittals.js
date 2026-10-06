@@ -24,7 +24,7 @@ router.use(requireFeature('submittal-log'));
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 200 * 1024 * 1024, files: 1 },
+  limits: { fileSize: 100 * 1024 * 1024, files: 1 },
 });
 
 // The review takes the contractor's package and, optionally, the specification the PM has to
@@ -33,7 +33,7 @@ const upload = multer({
 // files" no matter which field it arrived on.
 const uploadForAnalysis = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 200 * 1024 * 1024, files: 8 },
+  limits: { fileSize: 100 * 1024 * 1024, files: 8 },
 });
 
 // How long the A/E gets before this counts as overdue.

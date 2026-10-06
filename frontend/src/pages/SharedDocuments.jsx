@@ -91,7 +91,7 @@ function UploadForm({ projectId, onSaved, onCancel }) {
       <FileDrop file={file} onChange={f => { setFile(f); if (!label && f) setLabel(f.name.replace(/\.(pdf|docx)$/i, '')); }}
         label={cover ? `Your ${cover.noun} (Word .docx)` : 'The document (PDF)'}
         accept={chosen.docx ? '.docx' : '.pdf'}
-        hint={cover ? `Word document — the ${cover.thing} you already use` : 'PDF · no size limit'} />
+        hint={cover ? `Word document — the ${cover.thing} you already use` : 'PDF · up to 100MB'} />
 
       <div>
         <label className="label">What is it?</label>

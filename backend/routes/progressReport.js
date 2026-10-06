@@ -32,7 +32,7 @@ function visibleReport(req) {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 500 * 1024 * 1024, files: 100 },
+  limits: { fileSize: 100 * 1024 * 1024, files: 100 },
 });
 
 const ACCEPTED = new Set(['image/jpeg', 'image/jpg', 'image/pjpeg']);

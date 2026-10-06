@@ -56,7 +56,7 @@ function visibleProject(req, id) {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 500 * 1024 * 1024 }
+  limits: { fileSize: 100 * 1024 * 1024 }
 });
 
 // Extract structured data from one or two uploaded pay app PDFs — both files (if present)

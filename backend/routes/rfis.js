@@ -23,12 +23,12 @@ router.use(requireFeature('rfi-log'));
 // and multer counts `files` across the WHOLE request rather than per field.
 const uploadWithDocument = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 200 * 1024 * 1024, files: 10 },
+  limits: { fileSize: 100 * 1024 * 1024, files: 10 },
 });
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 200 * 1024 * 1024, files: 6 },
+  limits: { fileSize: 100 * 1024 * 1024, files: 6 },
 });
 
 // How long the A/E gets before this counts as overdue.

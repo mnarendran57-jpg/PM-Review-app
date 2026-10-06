@@ -7,9 +7,40 @@ const { requireAuth } = require('./middleware/auth');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// --- One request must never be able to take the service down -----------------------------------
+//
+// Node's default for a promise rejection nobody caught is to kill the process. On a web service
+// that is the worst possible default: one unhandled error in one request, on one user's document,
+// ends every other request in flight — people lose work they had waited minutes for, and the
+// restart looks to everybody like "it crashed for no reason".
+//
+// Logged loudly and survived instead. The request that caused it still fails, and it still has to
+// be found and fixed, but it fails for the one person it belongs to.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandled rejection] the service is staying up; this still needs fixing:',
+    reason && reason.stack ? reason.stack : reason);
+});
+
+// An uncaught exception is different: the process may genuinely be in a broken state, so carrying
+// on could serve wrong answers rather than no answers. It is named in the log — which is the part
+// that was missing — and then the process ends so Render replaces it with a clean one.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaught exception] shutting down so a clean process replaces this one:',
+    err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+
 app.use(cors());
-app.use(express.json({ limit: '500mb' }));
-app.use(express.urlencoded({ extended: true, limit: '500mb' }));
+
+// Body ceilings.
+//
+// These were 500 MB, on an instance with 512 MB of memory. A single upload of that size could not
+// be held at all, so the one request would not merely fail — it would exhaust the box and take
+// every other user's work down with it. Nothing Coaster reads is anywhere near this: the largest
+// real pay application packet on file is 3 MB across 67 pages, and a full drawing set is tens of
+// megabytes.
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 // Public — no login required
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
@@ -52,6 +83,38 @@ app.use('/api/ve-analyzer', require('./routes/veAnalyzer'));
 app.use('/api/cmar-pay-app-audit', require('./routes/cmarPayAppAudit'));
 app.use('/api/coaster-ai', require('./routes/coasterAi'));
 app.use('/api/contact', require('./routes/contact'));
+
+// --- The last word on any request that went wrong -----------------------------------------------
+//
+// Without this, an error thrown out of a route gets Express's default: a stack trace in the
+// response body on a dev build, and on a request that is still streaming an upload, a connection
+// that simply stops — which the browser shows as a spinner that never ends. Neither tells the
+// person anything they can act on.
+//
+// Two cases are worth naming specifically, because both are reachable by an ordinary user doing an
+// ordinary thing, and both used to produce something baffling.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+
+  // An upload larger than the ceiling. Multer and body-parser each have their own way of saying it.
+  if (err?.code === 'LIMIT_FILE_SIZE' || err?.type === 'entity.too.large') {
+    return res.status(413).json({
+      error: 'That file is too large for Coaster to read. Split it, or send the part that matters '
+        + '— a pay application packet is usually a few megabytes, not hundreds.',
+    });
+  }
+  if (err?.code === 'LIMIT_FILE_COUNT' || err?.code === 'LIMIT_UNEXPECTED_FILE') {
+    return res.status(400).json({ error: 'Too many files were attached to that request.' });
+  }
+
+  console.error(`[${req.method} ${req.path}] unhandled:`, err?.stack || err?.message || err);
+  res.status(500).json({
+    // Never the raw error: it is written for a developer and routinely contains a file path or a
+    // fragment of somebody's document.
+    error: 'Something went wrong handling that request. Nothing was saved. If it keeps happening, '
+      + 'tell us what you were doing — this is ours to fix.',
+  });
+});
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`PM Review backend running on http://0.0.0.0:${PORT}`);

@@ -31,7 +31,7 @@ function visibleRow(req) {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 500 * 1024 * 1024, files: 100 }
+  limits: { fileSize: 100 * 1024 * 1024, files: 100 }
 });
 
 router.post('/', upload.array('documents', 100), async (req, res) => {
