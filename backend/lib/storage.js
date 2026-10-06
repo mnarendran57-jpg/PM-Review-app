@@ -1,5 +1,7 @@
 const crypto = require('crypto');
-const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectsCommand } = require('@aws-sdk/client-s3');
+const {
+  S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectsCommand, ListObjectsV2Command,
+} = require('@aws-sdk/client-s3');
 
 // Cloudflare R2 is S3-compatible, so this is the AWS S3 client pointed at the R2 endpoint.
 // Storage is OPTIONAL: if the four R2_* env vars aren't set, isEnabled() is false and the
@@ -39,6 +41,36 @@ async function put(prefix, buffer, contentType, originalName = '') {
   return key;
 }
 
+// Stores a buffer at an EXACT key, rather than generating one.
+//
+// put() above adds a UUID so two uploads of the same filename cannot collide. A backup wants the
+// opposite: one object per day at a predictable key, so that yesterday's can be found by name
+// without consulting an index — and the index for a database backup must not live inside the
+// database being backed up.
+async function putAt(key, buffer, contentType) {
+  await client.send(new PutObjectCommand({
+    Bucket: R2_BUCKET, Key: key, Body: buffer, ContentType: contentType || 'application/octet-stream',
+  }));
+  return key;
+}
+
+// What is stored under a prefix, newest first. Used to age backups out and to show what exists.
+async function list(prefix) {
+  if (!enabled) return [];
+  const out = [];
+  let token;
+  do {
+    const res = await client.send(new ListObjectsV2Command({
+      Bucket: R2_BUCKET, Prefix: prefix, ContinuationToken: token,
+    }));
+    for (const o of res.Contents || []) {
+      out.push({ key: o.Key, size: o.Size, modified: o.LastModified });
+    }
+    token = res.IsTruncated ? res.NextContinuationToken : undefined;
+  } while (token);
+  return out.sort((a, b) => (b.key > a.key ? 1 : -1));
+}
+
 // Reads an object from R2 back into a Buffer.
 async function getBuffer(key) {
   const res = await client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }));
@@ -71,4 +103,4 @@ async function readFile({ key, blob }) {
   return null;
 }
 
-module.exports = { isEnabled, put, getBuffer, remove, storeFile, readFile };
+module.exports = { isEnabled, put, putAt, list, getBuffer, remove, storeFile, readFile };

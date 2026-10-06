@@ -435,4 +435,51 @@ router.delete('/invitations/:id', requireOrgAdmin, (req, res) => {
   res.json({ success: true });
 });
 
+// --- Database backups ------------------------------------------------------------------------
+// Platform administrators only, and not because of tidiness: a backup is EVERY organization's
+// data in one file. An organization admin may run their own company; nobody but the vendor may
+// hold a copy of everybody's.
+
+const backup = require('../lib/dbBackup');
+
+// What exists, so somebody can see the backups are real without taking anyone's word for it.
+router.get('/backups', requirePlatformAdmin, async (req, res) => {
+  try {
+    res.json({
+      enabled: require('../lib/storage').isEnabled(),
+      keepDays: backup.KEEP_DAYS,
+      backups: await backup.listBackups(),
+    });
+  } catch (err) {
+    console.error('Could not list backups:', err);
+    res.status(500).json({ error: 'The backups could not be listed.' });
+  }
+});
+
+// Take one now. Useful before a risky change, and the honest way to prove the whole path works
+// rather than waiting until three in the morning to find out it does not.
+router.post('/backups/run', requirePlatformAdmin, async (req, res) => {
+  try {
+    res.json(await backup.runBackup());
+  } catch (err) {
+    console.error('Backup failed:', err);
+    res.status(500).json({ error: `The backup failed: ${err.message}` });
+  }
+});
+
+// Download one. A backup nobody can get hold of is not a backup — this is what gets handed to a
+// customer's IT department, or restored from on the day it matters.
+router.get('/backups/:day/file.db', requirePlatformAdmin, async (req, res) => {
+  const day = String(req.params.day);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return res.status(400).json({ error: 'Expected a date like 2026-10-06.' });
+  try {
+    const bytes = await require('../lib/storage').getBuffer(backup.keyFor(day));
+    res.setHeader('Content-Type', 'application/x-sqlite3');
+    res.setHeader('Content-Disposition', `attachment; filename="coaster-${day}.db"`);
+    res.send(bytes);
+  } catch (err) {
+    res.status(404).json({ error: `No backup is stored for ${day}.` });
+  }
+});
+
 module.exports = router;

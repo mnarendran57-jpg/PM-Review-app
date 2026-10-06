@@ -65,4 +65,13 @@ app.listen(PORT, '0.0.0.0', () => {
   } catch (err) {
     console.error('Could not reset interrupted contract reads:', err.message);
   }
+
+  // A daily copy of the database to object storage — a second company holding it, and a retention
+  // we choose. See lib/dbBackup.js. It checks hourly rather than sleeping for a day, because this
+  // process restarts often and a day-long timer would rarely live to fire.
+  try {
+    require('./lib/dbBackup').scheduleBackups();
+  } catch (err) {
+    console.error('Could not start database backups:', err.message);
+  }
 });
