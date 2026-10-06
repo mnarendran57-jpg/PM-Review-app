@@ -32,7 +32,11 @@ router.use(requireFeature('proposal-intake'));
 // org_id.
 function visibleRow(req) {
   const row = db.prepare(`SELECT * FROM proposal_intakes WHERE id=?`).get(req.params.id);
-  return access.recordVisible(req.user, row, { projectColumn: null }) ? row : null;
+  // Scoped by project, as every other module is. This used to pass projectColumn: null because the
+  // table had no project_id, and the rule's answer to "no project, not an admin" is to show
+  // nothing — so every record endpoint here answered 404 to a non-admin, and the Word memo button
+  // appeared to do nothing at all.
+  return access.recordVisible(req.user, row) ? row : null;
 }
 
 const upload = multer({
@@ -252,15 +256,18 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
 
     const result = db.prepare(`
       INSERT INTO proposal_intakes (
-        org_id, intake_type, vendor_name, project_name, po_number, proposal_date,
+        org_id, project_id, intake_type, vendor_name, project_name, po_number, proposal_date,
         scope_of_work, total_price, change_order_price, original_po_amount, new_total_amount,
         memo_template_id,
         proposal_file_name, proposal_file, proposal_file_key, po_file_name, po_file, po_file_key,
         merged_file_name, merged_pdf, merged_pdf_key, created_by,
         memo_docx, memo_docx_key, memo_docx_name
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.orgId,
+      // Kept, so a project manager who is not an organization admin can see their own work. It was
+      // being sent and used to find the memo cover all along; it just was never recorded.
+      req.body.project_id ? Number(req.body.project_id) : null,
       intake_type, fields.vendor_name, fields.project_name, fields.po_number, fields.date,
       fields.scope_of_work, fields.total_price, fields.change_order_price || null,
       fields.original_po_amount || null, fields.new_total_amount || null,
@@ -285,7 +292,7 @@ router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 
 
 router.get('/', (req, res) => {
   const { search, intake_type, project_name } = req.query;
-  const scope = access.visibilityClause(req.user, req.orgId, { projectColumn: null });
+  const scope = access.visibilityClause(req.user, req.orgId);
   // memo_docx_name travels with the list so the history can offer the Word memo and the
   // put-it-back button on an intake from last week, not only on the one just generated. A PM
   // rarely edits the memo in the same minute they created it.

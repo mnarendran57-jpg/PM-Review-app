@@ -100,7 +100,7 @@ function MemoEditForm({ intake, onDone, onCancel }) {
   );
 }
 
-function HistoryItem({ item, onDelete, onEdit }) {
+function HistoryItem({ item, onDelete, onEdit, onMemo }) {
   const date = new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const tc = TYPE_INFO[item.intake_type] || TYPE_INFO['New Vendor'];
   const priceLine = item.intake_type === 'Change Order'
@@ -126,8 +126,17 @@ function HistoryItem({ item, onDelete, onEdit }) {
           onClick={() => onEdit(item)}>
           <ArrowPathRoundedSquareIcon className="w-4 h-4" />
         </button>
-        <button className="btn-secondary px-2 py-1" title="Download the Word memo"
-          onClick={() => proposalIntakeApi.downloadMemoDocx(item.id, item.memo_docx_name)}>
+        {/* A Word memo only exists where the organization has a confirmed memo cover on file.
+            Where there is none, the button used to be shown anyway, the download 404'd, and
+            nothing whatever appeared on screen — so it read as a broken button rather than as a
+            missing template. memo_docx_name already travels with the list, so the page has always
+            known which it is. */}
+        <button className="btn-secondary px-2 py-1" disabled={!item.memo_docx_name}
+          title={item.memo_docx_name
+            ? 'Download the Word memo'
+            : 'No Word memo for this one — an organization admin adds the memo letter in Settings'}
+          style={item.memo_docx_name ? undefined : { opacity: 0.35, cursor: 'not-allowed' }}
+          onClick={() => item.memo_docx_name && onMemo(item.id, item.memo_docx_name)}>
           <DocumentTextIcon className="w-4 h-4" />
         </button>
         <button className="btn-secondary px-2 py-1" title="Download merged PDF" onClick={() => proposalIntakeApi.download(item.id, item.merged_file_name)}>
@@ -145,7 +154,7 @@ function HistoryItem({ item, onDelete, onEdit }) {
 // the fix is to correct that value and let the memo be written again — not to edit prose in Word and
 // hope the formatting survives being turned back into a PDF. The Word copy is still there to print
 // or keep.
-function ResultPanel({ result, onReset }) {
+function ResultPanel({ result, onReset, onMemo }) {
   const [state, setState] = useState(result);
   const [replaced, setReplaced] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -177,10 +186,17 @@ function ResultPanel({ result, onReset }) {
         <button className="btn-secondary px-3 py-1.5 text-xs" onClick={() => setEditing(true)}>
           <ArrowPathRoundedSquareIcon className="w-4 h-4" /> Edit details &amp; rebuild
         </button>
-        <button className="btn-secondary px-3 py-1.5 text-xs"
-          onClick={() => proposalIntakeApi.downloadMemoDocx(state.id, state.memo_docx_name)}>
-          <DocumentTextIcon className="w-4 h-4" /> Word memo
-        </button>
+        {state.memo_docx_name ? (
+          <button className="btn-secondary px-3 py-1.5 text-xs"
+            onClick={() => onMemo(state.id, state.memo_docx_name)}>
+            <DocumentTextIcon className="w-4 h-4" /> Word memo
+          </button>
+        ) : (
+          <p className="text-[11px] w-full" style={{ color: '#92400e' }}>
+            No Word copy for this one: your organization has no memo letter on file yet. An
+            organization admin can add it under Settings, and memos made after that come with one.
+          </p>
+        )}
       </div>
 
       {editing && (
@@ -200,6 +216,25 @@ function ResultPanel({ result, onReset }) {
 }
 
 export default function ProposalIntake() {
+  // Downloading the Word memo, with the failure made visible.
+  //
+  // This used to be called straight from the button with nothing catching it. When the download
+  // failed — and it fails with a plain 404 whenever the organization has no memo letter on file —
+  // the promise rejected into nothing and the screen did not change at all. The button looked
+  // broken when the template was simply missing, which is a different problem with a different
+  // answer, and the person clicking had no way to tell.
+  const downloadMemo = async (id, fileName) => {
+    try {
+      await proposalIntakeApi.downloadMemoDocx(id, fileName);
+    } catch (err) {
+      setError(err.response?.status === 404
+        ? 'There is no Word memo for this one. A Word copy is only produced where your '
+          + 'organization has a memo letter on file — an organization admin adds it under Settings, '
+          + 'and memos made after that will come with one. The PDF package is unaffected.'
+        : (err.response?.data?.error || 'The Word memo could not be downloaded.'));
+    }
+  };
+
   const ctx = useProject();
   const routeProjectName = ctx?.project?.project_name;
   const [tab, setTab] = useState('intake');
@@ -510,7 +545,7 @@ export default function ProposalIntake() {
               </button>
             )}
 
-            {result && <ResultPanel result={result} onReset={reset} />}
+            {result && <ResultPanel result={result} onReset={reset} onMemo={downloadMemo} />}
           </div>
         </div>
 
@@ -525,7 +560,8 @@ export default function ProposalIntake() {
               </div>
             ) : (
               history.map(h => (
-                <HistoryItem key={h.id} item={h} onDelete={handleDelete} onEdit={setEditingIntake} />
+                <HistoryItem key={h.id} item={h} onDelete={handleDelete} onEdit={setEditingIntake}
+                  onMemo={downloadMemo} />
               ))
             )}
           </div>

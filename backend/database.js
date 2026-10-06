@@ -1477,6 +1477,29 @@ db.exec(`
   if (!cols.includes('coverage')) db.exec(`ALTER TABLE ve_analyses ADD COLUMN coverage REAL`);
 }
 
+// Proposal Intake never recorded which project an intake belonged to.
+//
+// Every other module scopes its records by project, and that is how a project manager who is not
+// an organization admin sees their own work: the visibility rule reads a project_id and checks
+// membership. This table had no such column, so the module passed `projectColumn: null`, and the
+// rule's safe fallback for "no project to scope by and not an admin" is to show NOTHING. The
+// result was that Proposal Intake looked empty to every non-admin, and every per-record endpoint —
+// the Word memo, the merged PDF, edit, delete — answered 404.
+//
+// The project id was being sent by the page and used to find the memo cover all along. It simply
+// was not kept. It is now.
+//
+// Rows written before this stay NULL and remain admin-only. The alternative is inferring ownership
+// from created_by, which is a typed-in name rather than an account, and a name is not something to
+// grant access on.
+{
+  const cols = db.prepare(`PRAGMA table_info(proposal_intakes)`).all().map(c => c.name);
+  if (!cols.includes('project_id')) {
+    db.exec(`ALTER TABLE proposal_intakes ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_proposal_intakes_project ON proposal_intakes(project_id)`);
+}
+
 // --- Coaster AI ------------------------------------------------------------------------------
 // The general question tab: terminology, methods, a drawing somebody wants a second opinion on.
 //
