@@ -285,7 +285,7 @@ Rules:
   const { data: parsed } = await askForJson({
     content: [asDocument(front.buffer), { type: 'text', text: prompt }],
     tool: SECTION_PICKER_TOOL,
-    maxTokens: 1200,
+    maxTokens: 6000,
     label: 'submittal section pick',
   });
   return parsed;
@@ -317,7 +317,7 @@ measured against the right requirements.`;
   const { data } = await askForJson({
     content: [{ type: 'text', text: prompt }],
     tool: SECTION_CHOICE_TOOL,
-    maxTokens: 400,
+    maxTokens: 1500,
     label: 'submittal section choice',
   });
   return data;
@@ -699,7 +699,7 @@ async function analyzeSubmittal({ submittal, documents = [], submittalFiles = []
     // answer contradicts itself — see the corrective pass below — so the cache pays for itself
     // within a single review, before any second submittal is even opened.
     cacheTool: true,
-    maxTokens: 3000,
+    maxTokens: 16000,
     label: 'submittal review prediction',
   });
 

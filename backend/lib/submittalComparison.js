@@ -301,7 +301,7 @@ async function compareToReview({ submittal, analysis, sources, response }) {
     // 1,250 tokens of schema, and asked twice whenever the first answer contradicts itself — see
     // the corrective pass below. Cached, the second ask costs a tenth.
     cacheTool: true,
-    maxTokens: 2000,
+    maxTokens: 8000,
     label: 'submittal review comparison',
   });
 

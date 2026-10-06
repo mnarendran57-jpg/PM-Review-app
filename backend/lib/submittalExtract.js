@@ -24,7 +24,7 @@ async function callClaude(pdfBuffer, prompt, tool, label) {
       { type: 'text', text: prompt },
     ],
     tool,
-    maxTokens: 2000,
+    maxTokens: 8000,
     label,
   });
   return data;

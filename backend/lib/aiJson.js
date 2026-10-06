@@ -33,6 +33,14 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = 'claude-sonnet-4-5';
 // Reserved for copying figures out of a document, never for deciding what they mean.
 const FAST_MODEL = 'claude-haiku-4-5-20251001';
+// The most any single answer may grow to on a retry. The model's own maximum; a ceiling below it
+// would only reintroduce the problem further out.
+const MAX_OUTPUT_TOKENS = 64000;
+
+// Past roughly this, the SDK refuses a non-streamed request because it might outrun ten minutes.
+// Measured: 16,000 and 20,000 go through unstreamed today, 64,000 is refused.
+const SAFE_UNSTREAMED_TOKENS = 20000;
+
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // Answers worth waiting out rather than failing on. 429 is the per-minute allowance, which
@@ -176,6 +184,37 @@ async function askForJson({
   let response;
   response = await send(request, { attempts, label, stream });
 
+  // AN ANSWER CUT OFF BY THE CEILING IS RETRIED WITH MORE ROOM.
+  //
+  // Every caller picks a max_tokens, and the number is always a guess about how long an answer
+  // will be — so sooner or later a real document produces a longer one and the whole read fails.
+  // It has now happened twice on real work: a sixty-seven page pay application needed 22,548
+  // tokens against a ceiling of 16,000, and an RFI answer ran past the 2,000 it was given.
+  //
+  // Output is only charged for what is actually generated, so a ceiling that is never reached
+  // costs nothing. The failure is therefore pure loss: the work was done, paid for, and thrown
+  // away over a number somebody guessed months earlier. One retry with double the room turns that
+  // into a delay instead, and costs nothing at all on the calls that never needed it.
+  //
+  // Once, not repeatedly. If an answer will not fit in twice the space, something is wrong with
+  // the request rather than with the ceiling, and quietly spending more on each attempt is not
+  // the way to find out.
+  if (response.stop_reason === 'max_tokens') {
+    const roomier = Math.min(maxTokens * 2, MAX_OUTPUT_TOKENS);
+    if (roomier > maxTokens) {
+      console.warn(`[${label}] answer hit the ${maxTokens}-token ceiling; retrying with ${roomier}`);
+      response = await send(
+        // Only max_tokens changes. Nothing else may be added to the request — an unrecognised
+        // field is a 400 from the API, which would turn a recoverable truncation into a hard
+        // failure for every caller at once.
+        { ...request, max_tokens: roomier },
+        // Above a certain size the SDK refuses a non-streamed request, correctly — a response held
+        // open that long is at the mercy of every proxy in between. So a roomier retry streams.
+        { attempts, label, stream: stream || roomier > SAFE_UNSTREAMED_TOKENS },
+      );
+    }
+  }
+
   if (response.usage) {
     const read = response.usage.cache_read_input_tokens;
     const written = response.usage.cache_creation_input_tokens;
@@ -189,8 +228,13 @@ async function askForJson({
   // Checked before reading the tool call: a run that hit the ceiling has a half-filled answer,
   // and silently returning it would drop line items the caller believes it received.
   if (response.stop_reason === 'max_tokens') {
+    // "Try again with a smaller document" was the old wording, and on most of these calls it is
+    // bad advice: the document is an RFI the contractor sent, or a pay application as it arrived,
+    // and the person reading it cannot make it smaller. Say what happened instead.
     const err = new Error(truncatedMessage
-      || 'The response was cut off before it finished. Try again with a smaller document.');
+      || 'The answer came out longer than there was room for, even after retrying with more. '
+        + 'Nothing was saved. Try once more, and tell us if it keeps happening — this is ours to fix, '
+        + 'not something to work around.');
     // Flagged, not just worded. Callers that can recover — by reading the document in smaller
     // pieces — need to recognise this without matching on prose, and every caller writes its
     // own message. Telling the user to split the PDF themselves is the answer of last resort.

@@ -112,7 +112,7 @@ If any field cannot be found with confidence, use "Not specified" as its value.`
         { type: 'text', text: prompt },
       ],
       tool: PROPOSAL_TOOL,
-      maxTokens: 1024,
+      maxTokens: 6000,
       label: 'proposal extract',
     });
     res.json(extracted);

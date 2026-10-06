@@ -279,7 +279,7 @@ async function compareToResponse({ rfi, discipline, analysis, response }) {
     // 1,260 tokens of schema, re-sent on every response reviewed. An RFI log is worked through in
     // a sitting, so the second and third reviews read it back for a tenth of the price.
     cacheTool: true,
-    maxTokens: 2000,
+    maxTokens: 8000,
     label: 'rfi response review',
   });
 

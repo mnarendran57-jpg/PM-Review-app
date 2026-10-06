@@ -264,7 +264,7 @@ Rules:
   const { data: parsed } = await askForJson({
     content: [asDocument(front.buffer), { type: 'text', text: prompt }],
     tool: SHEET_PICKER_TOOL,
-    maxTokens: 1500,
+    maxTokens: 6000,
     label: 'rfi sheet pick',
   });
   return {
@@ -298,7 +298,7 @@ detail, a capacity question needs a schedule. Copy the numbers exactly as printe
   const { data } = await askForJson({
     content: [{ type: 'text', text: prompt }],
     tool: SHEET_CHOICE_TOOL,
-    maxTokens: 400,
+    maxTokens: 1500,
     label: 'rfi sheet choice',
   });
   return Array.isArray(data.sheetNumbers) ? data.sheetNumbers : [];
@@ -633,7 +633,7 @@ async function analyzeRfi({ rfi, discipline, documents = [], extraFiles = [] }) 
     // 1,200 tokens of schema plus ~700 of instructions on every RFI analysed. RFIs are raised in
     // batches, so this is paid for once and read back on the rest.
     cacheTool: true,
-    maxTokens: 2000,
+    maxTokens: 16000,
     label: 'rfi analysis',
   });
 
