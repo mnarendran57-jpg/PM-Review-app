@@ -181,7 +181,7 @@ export default function InvoiceReview() {
       setResult({ id: data.id, report: data.report });
       loadHistory();
     } catch (err) {
-      setError(err.response?.data?.error || 'Could not analyze this invoice.');
+      setError(err.friendlyMessage || err.response?.data?.error || 'Could not analyze this invoice.');
     } finally {
       setAnalyzing(false);
     }

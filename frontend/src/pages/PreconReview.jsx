@@ -88,7 +88,7 @@ export default function PreconReview() {
       setResult(data);
       loadHistory();
     } catch (err) {
-      setError(err.response?.data?.error || 'Could not generate the review.');
+      setError(err.friendlyMessage || err.response?.data?.error || 'Could not generate the review.');
     } finally {
       setGenerating(false);
     }

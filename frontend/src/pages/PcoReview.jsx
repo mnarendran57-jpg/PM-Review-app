@@ -198,7 +198,7 @@ export default function PcoReview() {
       setResult({ id: data.id, report: data.report });
       loadHistory();
     } catch (err) {
-      setError(err.response?.data?.error || 'Could not analyze this PCO.');
+      setError(err.friendlyMessage || err.response?.data?.error || 'Could not analyze this PCO.');
     } finally {
       setAnalyzing(false);
     }
