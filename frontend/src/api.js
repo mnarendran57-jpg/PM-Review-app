@@ -734,11 +734,11 @@ export const pcoReviewApi = {
 export const invoiceReviewApi = {
   list: params => api.get('/invoice-review', { params }).then(r => r.data),
   get: id => api.get(`/invoice-review/${id}`).then(r => r.data),
-  // The reading happens on the job queue, not on this connection. The upload keeps its
-  // timeout — a stall transferring a file is a real fault — but the review itself has none.
-  create: (formData, onTick) => api.post('/invoice-review', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
-  }).then(r => waitForJob(r.data.jobId, { onTick })),
+  // REVERTED to answering on the request. The move to the job queue broke this module in
+  // production and the cause was not yet understood; restoring what worked came first.
+  create: formData => api.post('/invoice-review', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
+  }).then(r => r.data),
   downloadMarkdown: async (id, fileName) => {
     const res = await api.get(`/invoice-review/${id}/report.md`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `invoice_review_${id}.md`);

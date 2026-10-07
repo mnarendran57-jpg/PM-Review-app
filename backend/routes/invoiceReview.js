@@ -9,7 +9,6 @@ const { friendlyAiError } = require('../lib/aiErrors');
 const { GOVERNING_SQL } = require('../lib/docTypes');
 const { ensureTermsRead } = require('../lib/contractTerms');
 const storage = require('../lib/storage');
-const jobs = require('../lib/jobs');
 
 
 const access = require('../lib/access');
@@ -81,63 +80,51 @@ router.post('/', upload.array('invoices', 100), async (req, res) => {
       if (contractRow) contractTerms = await ensureTermsRead(contractRow);
     }
 
-    // The reading no longer happens on this request. Everything above is cheap and has
-    // already answered where it needed to; what follows takes minutes, held the connection
-    // open throughout, and was lost without trace whenever the service restarted mid-read.
-    const jobId = jobs.startFrom(req, 'invoice-review', async () => {
-      try {
-      const { invoice, observations } = await analyzeInvoices({
-        invoiceBuffers: files.map(f => f.buffer),
-        contractTerms,
-      });
-
-      const data = { invoice, contractTerms };
-      const results = runInvoiceChecks(data);
-      const report = buildInvoiceReport({ data, results, observations });
-
-      const criticalCount = results.filter(r => r.critical && r.status === 'FAIL').length;
-      const failCount = results.filter(r => r.status === 'FAIL').length;
-
-      const insert = db.prepare(`
-        INSERT INTO invoice_reviews (
-          org_id, project_id, contract_id, contract_label, vendor, invoice_number, invoice_date, total_amount,
-          extracted_data, checks_result, ai_observations, report_markdown,
-          critical_count, fail_count, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        req.orgId, projectId,
-        contractRow?.id ?? null,
-        contractRow ? (contractRow.label || contractRow.file_name) : null,
-        invoice.vendor || null,
-        invoice.invoiceNumber || null,
-        invoice.invoiceDate || null,
-        invoice.total ?? null,
-        JSON.stringify({ invoice }),
-        JSON.stringify(results),
-        JSON.stringify(observations),
-        report.markdown,
-        criticalCount, failCount,
-        req.body.created_by || null
-      );
-      const reviewId = insert.lastInsertRowid;
-
-      const insertFile = db.prepare(`
-        INSERT INTO invoice_review_files (review_id, file_name, mime_type, file_key, file_blob)
-        VALUES (?, ?, ?, ?, ?)
-      `);
-      for (const f of files) {
-        const { key } = await storage.storeFile('invoice', f.buffer, f.mimetype, f.originalname);
-        insertFile.run(reviewId, f.originalname, f.mimetype, key, key ? Buffer.alloc(0) : f.buffer);
-      }
-
-    return { id: reviewId, report, results };
-      } catch (err) {
-        console.error('invoice-review failed:', err);
-        err.friendlyMessage = friendlyAiError(err);
-        throw err;
-      }
+    const { invoice, observations } = await analyzeInvoices({
+      invoiceBuffers: files.map(f => f.buffer),
+      contractTerms,
     });
-    res.status(202).json({ jobId });
+
+    const data = { invoice, contractTerms };
+    const results = runInvoiceChecks(data);
+    const report = buildInvoiceReport({ data, results, observations });
+
+    const criticalCount = results.filter(r => r.critical && r.status === 'FAIL').length;
+    const failCount = results.filter(r => r.status === 'FAIL').length;
+
+    const insert = db.prepare(`
+      INSERT INTO invoice_reviews (
+        org_id, project_id, contract_id, contract_label, vendor, invoice_number, invoice_date, total_amount,
+        extracted_data, checks_result, ai_observations, report_markdown,
+        critical_count, fail_count, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      req.orgId, projectId,
+      contractRow?.id ?? null,
+      contractRow ? (contractRow.label || contractRow.file_name) : null,
+      invoice.vendor || null,
+      invoice.invoiceNumber || null,
+      invoice.invoiceDate || null,
+      invoice.total ?? null,
+      JSON.stringify({ invoice }),
+      JSON.stringify(results),
+      JSON.stringify(observations),
+      report.markdown,
+      criticalCount, failCount,
+      req.body.created_by || null
+    );
+    const reviewId = insert.lastInsertRowid;
+
+    const insertFile = db.prepare(`
+      INSERT INTO invoice_review_files (review_id, file_name, mime_type, file_key, file_blob)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    for (const f of files) {
+      const { key } = await storage.storeFile('invoice', f.buffer, f.mimetype, f.originalname);
+      insertFile.run(reviewId, f.originalname, f.mimetype, key, key ? Buffer.alloc(0) : f.buffer);
+    }
+
+    res.json({ id: reviewId, report, results });
   } catch (err) {
     console.error('Invoice review error:', err);
     res.status(err.status === 429 ? 429 : 500).json({ error: friendlyAiError(err) });
