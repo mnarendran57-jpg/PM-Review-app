@@ -5,9 +5,13 @@
 // Five places opened a document and walked its pages with the same fifteen lines, and all five held
 // every page's parsed content until the whole document was finished. pdfjs caches each page's
 // operator list and font data on the document as it goes, so a 500-page drawing set kept 500 pages
-// resident where one would have done. The service runs in 512 MB and is handed documents that are
-// routinely larger than most web applications ever see, so this is the difference between reading a
-// set and restarting the service.
+// resident where one would have done. The service runs in 2 GB — 512 MB until 8 October 2026 — and
+// is handed documents that are routinely larger than most web applications ever see, so this is the
+// difference between reading a set and restarting the service. The larger instance did not make
+// this optional. Releasing each page as it goes is what makes the cost of a read proportional to the
+// largest PAGE rather than to the number of pages — so a 500-page set costs about what a 5-page one
+// does. Take the release away and the cost scales with length again, which 2 GB would not survive
+// either; four times the room only moves the page count at which it falls over.
 //
 // What this adds over the copies: each page is released as soon as its caller has taken what it
 // needs, the document is closed even when the extractor throws, and the file is not duplicated on

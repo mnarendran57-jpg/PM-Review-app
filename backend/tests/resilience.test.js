@@ -168,6 +168,57 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     assert.ok(limits.every(n => n <= 100), `a body limit of ${Math.max(...limits)}MB is larger than the instance`);
   });
 
+  console.log('\nThe deployment says what we are actually paying for:');
+
+  // Two numbers live in render.yaml and they have to agree with each other and with the invoice.
+  //
+  // The plan line is load-bearing in a way that is easy to miss: for a service Render manages as a
+  // Blueprint, this file is the source of truth, so a plan upgrade bought in the dashboard is undone
+  // by the next sync if the file still names the old one. Money spent, nothing gained.
+  //
+  // The heap ceiling is the other half. Node sizes its heap from the host machine, not the
+  // container, so without --max-old-space-size V8 happily grows past Render's limit and the process
+  // is killed mid-request — taking every other request with it. The ceiling has to be stated, and
+  // stated low enough that the native allocation outside the heap still fits underneath the plan.
+  const RENDER_YAML = (() => {
+    const fs = require('fs');
+    const path = require('path');
+    return fs.readFileSync(path.join(__dirname, '..', '..', 'render.yaml'), 'utf8');
+  })();
+
+  // Render's published memory per plan, in MB.
+  const PLAN_MEMORY_MB = { free: 512, starter: 512, standard: 2048, pro: 4096 };
+
+  check('the plan in the file is the plan being paid for', () => {
+    const plan = RENDER_YAML.match(/^\s*plan:\s*(\S+)/m)?.[1];
+    assert.ok(plan, 'no plan is named, so Render picks one');
+    assert.ok(PLAN_MEMORY_MB[plan], `"${plan}" is not a plan whose memory this test knows`);
+    assert.strictEqual(plan, 'standard',
+      `the service was upgraded to Standard on 8 October 2026; this file says "${plan}", which a `
+      + 'Blueprint sync would apply — downgrading the instance without anyone touching the dashboard');
+  });
+
+  check('the heap ceiling is stated, and leaves room underneath the plan', () => {
+    const plan = RENDER_YAML.match(/^\s*plan:\s*(\S+)/m)?.[1];
+    const ceiling = Number(RENDER_YAML.match(/--max-old-space-size=(\d+)/)?.[1]);
+    assert.ok(ceiling, 'without a stated ceiling V8 grows past the container and the process is killed');
+
+    const planMb = PLAN_MEMORY_MB[plan];
+    // pdfjs settles around 250 MB resident per document read, almost all of it native allocation
+    // that sits OUTSIDE this ceiling. Leaving a fifth of the plan unclaimed is what keeps an
+    // out-of-memory error a failure of one request rather than a restart of the service.
+    const headroom = Math.round(planMb * 0.2);
+    assert.ok(ceiling <= planMb - headroom,
+      `a ${ceiling} MB heap on a ${planMb} MB plan leaves only ${planMb - ceiling} MB for everything `
+      + `outside the heap; at least ${headroom} MB is needed`);
+
+    // The opposite mistake, and the quieter one: the plan grew and this did not, so the instance is
+    // paid for and unused. There is no crash to notice — just the old crashes, still happening.
+    assert.ok(ceiling >= planMb / 2,
+      `a ${ceiling} MB heap on a ${planMb} MB plan is barely a quarter of what is being paid for — `
+      + 'raise this with the instance size, together');
+  });
+
   console.log(`\n${failed === 0 ? 'All' : ''} ${passed} check${passed === 1 ? '' : 's'} passed`
     + `${failed ? `, ${failed} FAILED` : '.'}`);
   process.exit(failed === 0 ? 0 : 1);

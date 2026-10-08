@@ -19,8 +19,15 @@
 //
 // The limit is deliberately generous — the common case is one or two people working at once, and
 // this should be invisible until the day it is the only thing keeping the service alive.
-
-const DEFAULT_LIMIT = Number(process.env.AI_CONCURRENCY || 6);
+//
+// 12 rather than the original 6, following the move to a 2 GB instance on 8 October 2026. The
+// number is not derived from the memory, though, and raising it with the plan is a judgement rather
+// than arithmetic: what waits here is an API call, which spends its time on the network, so twelve
+// in flight cost twelve open sockets and not twelve documents' worth of memory. The documents are
+// already in memory before the call is made — see routes/jobs.js for where that is bounded instead.
+// It is set from the environment so it can be pulled back without a deploy if a real crowd ever
+// shows that this was optimistic.
+const DEFAULT_LIMIT = Number(process.env.AI_CONCURRENCY || 12);
 
 // Long enough that a genuinely slow document is not refused, short enough that a queue cannot grow
 // without end behind one stuck task.

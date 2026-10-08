@@ -12,8 +12,14 @@ services:
     name: tandemiq-backend
     runtime: node
     rootDir: backend
-    plan: starter            # Free instances sleep and cold-start (~30-60s of "lag");
-                             # Starter stays warm. Change to `free` to trial at no cost.
+    # Standard: 2 GB of memory and a full CPU. Upgraded from `starter` (512 MB, half a CPU) on
+    # 8 October 2026, because the small instance was being killed under ordinary use — two or three
+    # people reading documents at once was enough.
+    #
+    # THIS LINE IS LOAD-BEARING. If the service is managed as a Render Blueprint, Render reads the
+    # plan from this file on every sync, so leaving it at `starter` would silently undo an upgrade
+    # bought in the dashboard. The file has to agree with what is being paid for.
+    plan: standard
     buildCommand: npm install
     # Node sizes its heap from the MACHINE's memory, not the container's, and on a shared instance
     # that is a number far larger than this plan allows — measured at 2,240 MB on a developer laptop.
@@ -21,14 +27,18 @@ services:
     # container is killed while V8 still believes it has room. That is what "exceeded its memory
     # limit" means here: not a leak, but a garbage collector that was never told how small the box is.
     #
-    # 256 MB leaves headroom for the rest. Reading a PDF's text layer settles at about 250 MB
-    # resident on top of a 54 MB baseline, and almost none of that is the JS heap — it is native
-    # allocation inside pdfjs, which does not grow across documents but does not come back either.
+    # So the ceiling has to be stated, and it has to be stated BELOW the plan's real limit. It was
+    # 256 MB on a 512 MB instance; it is 1,500 MB on a 2 GB one, which keeps the same shape of
+    # headroom. Reading a PDF's text layer settles at about 250 MB resident on top of a 54 MB
+    # baseline, and almost none of that is the JS heap — it is native allocation inside pdfjs, which
+    # does not grow across documents but does not come back either. That native share sits outside
+    # this number, which is the reason for leaving 500 MB of the plan unclaimed rather than asking
+    # for all of it.
     #
     # The point is not that this makes the app use less. It is that exceeding the ceiling now fails
     # ONE request with an out-of-memory error the logs will name, instead of restarting the service
     # and taking every other request in flight with it. Raise this with the instance size, together.
-    startCommand: node --max-old-space-size=256 server.js
+    startCommand: node --max-old-space-size=1500 server.js
     healthCheckPath: /api/health
     autoDeploy: true
     # Persistent disk so the SQLite file (and its WAL) survive redeploys. Without this,
