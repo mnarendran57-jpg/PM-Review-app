@@ -19,6 +19,20 @@ const FEATURES = [
 
 const FEATURE_KEYS = FEATURES.map(f => f.key);
 
+// Included with every plan, whatever the customer is paying for.
+//
+// Pay App Reviewer 3 is the pay application reviewer now — the earlier two are withdrawn and no
+// longer appear anywhere. Leaving it in the Pro tier alone meant a customer on Lite or Standard
+// opened Coaster and found NO way to review a pay application at all, which is the one thing most
+// of them came for. A reviewer reported exactly that.
+//
+// It is listed in the tiers below as well, so the published plans read truthfully; this is the
+// line that actually guarantees it, including for a `custom` plan whose ticked list predates the
+// module and could not have mentioned it.
+const ALWAYS_INCLUDED = ['cmar-pay-app-audit'];
+
+const withAlways = keys => [...new Set([...keys, ...ALWAYS_INCLUDED])];
+
 // The published tiers. Edit these to change what a plan includes — every customer on that
 // plan follows immediately, with no per-customer work.
 const PLANS = [
@@ -26,14 +40,14 @@ const PLANS = [
     key: 'lite',
     name: 'Coaster Lite',
     blurb: 'The two reviews most firms start with.',
-    features: ['pay-app-review', 'invoice-review'],
+    features: ['pay-app-review', 'invoice-review', 'cmar-pay-app-audit'],
   },
   {
     key: 'standard',
     name: 'Standard',
     blurb: 'Adds change orders, progress reporting, the submittal and RFI logs, and meeting actions.',
     features: [
-      'pay-app-review', 'invoice-review', 'pco-review', 'progress-report',
+      'pay-app-review', 'invoice-review', 'cmar-pay-app-audit', 'pco-review', 'progress-report',
       'submittal-log', 'rfi-log', 'meeting-actions',
     ],
   },
@@ -65,12 +79,12 @@ function featuresForOrg(orgId) {
   if (org.plan === 'custom') {
     try {
       const chosen = JSON.parse(org.plan_features || '[]');
-      return Array.isArray(chosen) ? chosen.filter(k => FEATURE_KEYS.includes(k)) : [];
+      return withAlways(Array.isArray(chosen) ? chosen.filter(k => FEATURE_KEYS.includes(k)) : []);
     } catch {
-      return [];
+      return withAlways([]);
     }
   }
-  return planByKey(org.plan)?.features ?? FEATURE_KEYS;
+  return withAlways(planByKey(org.plan)?.features ?? FEATURE_KEYS);
 }
 
 const orgHasFeature = (orgId, featureKey) => featuresForOrg(orgId).includes(featureKey);
@@ -92,6 +106,6 @@ function requireFeature(featureKey) {
 }
 
 module.exports = {
-  FEATURES, FEATURE_KEYS, PLANS, PLAN_KEYS, planByKey,
+  FEATURES, FEATURE_KEYS, PLANS, PLAN_KEYS, planByKey, ALWAYS_INCLUDED,
   featuresForOrg, orgHasFeature, requireFeature,
 };
