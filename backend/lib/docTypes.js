@@ -25,6 +25,23 @@ const GOVERNING_SQL = GOVERNING_TYPES.map(t => `'${t}'`).join(', ');
 // find a contract.
 const governingLabel = 'contract or purchase order';
 
+// A DESIGN document is what a submittal or an RFI is answered from.
+//
+// These are two different questions and they are answered by two different documents, which is the
+// distinction a PM reported Coaster getting wrong. A pay application is measured against the
+// GOVERNING document above — the contract or PO — because that is what the money was agreed in. A
+// submittal is measured against the engineer's DESIGN: the specification says what a product has to
+// do, and the drawings say where it goes. A contract says neither. It sets price, schedule and
+// procedure, and nothing in an A133 tells you whether a controller is acceptable.
+//
+// So a submittal reviewed against a contract produces a confident reading of a document that was
+// never going to answer the question — "nothing found in the specification" — which looks like a
+// broken feature and is really the wrong document. Naming the two sets separately is what lets the
+// review say so instead.
+const DESIGN_TYPES = ['specifications', 'drawings', 'design'];
+
+const isDesign = docType => DESIGN_TYPES.includes(docType);
+
 const DOC_TYPES = [
   {
     key: 'contract',
@@ -60,4 +77,5 @@ const labelFor = key => DOC_TYPES.find(t => t.key === key)?.label || 'Other';
 module.exports = {
   DOC_TYPES, DOC_TYPE_KEYS, labelFor,
   GOVERNING_TYPES, GOVERNING_SQL, isGoverning, governingLabel,
+  DESIGN_TYPES, isDesign,
 };

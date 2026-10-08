@@ -11,6 +11,7 @@ import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import FileDrop from '../components/FileDrop';
+import ChoiceButtons from '../components/ChoiceButtons';
 
 const REVIEW_ACTIONS = [
   'Approved', 'Approved as Noted', 'Revise and Resubmit', 'Rejected', 'For Record Only',
@@ -326,24 +327,18 @@ function NewSubmittalForm({ onSaved, onCancel }) {
             whether the submittal is sitting on the PM's desk or sitting with the A/E, and those
             are different states: one has a clock running against it and the other does not. */}
         <Field label="Has it gone to the A/E yet?" className="col-span-2">
-          <div className="flex gap-2">
-            {[['yes', 'Yes'], ['no', 'Not yet']].map(([value, label]) => (
-              <button key={value} type="button"
-                className="px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors"
-                style={sent === value
-                  ? { background: '#1d4ed8', color: '#fff' }
-                  : { background: '#fff', color: '#6b7280', border: '1px solid #e8edf2' }}
-                onClick={() => {
-                  setSent(value);
-                  // Choosing "Yes" offers today, which is right almost every time and is one
-                  // less thing to type; choosing "Not yet" clears it, because a date left
-                  // behind would start the response clock on a submittal nobody has sent.
-                  setForm(f => ({ ...f, date_forwarded: value === 'yes' ? (f.date_forwarded || today()) : '' }));
-                }}>
-                {label}
-              </button>
-            ))}
-          </div>
+          <ChoiceButtons
+            name="Has it gone to the A/E yet?"
+            value={sent}
+            options={[{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'Not yet' }]}
+            onChange={(value) => {
+              setSent(value);
+              // Choosing "Yes" offers today, which is right almost every time and is one
+              // less thing to type; choosing "Not yet" clears it, because a date left
+              // behind would start the response clock on a submittal nobody has sent.
+              setForm(f => ({ ...f, date_forwarded: value === 'yes' ? (f.date_forwarded || today()) : '' }));
+            }}
+          />
           {sent === 'yes' ? (
             <div className="mt-2">
               <input className="input" type="date" value={form.date_forwarded}

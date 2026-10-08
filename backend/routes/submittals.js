@@ -17,6 +17,7 @@ const { extractSubmittal, extractResponse } = require('../lib/submittalExtract')
 const {
   REVIEW_ACTIONS, isReopening, buildLogRow, summarize, dueDateFor, toIsoDay, todayUtc,
 } = require('../lib/submittalLog');
+const { isDesign, labelFor } = require('../lib/docTypes');
 
 // Same scoping as every other tool: one organization, and within it only the projects the
 // caller is actually on. Applied to the whole router so no endpoint can be added without it.
@@ -235,6 +236,60 @@ async function specificationsFor(projectId) {
     ORDER BY created_at ASC
   `).all(projectId).map(r => r.id);
   return loadDocumentBuffers(projectId, rows);
+}
+
+// Why this review cannot run, said so the PM can act on it.
+//
+// WHY THIS EXISTS
+//
+// The message here used to be "No specification is on this project yet. Upload it under Shared
+// Documents". True, and useless to the person who had just uploaded their contract and could see it
+// sitting there. A PM reviewing a controls submittal hit exactly this: the project held an executed
+// A133, the review found no requirements in it, and the honest report — nothing found in the
+// specification — read as a broken feature. The missing sentence was that the contract is not a
+// substitute, because it does not contain requirements at all.
+//
+// So the message names what IS filed and what is missing, rather than describing an absence. The
+// difference between a dead end and an instruction is usually one specific noun.
+//
+// `chosen` is the documents the caller picked, when they picked any. Choosing the wrong kind is a
+// different mistake from having none, and it deserves a different sentence.
+function noDesignDocumentMessage(projectId, chosen = []) {
+  const filing = type => `"${labelFor(type)}"`;
+
+  if (chosen.length) {
+    const kinds = [...new Set(chosen.map(d => labelFor(d.doc_type)))];
+    return `${chosen.length === 1 ? `"${chosen[0].label}" is filed as ${filing(chosen[0].doc_type)}`
+      : `What you chose is filed as ${kinds.join(' and ')}`}, which is not what a submittal is `
+      + 'measured against. A submittal is checked against the engineer\'s design — the '
+      + 'specification, which says what the product has to do, or the drawings, which say where it '
+      + 'goes. Choose one of those instead, or attach the specification section here.';
+  }
+
+  const filed = db.prepare(
+    `SELECT DISTINCT doc_type FROM project_contracts WHERE project_id=?`,
+  ).all(projectId).map(r => r.doc_type).filter(t => !isDesign(t));
+
+  if (!filed.length) {
+    return 'Nothing is filed on this project yet. A submittal is checked against the engineer\'s '
+      + 'specification — upload it under Shared Documents and choose "Specifications" as its type, '
+      + 'or attach the section here.';
+  }
+
+  // Lower case and with an article, because these read as prose here rather than as the headings
+  // they are on the Shared Documents page: "a contract and a cost estimate", not "Contract and
+  // Cost Estimate".
+  const names = [...new Set(filed.map(t => {
+    const label = labelFor(t).toLowerCase();
+    return `${/^[aeiou]/.test(label) ? 'an' : 'a'} ${label}`;
+  }))];
+  return `This project has ${names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and `
+    + `${names[names.length - 1]}`} on file, but no `
+    + 'specification — and a submittal cannot be reviewed against a contract. A contract sets the '
+    + 'price, the schedule and the procedure; it does not say what a product has to do. The '
+    + 'specification is a separate document, from the engineer. Upload it under Shared Documents '
+    + 'and choose "Specifications" as its type, and the review will find the section this '
+    + 'submittal was made under.';
 }
 
 // A prediction run before the submittal exists.
@@ -468,9 +523,13 @@ router.post('/preview-analysis', uploadForAnalysis.fields([
     const submittalFiles = (req.files?.files || [])
       .map(f => ({ label: f.originalname, buffer: f.buffer }));
 
-    if (!documents.length) {
+    // Nothing to measure against, or nothing of the right kind. A contract ticked here would
+    // otherwise be read as though it carried requirements, and the review would report their
+    // absence as a finding — see noDesignDocumentMessage.
+    const design = documents.filter(d => isDesign(d.doc_type));
+    if (!design.length) {
       return res.status(400).json({
-        error: 'Choose the specification this submittal is checked against, or attach it.',
+        error: noDesignDocumentMessage(project.id, documents),
       });
     }
     if (!submittalFiles.length) {
@@ -489,7 +548,9 @@ router.post('/preview-analysis', uploadForAnalysis.fields([
       notes: nullable(req.body.notes),
     };
 
-    const { analysis, sources } = await analyzeSubmittal({ submittal, documents, submittalFiles });
+    const { analysis, sources } = await analyzeSubmittal({
+      submittal, documents: design, submittalFiles,
+    });
     const token = stashPreview(req, {
       projectId: project.id,
       specSection: submittal.spec_section,
@@ -873,18 +934,16 @@ router.post('/:id/analysis', uploadForAnalysis.fields([
     if (!submittalFiles.length) submittalFiles = await submittalFilesFor(submittal.id, current?.id);
     if (!submittalFiles.length) submittalFiles = await submittalFilesFor(submittal.id, null);
 
-    if (documents.length === 0 && submittalFiles.length === 0) {
+    const design = documents.filter(d => isDesign(d.doc_type));
+
+    if (!design.length && submittalFiles.length === 0) {
       return res.status(400).json({
         error: 'There is nothing to read yet. Attach the contractor\'s submittal, and add the '
           + 'specification to the project\'s Shared Documents.',
       });
     }
-    if (documents.length === 0) {
-      return res.status(400).json({
-        error: 'No specification is on this project yet. Upload it under Shared Documents — or '
-          + 'attach the section here — and the review will find the section this submittal was '
-          + 'made under.',
-      });
+    if (!design.length) {
+      return res.status(400).json({ error: noDesignDocumentMessage(submittal.project_id, documents) });
     }
 
     // Searching a project manual and then reading the pages it found is the longest thing in this
@@ -893,7 +952,12 @@ router.post('/:id/analysis', uploadForAnalysis.fields([
     const createdBy = req.user.name || req.user.email;
     const jobId = jobs.startFrom(req, 'submittal-analysis', async () => {
       try {
-        const { analysis, sources, markdown } = await analyzeSubmittal({ submittal, documents, submittalFiles });
+        // `design` and not `documents`: a contract ticked alongside the specification would
+        // otherwise be read as though it governed, and would spend pages of the reading budget
+        // that the spec section needs.
+        const { analysis, sources, markdown } = await analyzeSubmittal({
+          submittal, documents: design, submittalFiles,
+        });
 
         const saved = db.prepare(`
           INSERT INTO submittal_analyses (submittal_id, revision_id, spec_section, sources_json,
@@ -990,3 +1054,7 @@ router.get('/:id/files/:fileId', async (req, res) => {
 });
 
 module.exports = router;
+// Exported for tests, as routes/projectDocuments.js does. What this says to a PM who cannot run
+// the review is the whole point of it, so it is worth asserting on the wording rather than only on
+// the status code.
+module.exports.noDesignDocumentMessage = noDesignDocumentMessage;

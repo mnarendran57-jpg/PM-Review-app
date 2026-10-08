@@ -10,6 +10,7 @@ import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import FileDrop from '../components/FileDrop';
+import ChoiceButtons from '../components/ChoiceButtons';
 
 const RESPONSE_ACTIONS = [
   'Answered', 'Answered with Conditions', 'Needs More Information', 'Void / Withdrawn',
@@ -504,17 +505,12 @@ function NewRfiForm({ onSaved, onCancel }) {
           response clock has started. "Not yet" leaves the date open in the log. */}
       <div className="p-4 rounded-xl" style={{ background: '#fafbfc', border: '1px solid #eef1f4' }}>
         <label className="label">Has this RFI been sent to the A/E?</label>
-        <div className="flex gap-2">
-          {[['no', 'Not yet'], ['yes', 'Yes — sent']].map(([value, label]) => (
-            <button key={value} type="button" onClick={() => setSent(value)}
-              className="px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors"
-              style={sent === value
-                ? { background: '#2563eb', color: '#fff' }
-                : { background: '#fff', color: '#4b5563', border: '1px solid #e8edf2' }}>
-              {label}
-            </button>
-          ))}
-        </div>
+        <ChoiceButtons
+          name="Has this RFI been sent to the A/E?"
+          value={sent}
+          onChange={setSent}
+          options={[{ value: 'no', label: 'Not yet' }, { value: 'yes', label: 'Yes — sent' }]}
+        />
         {sent === 'yes' ? (
           <div className="mt-3">
             <Field label="Date sent">
@@ -1001,17 +997,12 @@ function FollowUpForm({ rfi, onSaved, onCancel }) {
 
       <div className="p-4 rounded-xl" style={{ background: '#fafbfc', border: '1px solid #eef1f4' }}>
         <label className="label">Has this follow-up been sent to the A/E?</label>
-        <div className="flex gap-2">
-          {[['no', 'Not yet'], ['yes', 'Yes — sent']].map(([value, label]) => (
-            <button key={value} type="button" onClick={() => setSent(value)}
-              className="px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors"
-              style={sent === value
-                ? { background: '#2563eb', color: '#fff' }
-                : { background: '#fff', color: '#4b5563', border: '1px solid #e8edf2' }}>
-              {label}
-            </button>
-          ))}
-        </div>
+        <ChoiceButtons
+          name="Has this follow-up been sent to the A/E?"
+          value={sent}
+          onChange={setSent}
+          options={[{ value: 'no', label: 'Not yet' }, { value: 'yes', label: 'Yes — sent' }]}
+        />
         {sent === 'yes' ? (
           <div className="mt-3">
             <Field label="Date sent">
