@@ -9,7 +9,8 @@ const { requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../lib/plans');
 const { friendlyAiError } = require('../lib/aiErrors');
 const { GOVERNING_SQL } = require('../lib/docTypes');
-const { readPacket, readContractTerms } = require('../lib/cmarRead');
+const { readPacket } = require('../lib/cmarRead');
+const { contractTermsFor } = require('../lib/cmarContractTerms');
 const { runChecks } = require('../lib/cmarChecks');
 const { judge } = require('../lib/cmarJudgement');
 const { buildReport } = require('../lib/cmarReport');
@@ -141,8 +142,9 @@ async function audit({ file, projectId, projectName, contractRow, mathOnly, orgI
 
     const [packet, terms] = await Promise.all([
       readPacket(file.buffer, file.originalname),
+      // Read once per contract and kept; every later audit of the project uses the stored reading.
       contractBytes
-        ? readContractTerms(contractBytes, contractRow.file_name)
+        ? contractTermsFor({ db, contractRow, bytes: contractBytes })
         : Promise.resolve(null),
     ]);
 

@@ -1319,6 +1319,14 @@ if (!columnsOf('invoice_reviews').includes('contract_label')) {
 if (!columnsOf('project_contracts').includes('extract_json')) {
   db.exec(`ALTER TABLE project_contracts ADD COLUMN extract_json TEXT`);
 }
+// The CMAR audit's own reading of a contract, kept so it is not paid for again every period. See
+// lib/cmarContractTerms.js for why it does not share `terms`, and for what the key covers.
+if (!columnsOf('project_contracts').includes('cmar_terms')) {
+  db.exec(`ALTER TABLE project_contracts ADD COLUMN cmar_terms TEXT`);
+}
+if (!columnsOf('project_contracts').includes('cmar_terms_key')) {
+  db.exec(`ALTER TABLE project_contracts ADD COLUMN cmar_terms_key TEXT`);
+}
 
 // The same for change orders, which are now reviewed against a chosen contract rather than
 // whichever one happened to be uploaded most recently.
