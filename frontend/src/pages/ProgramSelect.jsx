@@ -5,6 +5,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { programsApi, authApi, selectedOrg, selectedProgram } from '../api';
 import Modal from '../components/Modal';
+import Breadcrumbs from '../components/Breadcrumbs';
 
 // Step two: the programs inside the chosen organization. An Org Admin sees every program;
 // everyone else sees only the ones holding a project they're actually on — so this list is
@@ -102,6 +103,8 @@ export default function ProgramSelect() {
             </button>
           </div>
         </div>
+
+        <Breadcrumbs className="mb-4 -ml-1.5 animate-fade-up" />
 
         <div className="flex items-end justify-between mb-6 animate-fade-up">
           <div>
