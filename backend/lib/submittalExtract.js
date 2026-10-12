@@ -17,7 +17,10 @@ async function coverPages(buffer) {
 
 // Read back through a tool call rather than by parsing the reply as text — a stamp comment
 // quoting a dimension would otherwise end the JSON string on the inch mark. See lib/aiJson.js.
-async function callClaude(pdfBuffer, prompt, tool, label) {
+//
+// `fast` is for the read that only copies a cover sheet into fields. See extractSubmittal and
+// extractResponse for which of the two that is, and why the other is not.
+async function callClaude(pdfBuffer, prompt, tool, label, { fast = false } = {}) {
   const { data } = await askForJson({
     content: [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBuffer.toString('base64') } },
@@ -26,6 +29,7 @@ async function callClaude(pdfBuffer, prompt, tool, label) {
     tool,
     maxTokens: 8000,
     label,
+    fast,
   });
   return data;
 }
@@ -105,9 +109,12 @@ Rules:
 // Reads a contractor's submittal package so the log entry opens pre-filled. Everything it
 // returns is shown to the PM for confirmation before anything is saved — this is a first
 // draft of the record, not the record.
+//
+// On the fast model, because this is copying a cover sheet: the number, the spec section, the
+// vendor and the date are printed on it, and the PM reads every field before saving it.
 async function extractSubmittal(pdfBuffer) {
   const { buffer, totalPages } = await coverPages(pdfBuffer);
-  const parsed = await callClaude(buffer, SUBMITTAL_PROMPT, SUBMITTAL_TOOL, 'submittal read');
+  const parsed = await callClaude(buffer, SUBMITTAL_PROMPT, SUBMITTAL_TOOL, 'submittal read', { fast: true });
 
   const revision = Number(parsed.revisionNumber);
   return {
@@ -171,6 +178,9 @@ Rules:
 // Reads the A/E's stamp off a returned submittal. Returns the action as a suggestion: the PM
 // confirms or overrides it before the revision is closed, because an action read wrongly
 // would either close a live submittal or hold a finished one open.
+//
+// Left on the careful model for the same reason. Reading which box on a stamp is marked and
+// mapping its wording onto a decision is deciding what the document means — not copying it.
 async function extractResponse(pdfBuffer) {
   const { buffer } = await coverPages(pdfBuffer);
   const parsed = await callClaude(buffer, RESPONSE_PROMPT, RESPONSE_TOOL, 'submittal stamp read');

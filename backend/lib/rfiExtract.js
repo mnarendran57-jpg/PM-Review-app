@@ -15,7 +15,10 @@ async function frontPages(buffer) {
 // Read back through a tool call rather than by parsing the reply as text. An RFI question
 // quoting a duct size — "the 36" main above the corridor" — would otherwise end the JSON
 // string on the inch mark and fail the whole read. See lib/aiJson.js.
-async function callClaude(pdfBuffer, prompt, tool, label) {
+//
+// `fast` is for the read that only copies a form into fields. See extractRfi and
+// extractRfiResponse for which of the two that is, and why the other is not.
+async function callClaude(pdfBuffer, prompt, tool, label, { fast = false } = {}) {
   const { data } = await askForJson({
     content: [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBuffer.toString('base64') } },
@@ -24,6 +27,7 @@ async function callClaude(pdfBuffer, prompt, tool, label) {
     tool,
     maxTokens: 8000,
     label,
+    fast,
   });
   return data;
 }
@@ -96,8 +100,13 @@ Rules:
 
 // Reads a contractor's RFI so the log entry opens pre-filled. Everything is shown to the PM
 // for confirmation before it is saved — a first draft of the record, not the record.
+//
+// On the fast model, because this is copying a form: the number, the date, who asked and what
+// they asked are printed on the page, and the PM reads every field before saving it. Nothing here
+// decides anything — the one field that leans that way, the discipline, is checked against a
+// fixed list below and can be changed on the form.
 async function extractRfi(pdfBuffer) {
-  const parsed = await callClaude(await frontPages(pdfBuffer), RFI_PROMPT, RFI_TOOL, 'rfi read');
+  const parsed = await callClaude(await frontPages(pdfBuffer), RFI_PROMPT, RFI_TOOL, 'rfi read', { fast: true });
   const discipline = trimmed(parsed.discipline);
   return {
     rfiNumber: trimmed(parsed.rfiNumber),
@@ -162,6 +171,10 @@ Rules:
 
 // Reads the A/E's response. The action comes back as a suggestion the PM confirms, because a
 // misread disposition would either close a live RFI or hold a finished one open.
+//
+// Left on the careful model for the same reason. Turning an A/E's wording into a disposition, and
+// noticing that an answer is really a request for pricing, is deciding what the document means —
+// not copying it.
 async function extractRfiResponse(pdfBuffer) {
   const parsed = await callClaude(await frontPages(pdfBuffer), RESPONSE_PROMPT, RESPONSE_TOOL, 'rfi response read');
   const action = trimmed(parsed.responseAction);

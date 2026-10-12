@@ -114,6 +114,9 @@ If any field cannot be found with confidence, use "Not specified" as its value.`
       tool: PROPOSAL_TOOL,
       maxTokens: 6000,
       label: 'proposal extract',
+      // Five fields copied off the front of a proposal, every one of them shown on the form for
+      // the PM to correct before a memo is made from it. Transcription, so the fast model.
+      fast: true,
     });
     res.json(extracted);
   } catch (err) {
