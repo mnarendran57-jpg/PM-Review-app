@@ -11,7 +11,7 @@ const access = require('../lib/access');
 const { requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../lib/plans');
 const { brandingFor } = require('../lib/orgBranding');
-const { uprightJpeg, fitJpeg } = require('../lib/imageOrientation');
+const photoWork = require('../lib/photos');
 const { fillProgressTemplate, templateFor, loadTemplate } = require('../lib/progressCover');
 const { renderProgressReportDocx } = require('../lib/progressReportDocx');
 
@@ -85,31 +85,50 @@ router.post('/', upload.array('images', 100), async (req, res) => {
     const contractor = req.body.contractor || null;
     const reportNumber = req.body.report_number ? Number(req.body.report_number) : nextReportNumber(projectId);
 
-    // Turned the right way up before anything looks at it. A phone held sideways writes the
-    // pixels in the sensor's orientation and records a tag saying how far round to turn them;
-    // the upload box honours that tag, and every consumer downstream of here does not. Doing it
-    // once, here, means Claude, the PDF and the Word template all see the same upright photo —
-    // and the stored file is upright too, so an old report reprinted later is still right.
-    let turned = 0;
-    const images = files.map((f, i) => {
-      const upright = uprightJpeg(f.buffer);
-      if (upright.rotated) turned++;
-      return {
-        buffer: upright.buffer,
-        mediaType: f.mimetype === 'image/jpg' ? 'image/jpeg' : f.mimetype,
-        caption: (captions[i] || '').toString().trim(),
-        fileName: f.originalname,
-      };
-    });
-    if (turned) console.log(`[progress] ${turned} of ${files.length} photo(s) turned upright`);
-
-    // The reading no longer happens on this request. Everything above is cheap and has
-    // already answered where it needed to; what follows takes minutes, held the connection
-    // open throughout, and was lost without trace whenever the service restarted mid-read.
+    // The reading does not happen on this request, and neither does preparing the photos. Everything
+    // above is cheap and has already answered where it needed to; what follows takes minutes, held
+    // the connection open throughout, and was lost without trace whenever the service restarted
+    // mid-read.
     const jobId = jobs.startFrom(req, 'progress-report', async () => {
       try {
+      // Turned the right way up before anything looks at it. A phone held sideways writes the
+      // pixels in the sensor's orientation and records a tag saying how far round to turn them;
+      // the upload box honours that tag, and every consumer downstream of here does not. Doing it
+      // once, here, means Claude, the PDF and the Word template all see the same upright photo —
+      // and the stored file is upright too, so an old report reprinted later is still right.
+      //
+      // On a thread of its own, one photo after another — see lib/photos.js. Turning thirty photos
+      // in place held the whole service still until the last one was done.
+      //
+      // The copy fitted to the size the report prints it is made here too, once, because two
+      // things want it: the stored display copy below, and the reading. Claude was being sent the
+      // full-size photographs, and it looks at nothing larger than about 1,568 pixels across — so
+      // the extra was paid for in memory and thrown away on arrival. Worse, the whole request has
+      // a size ceiling: eight or ten phone photos at full size is past it, and the report failed
+      // with "request exceeds the maximum size" before a single photo was read.
+      let turned = 0;
+      const images = [];
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const upright = await photoWork.upright(f.buffer);
+        if (upright.rotated) {
+          turned++;
+          // The bytes as they arrived are not needed again once there is an upright copy.
+          f.buffer = null;
+        }
+        images.push({
+          buffer: upright.buffer,
+          display: await photoWork.fit(upright.buffer),
+          mediaType: f.mimetype === 'image/jpg' ? 'image/jpeg' : f.mimetype,
+          caption: (captions[i] || '').toString().trim(),
+          fileName: f.originalname,
+        });
+      }
+      if (turned) console.log(`[progress] ${turned} of ${files.length} photo(s) turned upright`);
+
       const report = await analyzeProgress({
-        images, projectName, contractor, periodLabel, visitDate, notes: req.body.notes || null,
+        images: images.map(img => ({ ...img, buffer: img.display })),
+        projectName, contractor, periodLabel, visitDate, notes: req.body.notes || null,
       });
 
       const header = {
@@ -143,10 +162,10 @@ router.post('/', upload.array('images', 100), async (req, res) => {
         const bytes = images[i].buffer;
         const { key } = await storage.storeFile('progress', bytes, f.mimetype, f.originalname);
 
-        // And a second copy at the size the report prints it, made once here rather than on every
-        // download. Both are kept: the original is what the viewer shows and what a PM would want
-        // back if they ever needed the full-resolution picture.
-        const display = fitJpeg(bytes);
+        // And the copy at the size the report prints it, made above rather than on every download.
+        // Both are kept: the original is what the viewer shows and what a PM would want back if
+        // they ever needed the full-resolution picture.
+        const display = images[i].display;
         const displayStored = display === bytes
           ? { key: null }   // already small enough — no second copy is worth keeping
           : await storage.storeFile('progress', display, f.mimetype, `display_${f.originalname}`);
@@ -214,7 +233,7 @@ async function photosForReport(reportId) {
       // which is the price of not rewriting everybody's stored files behind their back.
       const stored = await storage.readFile({ key: p.file_key, blob: p.file_blob });
       if (!stored) continue;
-      buffer = fitJpeg(stored);
+      buffer = await photoWork.fit(stored);
     }
 
     photos.push({ caption: p.caption || '', mimeType: p.mime_type || 'image/jpeg', buffer });

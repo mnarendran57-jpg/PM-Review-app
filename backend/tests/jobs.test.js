@@ -41,6 +41,22 @@ const check = (name, ok) => { ok ? pass++ : fail++; console.log(`  ${ok ? 'ok  '
   check('not visible to another org', jobs.get(id, { orgId: 1, userId: 1 }) === null);
   check('an unknown id is not found', jobs.get('made-up-id', OWNER) === null);
 
+  // A crowd of jobs is accepted at once but worked through four at a time, and none is lost.
+  let working = 0;
+  let mostAtOnce = 0;
+  const crowd = Array.from({ length: 9 }, (_, n) => jobs.start({ ...OWNER, kind: 'test-crowd' }, async () => {
+    working += 1;
+    mostAtOnce = Math.max(mostAtOnce, working);
+    await wait(120);
+    working -= 1;
+    return { n };
+  }));
+  check('every job in a crowd is accepted straight away',
+    crowd.every(c => jobs.view(jobs.get(c, OWNER)).status === 'running'));
+  await wait(700);
+  check('no more than four do their work at the same moment', mostAtOnce === 4);
+  check('and every one of them finishes', crowd.every(c => jobs.view(jobs.get(c, OWNER)).status === 'done'));
+
   // 4. A job whose process died is reported, not polled for ever.
   const stuck = jobs.start({ ...OWNER, kind: 'test-stuck' }, () => new Promise(() => {}));
   db.prepare(`UPDATE ai_jobs SET updated_at = datetime('now', '-90 minutes') WHERE id=?`).run(stuck);

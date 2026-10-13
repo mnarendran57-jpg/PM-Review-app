@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const db = require('../database');
+const { createLimiter } = require('./workLimit');
 
 // AI work that outlives the request that asked for it.
 //
@@ -37,6 +38,43 @@ const STALE_AFTER_MINUTES = 45;
 // for ever.
 const KEEP_HOURS = 6;
 
+// How many jobs may be doing their work at once. The rest wait their turn.
+//
+// A job holds its documents in memory for as long as it runs — the upload, the pieces it is split
+// into, and the encoded copies that go to the API. Nothing bounded how many did that at the same
+// moment, so a room full of people each starting a review was a room full of documents open at
+// once, on an instance with a fixed amount of memory. Past that amount the host does not fail one
+// review: it replaces the process, and every review in flight is lost.
+//
+// The limit on AI calls in lib/workLimit.js does not cover this. It counts calls on the network,
+// and the documents are in memory long before the first one is made.
+//
+// Four, because the ordinary case is one or two people and this should be invisible until the day
+// it matters. A waiting job still reads as running to the page that started it, which is true from
+// where the user sits: it has been accepted and it will be done. Set from the environment so it can
+// be changed without a deploy.
+const jobLimiter = createLimiter({ limit: Number(process.env.JOB_CONCURRENCY || 4), name: 'jobs' });
+
+// Runs the work when a place is free, and gives the place back when it is done.
+//
+// A place is also given back after STALE_AFTER_MINUTES whatever the work is doing. By then the page
+// has already been told the job is lost, and work that never returns — a call that hangs, a promise
+// nobody settles — would otherwise hold its place for the life of the process. Four of those and
+// nothing would ever start again.
+async function inTurn(work) {
+  const release = await jobLimiter.acquire();
+  let held = true;
+  const free = () => { if (held) { held = false; release(); } };
+  const timer = setTimeout(free, STALE_AFTER_MINUTES * 60 * 1000);
+  timer.unref?.();
+  try {
+    return await work();
+  } finally {
+    clearTimeout(timer);
+    free();
+  }
+}
+
 function create({ orgId, userId, kind }) {
   const id = crypto.randomUUID();
   db.prepare(`
@@ -51,7 +89,7 @@ function start({ orgId, userId, kind }, work) {
   const id = create({ orgId, userId, kind });
 
   Promise.resolve()
-    .then(work)
+    .then(() => inTurn(work))
     .then((result) => {
       db.prepare(`
         UPDATE ai_jobs SET status=?, result_json=?, updated_at=datetime('now') WHERE id=?
