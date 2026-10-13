@@ -35,7 +35,7 @@ const upload = multer({
 // files" no matter which field it arrived on.
 const uploadForAnalysis = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024, files: 8 },
+  limits: { fileSize: 100 * 1024 * 1024, files: 16 },
 });
 
 // How long the A/E gets before this counts as overdue.
@@ -119,6 +119,43 @@ async function attachFile({ submittalId, revisionId, kind, file }) {
     INSERT INTO submittal_files (submittal_id, revision_id, kind, file_name, mime_type, file_key, file_blob)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(submittalId, revisionId, kind, file.originalname, file.mimetype || null, key, key ? Buffer.alloc(0) : file.buffer);
+}
+
+// Documents kept with one submittal rather than filed for the project, as the review takes them —
+// and only the ones asked for. Being kept with a submittal is not a reason to read a document
+// again: every document read is paid for, so which of them a review uses is the PM's choice each
+// time, exactly as it is for a Shared Document.
+//
+// Handed over as a specification, because that is what a document attached to a submittal is for:
+// the thing the package is measured against. The section the submittal cites is found inside it
+// the same way it is found inside a filed project manual.
+async function loadReferenceBuffers(submittalId, ids) {
+  const wanted = new Set(ids);
+  const rows = db.prepare(
+    `SELECT id, file_name, file_key, file_blob FROM submittal_files
+     WHERE submittal_id=? AND kind='reference' ORDER BY id`
+  ).all(submittalId).filter(row => wanted.has(row.id));
+  const out = [];
+  for (const row of rows) {
+    const buffer = await storage.readFile({ key: row.file_key, blob: row.file_blob });
+    if (buffer) out.push({ label: row.file_name, doc_type: 'specifications', buffer });
+  }
+  return out;
+}
+
+// Keeps a document with a submittal and returns its id. One of the same name replaces the one
+// already there: attaching the revised section should leave the revised section, not both.
+async function keepReference({ submittalId, revisionId, file }) {
+  const old = db.prepare(
+    `SELECT id, file_key FROM submittal_files WHERE submittal_id=? AND kind='reference' AND file_name=?`
+  ).all(submittalId, file.originalname);
+  await attachFile({ submittalId, revisionId, kind: 'reference', file });
+  for (const row of old) db.prepare(`DELETE FROM submittal_files WHERE id=?`).run(row.id);
+  await storage.remove(old.map(row => row.file_key));
+  return db.prepare(
+    `SELECT id FROM submittal_files WHERE submittal_id=? AND kind='reference' AND file_name=?
+     ORDER BY id DESC LIMIT 1`
+  ).get(submittalId, file.originalname).id;
 }
 
 const touch = submittalId =>
@@ -508,18 +545,25 @@ router.post('/extract', upload.single('file'), async (req, res) => {
 // Predicts the review before the submittal is logged, so the PM sees what the A/E is likely to
 // say while they still have the package on their desk and can fix it. Nothing is written: the
 // result is held under a token and saved by POST "/" below.
+//
+// `reference_files` are documents attached for this submittal alone. They are read exactly as a
+// filed specification is, and are kept with the submittal when it is saved.
 router.post('/preview-analysis', uploadForAnalysis.fields([
   { name: 'files', maxCount: 4 },
   { name: 'spec_files', maxCount: 4 },
+  { name: 'reference_files', maxCount: 10 },
 ]), async (req, res) => {
   try {
     const project = projectInScope(req, req.body.project_id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    const documents = await loadDocumentBuffers(project.id, parseIdList(req.body.document_ids));
-    for (const f of (req.files?.spec_files || [])) {
-      documents.push({ label: f.originalname, doc_type: 'specifications', buffer: f.buffer });
-    }
+    // What was attached for this submittal goes first. The page budget is shared and spent in
+    // order, and a document the PM went and found for this package has the best claim on it.
+    const documents = [
+      ...[...(req.files?.reference_files || []), ...(req.files?.spec_files || [])]
+        .map(f => ({ label: f.originalname, doc_type: 'specifications', buffer: f.buffer })),
+      ...await loadDocumentBuffers(project.id, parseIdList(req.body.document_ids)),
+    ];
     const submittalFiles = (req.files?.files || [])
       .map(f => ({ label: f.originalname, buffer: f.buffer }));
 
@@ -571,6 +615,7 @@ router.post('/preview-analysis', uploadForAnalysis.fields([
 router.post('/', uploadForAnalysis.fields([
   { name: 'file', maxCount: 1 },
   { name: 'spec_file', maxCount: 1 },
+  { name: 'reference_files', maxCount: 10 },
 ]), async (req, res) => {
   try {
     const project = projectInScope(req, req.body.project_id);
@@ -669,6 +714,11 @@ router.post('/', uploadForAnalysis.fields([
       await attachFile({
         submittalId, revisionId: revision.lastInsertRowid, kind: 'submittal', file: packageFile,
       });
+    }
+    // Documents the PM attached for this submittal alone, kept with it so a later review can be
+    // run against them again without their being uploaded again.
+    for (const file of req.files?.reference_files || []) {
+      await keepReference({ submittalId, revisionId: revision.lastInsertRowid, file });
     }
 
     res.json(detail(
@@ -890,9 +940,14 @@ router.post('/:id/revisions/:revId/response', upload.single('file'), async (req,
 // Run before the submittal goes to the A/E, which is the whole point: a missing certificate
 // found today costs an email, and found after the stamp costs a resubmittal and three weeks.
 
+//
+// `reference_files` are documents added for this submittal alone. They are read now, and kept with
+// the submittal so they can be chosen again without being uploaded again. `reference_ids` says
+// which of the documents already kept are to be read this time; one that is not named is not read.
 router.post('/:id/analysis', uploadForAnalysis.fields([
   { name: 'files', maxCount: 4 },
   { name: 'spec_files', maxCount: 4 },
+  { name: 'reference_files', maxCount: 10 },
 ]), async (req, res) => {
   try {
     const submittal = visibleSubmittal(req);
@@ -908,9 +963,26 @@ router.post('/:id/analysis', uploadForAnalysis.fields([
     }
     if ('document_ids' in req.body) setDocuments(submittal.id, submittal.project_id, req.body.document_ids);
 
+    const referenceIds = parseIdList(req.body.reference_ids);
+    const addedFiles = req.files?.reference_files || [];
+    if (addedFiles.length) {
+      const open = revisionsOf(submittal.id);
+      // A document uploaded for this review is, by that act, one the PM wants read.
+      for (const file of addedFiles) {
+        referenceIds.push(await keepReference({
+          submittalId: submittal.id, revisionId: open[open.length - 1]?.id ?? null, file,
+        }));
+      }
+    }
+
     const chosenIds = db.prepare(`SELECT contract_id FROM submittal_documents WHERE submittal_id=?`)
       .all(submittal.id).map(r => r.contract_id);
-    const documents = await loadDocumentBuffers(submittal.project_id, chosenIds);
+    // What was chosen from this submittal's own documents goes first, for the same reason as in
+    // the preview: the page budget is spent in order.
+    const documents = [
+      ...await loadReferenceBuffers(submittal.id, referenceIds),
+      ...await loadDocumentBuffers(submittal.project_id, chosenIds),
+    ];
 
     // The specification a PM has on their desk but has not filed yet. Read for this review only
     // and not added to the project, because filing documents is the Shared Documents page's job

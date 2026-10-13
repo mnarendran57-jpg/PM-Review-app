@@ -12,6 +12,7 @@ import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import FileDrop from '../components/FileDrop';
 import ChoiceButtons from '../components/ChoiceButtons';
+import AddedDocuments, { useAddedDocuments, DESIGN_CATEGORIES } from '../components/AddedDocuments';
 
 const REVIEW_ACTIONS = [
   'Approved', 'Approved as Noted', 'Revise and Resubmit', 'Rejected', 'For Record Only',
@@ -125,7 +126,10 @@ function NewSubmittalForm({ onSaved, onCancel }) {
   // that at prediction time means coming back to fix the entry.
   const [docs, setDocs] = useState([]);
   const [documentIds, setDocumentIds] = useState([]);
-  const [specFile, setSpecFile] = useState(null);
+  // Documents added here: as many as needed, each either for this submittal alone or saved to
+  // Shared Documents. See components/AddedDocuments.jsx.
+  const { added, setAdded, filing, listVersion, fileShared, onceFiles } =
+    useAddedDocuments(projectId, documentIds, setDocumentIds);
 
   // The prediction, run before the entry exists. Held here until the submittal is saved, at
   // which point the token hands it to the new log entry — so what gets stored is the reading
@@ -135,18 +139,18 @@ function NewSubmittalForm({ onSaved, onCancel }) {
   const [analysisError, setAnalysisError] = useState('');
 
   // There has to be a package to review and something to review it against.
-  const canAnalyse = !!file && (documentIds.length > 0 || !!specFile);
+  const canAnalyse = !!file && (documentIds.length > 0 || added.length > 0);
 
   const predict = async () => {
     setAnalysing(true); setAnalysisError(''); setPreview(null);
     try {
       const fd = new FormData();
       fd.append('project_id', projectId);
-      fd.append('document_ids', JSON.stringify(documentIds));
+      fd.append('document_ids', JSON.stringify(await fileShared()));
       ['submittal_number', 'description', 'spec_section', 'submittal_type', 'vendor', 'notes']
         .forEach(k => fd.append(k, form[k] ?? ''));
       if (file) fd.append('files', file);
-      if (specFile) fd.append('spec_files', specFile);
+      for (const once of onceFiles) fd.append('reference_files', once);
       setPreview(await submittalsApi.previewAnalysis(fd));
     } catch (err) {
       setAnalysisError(errorText(err, 'Could not predict the review. You can still log the '
@@ -159,7 +163,8 @@ function NewSubmittalForm({ onSaved, onCancel }) {
     payAppReviewApi.listDocuments(projectId)
       .then(all => setDocs(all.filter(d => !WORD_TEMPLATES.includes(d.doc_type))))
       .catch(() => setDocs([]));
-  }, [projectId]);
+    // listVersion changes when a document has just been filed from this form, so it shows up here.
+  }, [projectId, listVersion]);
 
   const toggleDoc = id => setDocumentIds(
     documentIds.includes(id) ? documentIds.filter(x => x !== id) : [...documentIds, id]);
@@ -201,9 +206,11 @@ function NewSubmittalForm({ onSaved, onCancel }) {
       const fd = new FormData();
       fd.append('project_id', projectId);
       Object.entries(form).forEach(([k, v]) => fd.append(k, v ?? ''));
-      fd.append('document_ids', JSON.stringify(documentIds));
+      // Anything still marked for Shared Documents is filed first, so the submittal is linked to it.
+      fd.append('document_ids', JSON.stringify(await fileShared()));
       if (preview?.token) fd.append('analysis_token', preview.token);
-      if (specFile) fd.append('spec_file', specFile);
+      // Kept with this submittal, so a later review can be run against them again.
+      for (const once of onceFiles) fd.append('reference_files', once);
       if (file) fd.append('file', file);
       onSaved(await submittalsApi.create(fd));
     } catch (err) {
@@ -266,17 +273,15 @@ function NewSubmittalForm({ onSaved, onCancel }) {
             </div>
           )}
 
-          <input type="file" accept=".pdf"
-            className="text-xs text-gray-500 w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 file:cursor-pointer"
-            onChange={e => setSpecFile(e.target.files?.[0] || null)} />
-          <p className="text-[11px] text-gray-400 mt-1">
-            {specFile
-              ? `${specFile.name} — it will be filed under Shared Documents, so you only upload it once.`
-              : docs.length
-                ? 'Tick one above, or attach it here if it is not filed yet.'
-                : 'Nothing is filed on this project yet — anything you attach here is added to '
-                  + 'Shared Documents.'}
-          </p>
+          {docs.length === 0 && (
+            <p className="text-[11px] text-gray-500 mb-2">
+              Nothing is filed on this project yet. Add the specification below and choose to save
+              it, and it will be listed here.
+            </p>
+          )}
+          <AddedDocuments items={added} onChange={setAdded} noun="submittal" categories={DESIGN_CATEGORIES}
+            hint="the specification, a drawing, a design narrative"
+            disabled={filing || analysing || saving} />
         </Field>
 
         {/* The prediction comes before the A/E question, because that is the order the work
@@ -288,7 +293,8 @@ function NewSubmittalForm({ onSaved, onCancel }) {
               <button type="button" className="btn-secondary w-full justify-center py-1.5 text-sm"
                 onClick={predict} disabled={analysing || !canAnalyse}>
                 <SparklesIcon className="w-4 h-4" />
-                {analysing ? 'Finding the section and reading it…' : "Predict the A/E's review"}
+                {filing ? 'Saving to Shared Documents…'
+                  : analysing ? 'Finding the section and reading it…' : "Predict the A/E's review"}
               </button>
               <p className="text-[11px] text-gray-400 mt-1.5">
                 {canAnalyse
@@ -296,7 +302,7 @@ function NewSubmittalForm({ onSaved, onCancel }) {
                     + 'manual costs no more than the one section. It has no bearing on the log.'
                   : !file
                     ? "Attach the contractor's package above to predict the review."
-                    : 'Choose or attach a specification above to predict the review.'}
+                    : 'Tick a specification above, or add one, to predict the review.'}
               </p>
             </div>
           )}
@@ -682,10 +688,13 @@ function PredictedReviewPanel({ record, onRan }) {
   const { projectId } = useProject();
   const [docs, setDocs] = useState([]);
   const [chosen, setChosen] = useState(null);      // null until the user or the record decides
+  // What is ticked, as the uploader sees it: filing a document from here ticks it.
+  const tickedNow = chosen ?? (record.documents || []).map(d => d.id);
+  const { added, setAdded, filing, listVersion, fileShared, onceFiles } =
+    useAddedDocuments(projectId, tickedNow, setChosen);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(false);
-  const [specFiles, setSpecFiles] = useState([]);
 
   const stored = record.analysis;
   const a = stored?.analysis;
@@ -697,15 +706,28 @@ function PredictedReviewPanel({ record, onRan }) {
     payAppReviewApi.listDocuments(projectId)
       .then(all => setDocs(all.filter(d => !WORD_TEMPLATES.includes(d.doc_type))))
       .catch(() => setDocs([]));
-  }, [projectId]);
+    // listVersion changes when a document has just been filed from this panel.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, listVersion]);
 
   const selected = chosen ?? (record.documents || []).map(d => d.id);
   const toggle = id => setChosen(
     selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id]);
 
+  // Documents already kept with this submittal. Each is read only if it is ticked: a review is
+  // paid for by the document, so nothing is read again just because it happens to be attached.
+  // They start ticked where the last review used them, so "run it again" means the same
+  // documents, and unticked where it did not.
+  const kept = (record.files || []).filter(f => f.kind === 'reference');
+  const [keptIds, setKeptIds] = useState(() => {
+    const lastRead = new Set((record.analysis?.sources || []).map(s => s.label));
+    return kept.filter(f => lastRead.has(f.file_name)).map(f => f.id);
+  });
+  const toggleKept = id => setKeptIds(ids => (ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]));
+
   // There has to be something to measure against, and the panel says so rather than failing
   // once the PM has waited for a review to run.
-  const canRun = selected.length > 0 || specFiles.length > 0;
+  const canRun = selected.length > 0 || added.length > 0 || keptIds.length > 0;
 
   const run = async () => {
     setRunning(true); setError('');
@@ -713,9 +735,13 @@ function PredictedReviewPanel({ record, onRan }) {
       const fd = new FormData();
       // Always sent, because the panel now shows the choice: what is ticked is what is read,
       // including when the PM has deliberately unticked everything and attached a file instead.
-      fd.append('document_ids', JSON.stringify(selected));
-      for (const f of specFiles) fd.append('spec_files', f);
+      fd.append('document_ids', JSON.stringify(await fileShared()));
+      fd.append('reference_ids', JSON.stringify(keptIds));
+      // Read now, and kept with this submittal so they can be ticked again without being uploaded
+      // again.
+      for (const once of onceFiles) fd.append('reference_files', once);
       const res = await submittalsApi.analyze(record.id, fd);
+      setAdded([]);
       onRan(res.submittal);
       setOpen(false);
     } catch (err) {
@@ -726,7 +752,8 @@ function PredictedReviewPanel({ record, onRan }) {
   // What the review will read, named before it runs, so the PM is never guessing.
   const willRead = [
     ...docs.filter(d => selected.includes(d.id)).map(d => d.label || d.file_name),
-    ...specFiles.map(f => f.name),
+    ...kept.filter(f => keptIds.includes(f.id)).map(f => f.file_name),
+    ...added.map(a => a.file.name),
   ].join(', ') || null;
 
   const actionStyle = ACTION_STYLE[a?.likelyAction] || ACTION_STYLE['For Record Only'];
@@ -776,16 +803,25 @@ function PredictedReviewPanel({ record, onRan }) {
             </label>
           ))}
 
+          {kept.length > 0 && (
+            <div className="pt-1">
+              <p className="text-[11px] text-gray-400 mb-1">
+                Kept with this submittal only. Tick the ones to read this time.
+              </p>
+              {kept.map(f => (
+                <label key={f.id} className="flex items-start gap-2 cursor-pointer">
+                  <input type="checkbox" className="mt-0.5" checked={keptIds.includes(f.id)}
+                    onChange={() => toggleKept(f.id)} />
+                  <span className="text-[12px] text-gray-700">{f.file_name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+
           <div className="pt-1">
-            <label className="label">…or attach it, if it is not filed yet</label>
-            <input type="file" multiple accept=".pdf"
-              className="text-xs text-gray-500 w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 file:cursor-pointer"
-              onChange={e => setSpecFiles(Array.from(e.target.files || []))} />
-            <p className="text-[11px] text-gray-400 mt-1">
-              {specFiles.length
-                ? `${specFiles.length} attached — read for this prediction only, not filed in the project.`
-                : 'Used for this prediction only; it is not added to Shared Documents.'}
-            </p>
+            <AddedDocuments items={added} onChange={setAdded} noun="submittal" categories={DESIGN_CATEGORIES}
+              hint="the specification, a drawing, a design narrative"
+              disabled={filing || running} />
           </div>
 
           {willRead && (
@@ -799,7 +835,8 @@ function PredictedReviewPanel({ record, onRan }) {
           <div className="flex gap-2 pt-1">
             <button className="btn-primary" onClick={run} disabled={running || !canRun}>
               <SparklesIcon className="w-4 h-4" />
-              {running ? 'Finding the section…' : a ? 'Run it again' : 'Predict the review'}
+              {filing ? 'Saving to Shared Documents…'
+                : running ? 'Finding the section…' : a ? 'Run it again' : 'Predict the review'}
             </button>
             {a && (
               <button className="btn-secondary" onClick={() => setOpen(false)} disabled={running}>Cancel</button>
@@ -809,9 +846,8 @@ function PredictedReviewPanel({ record, onRan }) {
             {canRun
               ? 'The section is found by its number in the manual\'s own text, so a long book '
                 + 'costs no more to read than the one section does.'
-              : 'Tick a document or attach one to run this. The submittal is logged either way — '
-                + 'a prediction is only worth having when there is a specification to measure '
-                + 'against.'}
+              : 'Tick a document, or add one, to run this. Only what is ticked or added is read. '
+                + 'The submittal is logged either way.'}
           </p>
         </div>
       )}
