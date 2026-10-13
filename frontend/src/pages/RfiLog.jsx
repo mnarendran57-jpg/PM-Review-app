@@ -350,48 +350,15 @@ function AddedDocuments({ items, onChange, disabled }) {
   );
 }
 
-function NewRfiForm({ onSaved, onCancel }) {
-  const { projectId } = useProject();
-  const [file, setFile] = useState(null);
-  // Documents added on this form: [{ file, where }], where `where` is ONCE or a shared category.
+// The documents added on a form, and what becomes of them. Shared by the two places an RFI is read
+// against documents — while it is being logged, and from its entry afterwards — so that adding a
+// drawing works the same way in both.
+//
+// `added` is [{ file, where }], where `where` is ONCE or a Shared Documents category.
+function useAddedDocuments(projectId, documentIds, setDocumentIds) {
   const [added, setAdded] = useState([]);
   const [filing, setFiling] = useState(false);
   const [listVersion, setListVersion] = useState(0);
-  const [form, setForm] = useState({ ...EMPTY });
-  const [documentIds, setDocumentIds] = useState([]);
-  // Ticks the project's drawings the first time the list arrives. An RFI is answered from the
-  // drawings, so starting from a blank list asked the PM to restate something the project
-  // already knows. Only ever a default: it runs once, and never over a choice already made.
-  const [preselected, setPreselected] = useState(false);
-  const preselectDrawings = (all) => {
-    if (preselected) return;
-    setPreselected(true);
-    const drawings = all.filter(d => d.doc_type === 'drawings').map(d => d.id);
-    if (drawings.length) setDocumentIds(prev => (prev.length ? prev : drawings));
-  };
-  const [reading, setReading] = useState(false);
-  const [readNote, setReadNote] = useState('');
-  const [cited, setCited] = useState([]);
-  const [showDetails, setShowDetails] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  // Whether the PM has already forwarded this to the A/E. Asked outright rather than left as
-  // a bare date field, because a blank date is ambiguous — it could mean "not sent" or
-  // "sent, but I didn't fill this in", and the response clock depends on which.
-  const [sent, setSent] = useState('no');
-  const [sentDate, setSentDate] = useState(today());
-
-  // The documents reading, run before the entry exists. Held here until the RFI is saved, at
-  // which point the token hands it to the new log entry.
-  const [preview, setPreview] = useState(null);
-  const [analysing, setAnalysing] = useState(false);
-  const [analysisError, setAnalysisError] = useState('');
-
-  const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
-
-  const onceFiles = added.filter(a => a.where === ONCE).map(a => a.file);
-  const canAnalyse = !!form.discipline && (documentIds.length > 0 || !!file || added.length > 0);
 
   // Files everything marked for Shared Documents and returns the full list of documents to read
   // against — the ones already ticked plus the ones just filed.
@@ -423,6 +390,52 @@ function NewRfiForm({ onSaved, onCancel }) {
     }
     return ids;
   };
+
+  return {
+    added, setAdded, filing, listVersion, fileShared,
+    onceFiles: added.filter(a => a.where === ONCE).map(a => a.file),
+  };
+}
+
+function NewRfiForm({ onSaved, onCancel }) {
+  const { projectId } = useProject();
+  const [file, setFile] = useState(null);
+  const [form, setForm] = useState({ ...EMPTY });
+  const [documentIds, setDocumentIds] = useState([]);
+  const { added, setAdded, filing, listVersion, fileShared, onceFiles } =
+    useAddedDocuments(projectId, documentIds, setDocumentIds);
+  // Ticks the project's drawings the first time the list arrives. An RFI is answered from the
+  // drawings, so starting from a blank list asked the PM to restate something the project
+  // already knows. Only ever a default: it runs once, and never over a choice already made.
+  const [preselected, setPreselected] = useState(false);
+  const preselectDrawings = (all) => {
+    if (preselected) return;
+    setPreselected(true);
+    const drawings = all.filter(d => d.doc_type === 'drawings').map(d => d.id);
+    if (drawings.length) setDocumentIds(prev => (prev.length ? prev : drawings));
+  };
+  const [reading, setReading] = useState(false);
+  const [readNote, setReadNote] = useState('');
+  const [cited, setCited] = useState([]);
+  const [showDetails, setShowDetails] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  // Whether the PM has already forwarded this to the A/E. Asked outright rather than left as
+  // a bare date field, because a blank date is ambiguous — it could mean "not sent" or
+  // "sent, but I didn't fill this in", and the response clock depends on which.
+  const [sent, setSent] = useState('no');
+  const [sentDate, setSentDate] = useState(today());
+
+  // The documents reading, run before the entry exists. Held here until the RFI is saved, at
+  // which point the token hands it to the new log entry.
+  const [preview, setPreview] = useState(null);
+  const [analysing, setAnalysing] = useState(false);
+  const [analysisError, setAnalysisError] = useState('');
+
+  const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
+
+  const canAnalyse = !!form.discipline && (documentIds.length > 0 || !!file || added.length > 0);
 
   const suggest = async () => {
     setAnalysing(true); setAnalysisError(''); setPreview(null);
@@ -678,18 +691,36 @@ function AnalysisPanel({ rfi, onRan }) {
   const { projectId } = useProject();
   const [discipline, setDiscipline] = useState(rfi.discipline || '');
   const [documentIds, setDocumentIds] = useState((rfi.documents || []).map(d => d.id));
+  const { added, setAdded, filing, listVersion, fileShared, onceFiles } =
+    useAddedDocuments(projectId, documentIds, setDocumentIds);
   const [editing, setEditing] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
   const stored = rfi.analysis;
+  // Documents already kept with this RFI. Each is read only if it is ticked: a reading is paid for
+  // by the document, so nothing is read again just because it happens to be attached. They start
+  // ticked where the last reading used them, so "run it again" means the same documents, and
+  // unticked where it did not.
+  const kept = (rfi.files || []).filter(f => f.kind === 'reference');
+  const [keptIds, setKeptIds] = useState(() => {
+    const lastRead = new Set((rfi.analysis?.sources || [])
+      .filter(s => s.docType === 'attachment').map(s => s.label));
+    return kept.filter(f => lastRead.has(f.file_name)).map(f => f.id);
+  });
+  const toggleKept = id => setKeptIds(ids => (ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]));
+  const canRun = !!discipline && (documentIds.length > 0 || added.length > 0 || keptIds.length > 0);
 
   const run = async () => {
     setRunning(true); setError('');
     try {
       const fd = new FormData();
       fd.append('discipline', discipline);
-      fd.append('document_ids', JSON.stringify(documentIds));
+      fd.append('document_ids', JSON.stringify(await fileShared()));
+      fd.append('reference_ids', JSON.stringify(keptIds));
+      // Read now, and kept with this RFI so they can be ticked again without being uploaded again.
+      for (const once of onceFiles) fd.append('reference_files', once);
       await rfisApi.analyze(rfi.id, fd);
+      setAdded([]);
       setEditing(false);
       onRan();
     } catch (err) {
@@ -724,13 +755,38 @@ function AnalysisPanel({ rfi, onRan }) {
           </Field>
           <div>
             <label className="label">Documents to read it against</label>
-            <DocumentPicker projectId={projectId} selected={documentIds} onChange={setDocumentIds} />
+            <p className="text-[11px] text-gray-400 mb-1.5">
+              These are the project's Shared Documents. Tick the ones to read.
+            </p>
+            <DocumentPicker projectId={projectId} selected={documentIds} onChange={setDocumentIds}
+              refreshKey={listVersion} />
+            {kept.length > 0 && (
+              <div className="mt-3">
+                <p className="text-[11px] text-gray-400 mb-1.5">
+                  Kept with this RFI only. Tick the ones to read this time.
+                </p>
+                <div className="space-y-1.5">
+                  {kept.map(f => (
+                    <label key={f.id}
+                      className="flex items-start gap-2.5 p-2 rounded-lg cursor-pointer transition-colors"
+                      style={{ background: keptIds.includes(f.id) ? '#eff6ff' : '#fafbfc' }}>
+                      <input type="checkbox" className="mt-0.5" checked={keptIds.includes(f.id)}
+                        onChange={() => toggleKept(f.id)} />
+                      <span className="block text-[12px] font-semibold text-gray-800 truncate min-w-0">
+                        {f.file_name}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
+          <AddedDocuments items={added} onChange={setAdded} disabled={filing || running} />
           <div className="flex gap-2">
-            <button className="btn-primary" onClick={run}
-              disabled={running || !discipline || !documentIds.length}>
+            <button className="btn-primary" onClick={run} disabled={running || !canRun}>
               <SparklesIcon className="w-4 h-4" />
-              {running ? 'Finding the sheets…' : stored ? 'Run it again' : 'Read it against the documents'}
+              {filing ? 'Saving to Shared Documents…'
+                : running ? 'Finding the sheets…' : stored ? 'Run it again' : 'Read it against the documents'}
             </button>
             {stored && (
               <button className="btn-secondary" onClick={() => setEditing(false)}>Cancel</button>
@@ -740,10 +796,10 @@ function AnalysisPanel({ rfi, onRan }) {
             <p className="text-[11px]" style={{ color: '#c2410c' }}>
               Choose what the RFI asks about first — it decides which drawings are read.
             </p>
-          ) : !documentIds.length ? (
+          ) : !canRun ? (
             <p className="text-[11px] text-gray-400">
-              Tick a document to run this. The RFI is logged either way — there is nothing to
-              read it against until a document is chosen.
+              Tick a document, or add one, to run this. Only what is ticked or added is read. The
+              RFI is logged either way.
             </p>
           ) : (
             <p className="text-[11px] text-gray-400">

@@ -193,6 +193,42 @@ async function attachFile({ rfiId, revisionId, kind, file }) {
 
 const touch = rfiId => db.prepare(`UPDATE rfis SET updated_at=datetime('now') WHERE id=?`).run(rfiId);
 
+// Documents kept with one RFI rather than filed for the project, as the analysis takes them — and
+// only the ones asked for. Being kept with an RFI is not a reason to read a document again: every
+// document read is paid for, so which of them a reading uses is the PM's choice each time, exactly
+// as it is for a Shared Document.
+//
+// They are read the way a Shared Document is — the sheets that bear on the question are found and
+// those are what is sent — because being attached to one RFI says where a document lives, not how
+// long it is.
+async function loadReferenceBuffers(rfiId, ids) {
+  const wanted = new Set(ids);
+  const rows = db.prepare(
+    `SELECT id, file_name, file_key, file_blob FROM rfi_files WHERE rfi_id=? AND kind='reference' ORDER BY id`
+  ).all(rfiId).filter(row => wanted.has(row.id));
+  const out = [];
+  for (const row of rows) {
+    const buffer = await storage.readFile({ key: row.file_key, blob: row.file_blob });
+    if (buffer) out.push({ label: row.file_name, doc_type: 'attachment', buffer });
+  }
+  return out;
+}
+
+// Keeps a document with an RFI. One of the same name replaces the one already there: attaching the
+// revised sketch should leave the revised sketch, not both, and running the reading twice with the
+// same upload should not leave two copies to be read twice.
+async function keepReference({ rfiId, revisionId, file }) {
+  const old = db.prepare(
+    `SELECT id, file_key FROM rfi_files WHERE rfi_id=? AND kind='reference' AND file_name=?`
+  ).all(rfiId, file.originalname);
+  await attachFile({ rfiId, revisionId, kind: 'reference', file });
+  for (const row of old) db.prepare(`DELETE FROM rfi_files WHERE id=?`).run(row.id);
+  await storage.remove(old.map(row => row.file_key));
+  return db.prepare(
+    `SELECT id FROM rfi_files WHERE rfi_id=? AND kind='reference' AND file_name=? ORDER BY id DESC LIMIT 1`
+  ).get(rfiId, file.originalname).id;
+}
+
 // Document ids arrive as a JSON array from the form, but tolerate a bare comma-separated
 // string so a hand-made request is not silently ignored.
 function parseIdList(raw) {
@@ -743,7 +779,14 @@ router.post('/:id/revisions/:revId/response', upload.single('file'), async (req,
 //
 // Nothing here touches the log. The prediction is for the PM's understanding, and is stored
 // separately so it can never be mistaken for the A/E's actual answer.
-router.post('/:id/analysis', upload.array('files', 4), async (req, res) => {
+//
+// `reference_files` are documents added for this RFI alone. They are read now, and kept with the RFI
+// so they can be chosen again without being uploaded again. `reference_ids` says which of the
+// documents already kept are to be read this time; one that is not named is not read.
+router.post('/:id/analysis', uploadWithDocument.fields([
+  { name: 'files', maxCount: 4 },
+  { name: 'reference_files', maxCount: 10 },
+]), async (req, res) => {
   try {
     const rfi = visibleRfi(req);
     if (!rfi) return res.status(404).json({ error: 'Not found' });
@@ -762,14 +805,30 @@ router.post('/:id/analysis', upload.array('files', 4), async (req, res) => {
     }
     if ('document_ids' in req.body) setDocuments(rfi.id, rfi.project_id, req.body.document_ids);
 
+    const referenceIds = parseIdList(req.body.reference_ids);
+    const added = req.files?.reference_files || [];
+    if (added.length) {
+      const revisions = revisionsOf(rfi.id);
+      const current = revisions[revisions.length - 1];
+      // A document uploaded for this reading is, by that act, one the PM wants read.
+      for (const file of added) {
+        referenceIds.push(await keepReference({ rfiId: rfi.id, revisionId: current?.id ?? null, file }));
+      }
+    }
+
     const chosenIds = db.prepare(`SELECT contract_id FROM rfi_documents WHERE rfi_id=?`)
       .all(rfi.id).map(r => r.contract_id);
-    const documents = await loadDocumentBuffers(rfi.project_id, chosenIds);
+    // What was chosen from this RFI's own documents goes first. The page budget is shared and spent
+    // in order, and a document somebody attached to this one question has the best claim on it.
+    const documents = [
+      ...await loadReferenceBuffers(rfi.id, referenceIds),
+      ...await loadDocumentBuffers(rfi.project_id, chosenIds),
+    ];
 
     // The RFI's own attachments travel with it: a marked-up sketch from the contractor is
     // often what the question is really about.
     const extraFiles = [];
-    for (const file of req.files || []) {
+    for (const file of req.files?.files || []) {
       extraFiles.push({ label: file.originalname, buffer: file.buffer });
     }
     if (extraFiles.length === 0) {
