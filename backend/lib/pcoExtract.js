@@ -49,6 +49,17 @@ function pcoTool(hasReference) {
                 type: 'boolean',
                 description: 'True if qty/unit/unitPrice are given, false if it is a bare lump sum.',
               },
+              kind: {
+                type: 'string',
+                enum: ['material', 'equipment', 'labor', 'other'],
+                description: 'What the line pays for. "material" is a product that stays in the '
+                  + 'building — pipe, duct, fixtures, panels, finishes. "equipment" is a manufactured '
+                  + 'unit that is installed — an air handler, a pump, a switchboard. "labor" is '
+                  + 'hours, crews or installation with no product in it. "other" is everything else: '
+                  + 'rentals, permits, fees, freight, general conditions, a lump sum that mixes '
+                  + 'several of these. When a line is plainly both a product and its installation, '
+                  + 'call it by the product.',
+              },
             },
             required: ['description'],
           },
@@ -129,7 +140,7 @@ Rules:
   allowance (an owner's set-aside amount), not ordinary changed work.
 - Every markup/OH&P/fee line on the PCO must appear in "markups", each tagged with the
   party taking it and your best read of their tier.
-- Every priced line must appear in "lineItems" — do not merge rows.
+- Every priced line must appear in "lineItems" — do not merge rows. Give each one its "kind".
 - In "observations", write plain English for a reader who is not in construction. No IDs,
   no jargon. Ground every concern in something visible in the documents.`;
 }

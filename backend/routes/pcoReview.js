@@ -5,6 +5,7 @@ const db = require('../database');
 const { analyzePco } = require('../lib/pcoExtract');
 const { runPcoChecks } = require('../lib/pcoChecks');
 const { buildPcoReport } = require('../lib/pcoReport');
+const { findAlternatives, alternativesView } = require('../lib/pcoAlternatives');
 const { friendlyAiError } = require('../lib/aiErrors');
 const { GOVERNING_SQL } = require('../lib/docTypes');
 const { ensureTermsRead } = require('../lib/contractTerms');
@@ -109,7 +110,19 @@ router.post('/', upload.fields([
 
       const data = { pco, contractTerms, markupPolicy: null };
       const results = runPcoChecks(data);
-      const report = buildPcoReport({ data, results, observations, reference });
+
+      // Whether there is another way to do what this prices — asked only where the change order
+      // buys a product, and never allowed to cost the review itself. A change order that could not
+      // be looked at for alternatives is still a change order whose price was checked.
+      let alternativesFound = null;
+      try {
+        alternativesFound = await findAlternatives({ pco, reference });
+      } catch (err) {
+        console.error('[pco alternatives] skipped:', err.message);
+      }
+      const report = buildPcoReport({
+        data, results, observations, reference, alternatives: alternativesView(alternativesFound),
+      });
 
       const criticalCount = results.filter(r => r.critical && r.status === 'FAIL').length;
       const failCount = results.filter(r => r.status === 'FAIL').length;
@@ -123,10 +136,10 @@ router.post('/', upload.fields([
         INSERT INTO pco_reviews (
           org_id, project_id, contract_id, contract_label,
           pco_number, title, contractor, total_amount, is_allowance,
-          extracted_data, checks_result, ai_observations, report_markdown,
+          extracted_data, checks_result, ai_observations, alternatives_json, report_markdown,
           pco_file_name, pco_file, pco_file_key, reference_file_name, reference_file, reference_file_key,
           critical_count, fail_count, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         req.orgId, projectId,
         // Copied rather than joined, so a saved review still says whose terms it applied even
@@ -141,6 +154,7 @@ router.post('/', upload.fields([
         JSON.stringify({ pco, reference }),
         JSON.stringify(results),
         JSON.stringify(observations),
+        alternativesFound ? JSON.stringify(alternativesFound) : null,
         report.markdown,
         pcoFile.originalname, pcoKey ? Buffer.alloc(0) : pcoFile.buffer, pcoKey,
         referenceFile?.originalname || null,
@@ -185,11 +199,13 @@ router.get('/:id', (req, res) => {
   const report = buildPcoReport({
     data: { pco: extracted.pco, contractTerms: null },
     results, observations, reference: extracted.reference,
+    alternatives: alternativesView(row.alternatives_json ? JSON.parse(row.alternatives_json) : null),
   });
   res.json({
     ...row,
     pco_file: undefined,
     reference_file: undefined,
+    alternatives_json: undefined,
     extracted_data: extracted,
     checks_result: results,
     report,

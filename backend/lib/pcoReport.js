@@ -3,7 +3,7 @@ const { money } = require('./money');
 // Assembles the PCO review into the same shape the pay app report uses: a plain-English
 // summary, the deterministic findings grouped by severity, and — kept deliberately
 // separate — the model's advisory observations, which are judgment rather than math.
-function buildPcoReport({ data, results, observations, reference }) {
+function buildPcoReport({ data, results, observations, reference, alternatives = null }) {
   const p = data.pco;
   const critical = results.filter(r => r.critical && r.status === 'FAIL');
   const mathErrors = results.filter(r => !r.critical && r.status === 'FAIL');
@@ -29,11 +29,11 @@ function buildPcoReport({ data, results, observations, reference }) {
     reference: reference ? { type: reference.type, number: reference.number, subject: reference.subject } : null,
   };
 
-  const markdown = renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, cleanBill, observations, reference });
-  return { header, plainEnglish, critical, mathErrors, warnings, cleanBill, observations, markdown };
+  const markdown = renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, cleanBill, observations, reference, alternatives });
+  return { header, plainEnglish, critical, mathErrors, warnings, cleanBill, observations, alternatives, markdown };
 }
 
-function renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, cleanBill, observations, reference }) {
+function renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, cleanBill, observations, reference, alternatives }) {
   const lines = [];
   lines.push(`# Change Order Review — PCO ${header.pcoNumber}${header.title ? `: ${header.title}` : ''}`);
   lines.push('');
@@ -86,6 +86,25 @@ function renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, 
     }
   }
   lines.push('');
+
+  // Only present when the change order prices a product. See lib/pcoAlternatives.js.
+  if (alternatives?.lines?.length) {
+    lines.push('## Other Ways to Do This — ideas to raise, not prices');
+    lines.push('');
+    lines.push('> These are the AI\'s suggestions for the materials and equipment this change order prices. The cost differences are rough ranges against each line, not quotes, and nothing here has been checked against the drawings or the code. Ask the design team before acting on any of them.');
+    lines.push('');
+    for (const line of alternatives.lines) {
+      lines.push(`- **${line.description}**${typeof line.amount === 'number' ? ` (${money(line.amount)})` : ''}`);
+      if (line.options.length === 0) {
+        lines.push(`  No alternative suggested. ${line.noOptionsReason || ''}`.trimEnd());
+        continue;
+      }
+      for (const option of line.options) {
+        lines.push(`  - ${option.name} — ${option.costDifference}. ${option.whatItIs}${option.note ? ` ${option.note}` : ''}`);
+      }
+    }
+    lines.push('');
+  }
 
   section('Checks We Couldn\'t Fully Complete', warnings, '_None._');
   section('Everything Else Checked Out Fine', cleanBill, '_None passed._');

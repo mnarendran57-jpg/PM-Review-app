@@ -80,6 +80,52 @@ function PcoReportView({ report }) {
         </div>
       )}
 
+      {/* Only there when the change order prices materials or equipment. A change order for added
+          hours has nothing to substitute, and saying so on every one would be noise. */}
+      {report.alternatives?.lines?.length > 0 && (
+        <div className="card p-5 space-y-4" style={{ background: '#eef2ff', border: '1px solid #c7d2fe' }}>
+          <div>
+            <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: '#4338ca' }}>
+              <SparklesIcon className="w-4 h-4" /> Other Ways to Do This — ideas to raise, not prices
+            </h3>
+            <p className="text-xs text-gray-500 mt-1">
+              Suggestions for the materials and equipment this change order prices. The cost differences
+              are rough ranges against each line, not quotes, and nothing here has been checked against
+              the drawings or the code. Ask the design team before acting on any of them.
+            </p>
+          </div>
+          {report.alternatives.lines.map((line, i) => (
+            <div key={i}>
+              <div className="flex items-baseline justify-between gap-3">
+                <p className="text-sm font-medium text-gray-900">{line.description}</p>
+                {typeof line.amount === 'number' && (
+                  <span className="text-xs text-gray-500 tabular-nums flex-shrink-0">{money(line.amount)}</span>
+                )}
+              </div>
+              {line.options.length === 0 ? (
+                <p className="text-xs text-gray-500 mt-1">No alternative suggested. {line.noOptionsReason}</p>
+              ) : (
+                <div className="mt-2 space-y-2">
+                  {line.options.map((option, j) => (
+                    <div key={j} className="rounded-lg px-3 py-2" style={{ background: '#fff', border: '1px solid #e0e7ff' }}>
+                      <div className="flex items-baseline justify-between gap-3">
+                        <p className="text-sm text-gray-900">{option.name}</p>
+                        <span className="text-xs font-semibold flex-shrink-0"
+                          style={{ color: option.isSaving ? '#047857' : '#6b7280' }}>
+                          {option.costDifference}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-600 mt-0.5">{option.whatItIs}</p>
+                      {option.note && <p className="text-xs text-gray-500 mt-0.5 italic">{option.note}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {report.cleanBill.length > 0 && (
         <div className="card p-5 space-y-2">
           <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">

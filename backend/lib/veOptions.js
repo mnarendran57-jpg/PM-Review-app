@@ -157,8 +157,11 @@ confirm, never as a reassurance.`;
 // what it cost. The index is printed on every line because it is how the answer is matched back to
 // the estimate; the model is not asked to repeat a description it could paraphrase and break the
 // join on.
-function buildLinesText(lines, { estimateTitle, contractor, location, proposal }) {
+function buildLinesText(lines, { estimateTitle, contractor, location, proposal, situation }) {
   const head = [];
+  // Only given by a caller whose document is not a whole estimate — a change order, today — so the
+  // rules above are read in the right light. An ordinary estimate says nothing here.
+  if (situation) head.push(situation);
   if (estimateTitle) head.push(`Estimate: ${estimateTitle}`);
   if (contractor) head.push(`Priced by: ${contractor}`);
   // Read off the estimate rather than typed by anyone, and the one piece of context that reliably

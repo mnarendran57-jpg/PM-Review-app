@@ -1333,6 +1333,11 @@ if (!columnsOf('project_contracts').includes('cmar_terms_key')) {
 if (!columnsOf('pco_reviews').includes('contract_id')) {
   db.exec(`ALTER TABLE pco_reviews ADD COLUMN contract_id INTEGER`);
 }
+// The alternatives suggested for a change order's materials and equipment, where there were any to
+// look at. See lib/pcoAlternatives.js. Null on a review of a change order that buys no product.
+if (!columnsOf('pco_reviews').includes('alternatives_json')) {
+  db.exec(`ALTER TABLE pco_reviews ADD COLUMN alternatives_json TEXT`);
+}
 if (!columnsOf('pco_reviews').includes('contract_label')) {
   db.exec(`ALTER TABLE pco_reviews ADD COLUMN contract_label TEXT`);
 }
