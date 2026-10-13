@@ -2,9 +2,9 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   PlusIcon, ArrowDownTrayIcon, TrashIcon, PaperClipIcon, SparklesIcon,
   PaperAirplaneIcon, ArrowUturnLeftIcon, ClockIcon, CheckCircleIcon,
-  ExclamationTriangleIcon, LightBulbIcon, DocumentTextIcon, ScaleIcon,
+  ExclamationTriangleIcon, LightBulbIcon, DocumentTextIcon, ScaleIcon, XMarkIcon,
 } from '@heroicons/react/24/outline';
-import { rfisApi, payAppReviewApi } from '../api';
+import { rfisApi, payAppReviewApi, projectDocumentsApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
@@ -101,7 +101,7 @@ function Field({ label, children, className = '' }) {
 // The project's Shared Documents, ticked to say which ones this RFI should be read against.
 // Contracts and reference documents are shown together and labelled, because an RFI is just
 // as often answered by the specification as by a drawing.
-function DocumentPicker({ projectId, selected, onChange, onLoaded }) {
+function DocumentPicker({ projectId, selected, onChange, onLoaded, refreshKey = 0 }) {
   const [docs, setDocs] = useState(undefined);
 
   useEffect(() => {
@@ -111,8 +111,9 @@ function DocumentPicker({ projectId, selected, onChange, onLoaded }) {
       .catch(() => setDocs([]));
     // onLoaded is a notification, not a dependency: including it would re-fetch the list every
     // time the parent re-rendered with a fresh closure.
+    // refreshKey changes when a document has just been filed from this form, so it shows up here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [projectId, refreshKey]);
 
   const toggle = id => onChange(
     selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id]
@@ -122,14 +123,14 @@ function DocumentPicker({ projectId, selected, onChange, onLoaded }) {
   if (docs.length === 0) {
     return (
       <p className="text-xs text-gray-500">
-        This project has no shared documents yet. Add the drawings, specifications or contract under
-        Shared Documents, then they can be chosen here.
+        This project has no shared documents yet. Add the drawings or specifications below and
+        choose to save them, and they will be listed here.
       </p>
     );
   }
 
   return (
-    <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+    <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
       {docs.map(doc => (
         <label key={doc.id}
           className="flex items-start gap-2.5 p-2 rounded-lg cursor-pointer transition-colors"
@@ -265,13 +266,99 @@ const EMPTY = {
   date_received: today(), notes: '',
 };
 
+// Where a document added on this form ends up. "Once" stays with this RFI and is not seen
+// anywhere else; any other value is a Shared Documents category, and the document is filed there
+// for every tool and every later RFI to use.
+//
+// The categories are the ones Shared Documents offers for reference material. A contract or a
+// purchase order is left out on purpose: filing one of those changes what reviews are measured
+// against, and that is a decision for the Shared Documents page, not a side effect of logging an RFI.
+const ONCE = 'once';
+const SHARE_CATEGORIES = [
+  { key: 'drawings', label: 'Drawings' },
+  { key: 'specifications', label: 'Specifications' },
+  { key: 'design', label: 'Design Documents' },
+  { key: 'scope', label: 'Scope of Work' },
+  { key: 'proposal', label: 'Proposals' },
+  { key: 'estimate', label: 'Cost Estimate' },
+  { key: 'schedule', label: 'Schedule' },
+  { key: 'permit', label: 'Permits & Approvals' },
+  { key: 'other', label: 'Other' },
+];
+
+// Documents added while logging an RFI: as many as needed, each with its own answer to "just this
+// once, or keep it for the project?". Asked per file because the two arrive together — the drawing
+// set belongs in the shared folder, the contractor's marked-up photo does not.
+function AddedDocuments({ items, onChange, disabled }) {
+  const add = (fileList) => {
+    const incoming = [...fileList].filter(f =>
+      !items.some(i => i.file.name === f.name && i.file.size === f.size));
+    if (incoming.length) onChange([...items, ...incoming.map(file => ({ file, where: ONCE }))]);
+  };
+  const setWhere = (index, where) => onChange(items.map((item, i) => (i === index ? { ...item, where } : item)));
+  const remove = index => onChange(items.filter((_, i) => i !== index));
+
+  return (
+    <div>
+      <label className="label">Add documents that aren't in the list</label>
+      <input type="file" multiple accept=".pdf" disabled={disabled}
+        className="text-xs text-gray-500 w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 file:cursor-pointer"
+        // Cleared after each pick so the same file can be chosen again after being removed, and so
+        // a second pick adds to the list instead of replacing it.
+        onChange={e => { add(e.target.files); e.target.value = ''; }} />
+      <p className="text-[11px] text-gray-400 mt-1">
+        Choose as many PDFs as you need — drawings, a specification section, a marked-up sketch. For
+        each one, say whether it is for this RFI only or should be saved to Shared Documents.
+      </p>
+
+      {items.length > 0 && (
+        <div className="mt-2 space-y-1.5">
+          {items.map((item, i) => (
+            // Name on one line, the choice on the next: a drawing's file name is long, and beside a
+            // dropdown in a narrow form it was squeezed to nothing.
+            <div key={`${item.file.name}-${item.file.size}`}
+              className="p-2 rounded-lg" style={{ background: '#fafbfc', border: '1px solid #eef1f4' }}>
+              <div className="flex items-center gap-2">
+                <PaperClipIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                <span className="text-[12px] font-medium text-gray-800 truncate flex-1 min-w-0" title={item.file.name}>
+                  {item.file.name}
+                </span>
+                <button type="button" className="text-gray-400 hover:text-gray-600 flex-shrink-0"
+                  aria-label={`Remove ${item.file.name}`} disabled={disabled} onClick={() => remove(i)}>
+                  <XMarkIcon className="w-4 h-4" />
+                </button>
+              </div>
+              <select className="input py-1 text-[12px] w-full mt-1.5"
+                aria-label={`What to do with ${item.file.name}`}
+                value={item.where} disabled={disabled} onChange={e => setWhere(i, e.target.value)}>
+                <option value={ONCE}>Use for this RFI only</option>
+                <optgroup label="Save to Shared Documents as">
+                  {SHARE_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+                </optgroup>
+              </select>
+            </div>
+          ))}
+          {items.some(i => i.where !== ONCE) && (
+            <p className="text-[11px]" style={{ color: '#1d4ed8' }}>
+              The ones marked for Shared Documents are filed there when you read the RFI against the
+              documents or add it to the log, and are ticked in the list above.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NewRfiForm({ onSaved, onCancel }) {
   const { projectId } = useProject();
   const [file, setFile] = useState(null);
-  const [extras, setExtras] = useState([]);
+  // Documents added on this form: [{ file, where }], where `where` is ONCE or a shared category.
+  const [added, setAdded] = useState([]);
+  const [filing, setFiling] = useState(false);
+  const [listVersion, setListVersion] = useState(0);
   const [form, setForm] = useState({ ...EMPTY });
   const [documentIds, setDocumentIds] = useState([]);
-  const [docFile, setDocFile] = useState(null);
   // Ticks the project's drawings the first time the list arrives. An RFI is answered from the
   // drawings, so starting from a blank list asked the PM to restate something the project
   // already knows. Only ever a default: it runs once, and never over a choice already made.
@@ -303,7 +390,39 @@ function NewRfiForm({ onSaved, onCancel }) {
 
   const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
 
-  const canAnalyse = !!form.discipline && (documentIds.length > 0 || !!file || extras.length > 0);
+  const onceFiles = added.filter(a => a.where === ONCE).map(a => a.file);
+  const canAnalyse = !!form.discipline && (documentIds.length > 0 || !!file || added.length > 0);
+
+  // Files everything marked for Shared Documents and returns the full list of documents to read
+  // against — the ones already ticked plus the ones just filed.
+  //
+  // Done at the moment the documents are needed rather than as each is picked, so choosing a
+  // category is not itself an upload: a file picked by mistake, or put in the wrong category, can be
+  // changed or removed up to the point where the PM acts on it. One at a time, and each is taken off
+  // the list as it lands, so a failure half way leaves exactly the ones still to do.
+  const fileShared = async () => {
+    const toFile = added.filter(a => a.where !== ONCE);
+    if (toFile.length === 0) return documentIds;
+    setFiling(true);
+    const ids = [...documentIds];
+    let remaining = added;
+    try {
+      for (const item of toFile) {
+        const fd = new FormData();
+        fd.append('file', item.file);
+        fd.append('doc_type', item.where);
+        const doc = await projectDocumentsApi.add(projectId, fd);
+        if (doc?.id) ids.push(doc.id);
+        remaining = remaining.filter(a => a !== item);
+        setAdded(remaining);
+        setDocumentIds([...ids]);
+      }
+    } finally {
+      setFiling(false);
+      setListVersion(v => v + 1);
+    }
+    return ids;
+  };
 
   const suggest = async () => {
     setAnalysing(true); setAnalysisError(''); setPreview(null);
@@ -314,11 +433,13 @@ function NewRfiForm({ onSaved, onCancel }) {
       fd.append('rfi_number', form.rfi_number);
       fd.append('subject', form.subject);
       fd.append('question', form.question);
-      fd.append('document_ids', JSON.stringify(documentIds));
+      fd.append('document_ids', JSON.stringify(await fileShared()));
       // The RFI itself is read alongside the drawings — often the marked-up sketch on it is
       // what the question is really about.
       if (file) fd.append('files', file);
-      for (const extra of extras) fd.append('files', extra);
+      // Documents for this RFI only are read the way a shared document is: the sheets that bear on
+      // the question are found and those are what is sent.
+      for (const once of onceFiles) fd.append('reference_files', once);
       setPreview(await rfisApi.previewAnalysis(fd));
     } catch (err) {
       setAnalysisError(errorText(err, 'Could not read the RFI against the documents. You can still log the RFI and try again from the entry.'));
@@ -360,16 +481,16 @@ function NewRfiForm({ onSaved, onCancel }) {
       const fd = new FormData();
       fd.append('project_id', projectId);
       Object.entries(form).forEach(([k, v]) => fd.append(k, v ?? ''));
-      fd.append('document_ids', JSON.stringify(documentIds));
+      // Anything still marked for Shared Documents is filed first, so the RFI is linked to it.
+      fd.append('document_ids', JSON.stringify(await fileShared()));
       // Blank when it has not gone out yet, which leaves the log's sent date open for the PM
       // to fill in from the calendar there on the day they send it.
       fd.append('date_forwarded', sent === 'yes' ? sentDate : '');
       if (preview?.token) fd.append('analysis_token', preview.token);
-      // A drawing set attached here is filed under Shared Documents and linked to this RFI.
-      if (docFile) fd.append('doc_file', docFile);
-      // The RFI itself goes first; the backend treats the rest as supporting material.
       if (file) fd.append('files', file);
-      for (const extra of extras) fd.append('files', extra);
+      // Kept with this RFI as supporting material, which is where a document marked "this RFI
+      // only" belongs. Sent under its own name so it can never be mistaken for the RFI itself.
+      for (const once of onceFiles) fd.append('reference_files', once);
       onSaved(await rfisApi.create(fd));
     } catch (err) {
       setError(errorText(err, 'Could not save this RFI.'));
@@ -439,28 +560,14 @@ function NewRfiForm({ onSaved, onCancel }) {
               whichever document holds them.
             </p>
           )}
+          <p className="text-[11px] text-gray-400 mb-1.5">
+            These are the project's Shared Documents. Tick the ones to read.
+          </p>
           <DocumentPicker projectId={projectId} selected={documentIds} onChange={setDocumentIds}
-            onLoaded={preselectDrawings} />
-          <div className="mt-2">
-            <input type="file" accept=".pdf"
-              className="text-xs text-gray-500 w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 file:cursor-pointer"
-              onChange={e => setDocFile(e.target.files?.[0] || null)} />
-            <p className="text-[11px] text-gray-400 mt-1">
-              {docFile
-                ? `${docFile.name} — filed under Shared Documents as drawings, so you only upload it once.`
-                : 'Or attach the drawings if they are not filed yet — they will be added to Shared Documents.'}
-            </p>
-          </div>
+            onLoaded={preselectDrawings} refreshKey={listVersion} />
         </div>
 
-        <div>
-          <label className="label">Anything else to read alongside it</label>
-          <input type="file" multiple accept=".pdf" className="text-[11px]"
-            onChange={e => setExtras([...e.target.files])} />
-          <p className="text-[11px] text-gray-400 mt-1">
-            Optional — a marked-up sketch, a photo, a spec page that isn't in the shared documents.
-          </p>
-        </div>
+        <AddedDocuments items={added} onChange={setAdded} disabled={filing || analysing || saving} />
 
         <div className="pt-1" style={{ borderTop: '1px solid #dbeafe' }}>
           {!preview && (
@@ -468,7 +575,8 @@ function NewRfiForm({ onSaved, onCancel }) {
               <button type="button" className="btn-secondary w-full justify-center py-1.5 text-sm"
                 onClick={suggest} disabled={analysing || !canAnalyse}>
                 <SparklesIcon className="w-4 h-4" />
-                {analysing ? 'Finding the sheets and reading them…' : 'Read it against the documents'}
+                {filing ? 'Saving to Shared Documents…'
+                  : analysing ? 'Finding the sheets and reading them…' : 'Read it against the documents'}
               </button>
               <p className="text-[11px] text-gray-400 mt-1.5">
                 {canAnalyse
@@ -557,7 +665,7 @@ function NewRfiForm({ onSaved, onCancel }) {
       <div className="flex justify-end gap-2 pt-1">
         <button type="button" className="btn-secondary" onClick={onCancel}>Cancel</button>
         <button type="submit" className="btn-primary" disabled={saving}>
-          {saving ? 'Saving…' : 'Add to log'}
+          {filing ? 'Saving to Shared Documents…' : saving ? 'Saving…' : 'Add to log'}
         </button>
       </div>
     </form>

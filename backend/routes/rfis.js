@@ -24,7 +24,7 @@ router.use(requireFeature('rfi-log'));
 // and multer counts `files` across the WHOLE request rather than per field.
 const uploadWithDocument = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024, files: 10 },
+  limits: { fileSize: 100 * 1024 * 1024, files: 16 },
 });
 
 const upload = multer({
@@ -391,7 +391,18 @@ router.post('/extract', upload.single('file'), async (req, res) => {
 // wants to know what the drawings say about it, and logs it once they do.
 //
 // Nothing is written. The result is held under a token and saved by POST "/" below.
-router.post('/preview-analysis', upload.array('files', 6), async (req, res) => {
+//
+// Two kinds of upload arrive here, and they are read differently. `files` is the RFI itself, read
+// whole because the question and any sketch on it are the point. `reference_files` are documents
+// the PM attached for this RFI alone — a drawing set that is not filed, a specification section —
+// and they are read the way a Shared Document is: the sheets that bear on the question are found
+// and only those are sent. Reading a two-hundred-sheet set whole because it happened to arrive by
+// upload rather than from the shared folder would cost a great deal to learn nothing more, and
+// past a hundred pages it would not be read at all.
+router.post('/preview-analysis', uploadWithDocument.fields([
+  { name: 'files', maxCount: 6 },
+  { name: 'reference_files', maxCount: 10 },
+]), async (req, res) => {
   try {
     const project = projectInScope(req, req.body.project_id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -403,8 +414,15 @@ router.post('/preview-analysis', upload.array('files', 6), async (req, res) => {
       });
     }
 
-    const documents = await loadDocumentBuffers(project.id, parseIdList(req.body.document_ids));
-    const extraFiles = (req.files || []).map(f => ({ label: f.originalname, buffer: f.buffer }));
+    // What was attached for this RFI goes first. The page budget is shared and spent in order, and
+    // a document the PM went and found for this question has the best claim on it.
+    const documents = [
+      ...(req.files?.reference_files || []).map(f => ({
+        label: f.originalname, doc_type: 'attachment', buffer: f.buffer,
+      })),
+      ...await loadDocumentBuffers(project.id, parseIdList(req.body.document_ids)),
+    ];
+    const extraFiles = (req.files?.files || []).map(f => ({ label: f.originalname, buffer: f.buffer }));
     if (documents.length === 0 && extraFiles.length === 0) {
       return res.status(400).json({
         error: 'Choose at least one of the project\'s shared documents for this RFI to be read against, or attach the RFI itself.',
@@ -430,6 +448,7 @@ router.post('/preview-analysis', upload.array('files', 6), async (req, res) => {
 // with no revision has no dates and no status, and would render as a permanently blank row.
 router.post('/', uploadWithDocument.fields([
   { name: 'files', maxCount: 6 },
+  { name: 'reference_files', maxCount: 10 },
   { name: 'doc_file', maxCount: 1 },
 ]), async (req, res) => {
   try {
@@ -515,6 +534,12 @@ router.post('/', uploadWithDocument.fields([
         rfiId, revisionId: revision.lastInsertRowid,
         kind: index === 0 ? 'rfi' : 'reference', file,
       });
+    }
+    // Documents the PM attached for this RFI alone. They arrive under their own name rather than
+    // after the RFI in `files`, because position was the only thing saying which upload was the
+    // RFI: logged without the RFI's own PDF, the first of these was filed as the RFI itself.
+    for (const file of req.files?.reference_files || []) {
+      await attachFile({ rfiId, revisionId: revision.lastInsertRowid, kind: 'reference', file });
     }
 
     res.json(detail(db.prepare(`SELECT * FROM rfis WHERE id=?`).get(rfiId),
