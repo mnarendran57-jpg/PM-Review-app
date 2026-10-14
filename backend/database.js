@@ -1335,6 +1335,11 @@ if (!columnsOf('pco_reviews').includes('contract_id')) {
 }
 // The alternatives suggested for a change order's materials and equipment, where there were any to
 // look at. See lib/pcoAlternatives.js. Null on a review of a change order that buys no product.
+// What the PM asked for the change order to be checked against — { contract, reference } — so a
+// stored review says what its "no issues" covered. Null on a review from before the choice existed.
+if (!columnsOf('pco_reviews').includes('checked_against')) {
+  db.exec(`ALTER TABLE pco_reviews ADD COLUMN checked_against TEXT`);
+}
 if (!columnsOf('pco_reviews').includes('alternatives_json')) {
   db.exec(`ALTER TABLE pco_reviews ADD COLUMN alternatives_json TEXT`);
 }

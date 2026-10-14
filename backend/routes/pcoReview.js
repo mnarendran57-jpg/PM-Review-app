@@ -9,6 +9,8 @@ const { findAlternatives, alternativesView } = require('../lib/pcoAlternatives')
 const { friendlyAiError } = require('../lib/aiErrors');
 const { GOVERNING_SQL } = require('../lib/docTypes');
 const { ensureTermsRead } = require('../lib/contractTerms');
+const { extractContractTerms } = require('../lib/contractExtract');
+const { renderPcoReportPdf } = require('../lib/pcoReportPdf');
 const storage = require('../lib/storage');
 const jobs = require('../lib/jobs');
 
@@ -33,8 +35,33 @@ function visibleRow(req) {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024 },
+  limits: { fileSize: 100 * 1024 * 1024, files: 12 },
 });
+
+// Ids arrive as a JSON array from the form; a bare comma-separated string is tolerated so a
+// hand-made request is not silently ignored.
+function parseIdList(raw) {
+  if (raw == null || raw === '') return [];
+  let ids = raw;
+  if (typeof ids === 'string') {
+    try { ids = JSON.parse(ids); } catch { ids = ids.split(','); }
+  }
+  return (Array.isArray(ids) ? ids : [ids]).map(Number).filter(n => Number.isInteger(n) && n > 0);
+}
+
+// What the PM asked for the change order to be checked against. The math is always checked; the
+// contract and the RFI/ASI only when asked. A request from before the PM could choose sends no
+// `checks` and gets what it always got: the contract when one is named or on file, the RFI/ASI when
+// one is attached.
+function checksRequested(body) {
+  if (body.checks == null) return null;
+  let list = body.checks;
+  if (typeof list === 'string') {
+    try { list = JSON.parse(list); } catch { list = list.split(','); }
+  }
+  const set = new Set((Array.isArray(list) ? list : [list]).map(String));
+  return { contract: set.has('contract'), reference: set.has('reference') };
+}
 
 // One-shot analysis: extract the PCO (and its generating RFI/ASI, if supplied) in a
 // single AI call, then run the deterministic checks in code. The project's stored
@@ -42,31 +69,37 @@ const upload = multer({
 // itself is never re-sent.
 router.post('/', upload.fields([
   { name: 'pco_file', maxCount: 1 },
+  // The RFI(s) or ASI(s), uploaded for this review alone. `reference_file` is the single one a
+  // page from before several could be given still sends.
+  { name: 'reference_files', maxCount: 6 },
   { name: 'reference_file', maxCount: 1 },
+  // A contract uploaded for this review alone, rather than chosen from Shared Documents.
+  { name: 'contract_file', maxCount: 1 },
 ]), async (req, res) => {
   try {
     const pcoFile = req.files?.pco_file?.[0];
     if (!pcoFile) return res.status(400).json({ error: 'PCO PDF is required' });
     if (pcoFile.mimetype !== 'application/pdf') return res.status(400).json({ error: 'PCO must be a PDF' });
 
-    const referenceFile = req.files?.reference_file?.[0];
-    if (referenceFile && referenceFile.mimetype !== 'application/pdf') {
-      return res.status(400).json({ error: 'RFI/ASI must be a PDF' });
+    const uploadedRefs = [...(req.files?.reference_files || []), ...(req.files?.reference_file || [])];
+    const contractFile = req.files?.contract_file?.[0] || null;
+    for (const f of [...uploadedRefs, ...(contractFile ? [contractFile] : [])]) {
+      if (f.mimetype !== 'application/pdf') {
+        return res.status(400).json({ error: `${f.originalname} is not a PDF — only PDFs can be read.` });
+      }
     }
 
     const projectId = req.body.project_id ? Number(req.body.project_id) : null;
     const contractId = req.body.contract_id ? Number(req.body.contract_id) : null;
+    const requested = checksRequested(req.body);
 
     // Which agreement this change order is measured against. A project carries several — the
     // architect's, the general contractor's — and the markup ceiling and unallowable-item list
-    // differ between them, so the reviewer picks. Falls back to the project's primary contract,
-    // which is what a single-contract job wants.
-    //
-    // The old query took whichever row was newest and did not filter on doc_type, so a drawing
-    // set uploaded after the contract could be read as the contract.
-    let contractTerms = null;
+    // differ between them, so the reviewer picks. A request that does not say falls back to the
+    // project's primary contract, which is what a single-contract job wants.
     let contractRow = null;
-    if (projectId) {
+    const wantsContract = requested ? requested.contract : true;
+    if (projectId && wantsContract && !contractFile) {
       contractRow = contractId
         ? db.prepare(`
             SELECT id, label, file_name, terms, doc_type, terms_status, file_key, file_blob,
@@ -74,33 +107,69 @@ router.post('/', upload.fields([
             FROM project_contracts
             WHERE id = ? AND project_id = ? AND doc_type IN (${GOVERNING_SQL})
           `).get(contractId, projectId)
-        : db.prepare(`
+        : (requested ? null : db.prepare(`
             SELECT id, label, file_name, terms, doc_type, terms_status, file_key, file_blob,
                    party, party_role
             FROM project_contracts
             WHERE project_id = ? AND doc_type IN (${GOVERNING_SQL})
             ORDER BY is_primary DESC, created_at ASC LIMIT 1
-          `).get(projectId);
+          `).get(projectId));
 
       // A contract id belonging to another project is a mistake worth surfacing, not something
       // to silently swap for a different agreement.
       if (contractId && !contractRow) {
         return res.status(400).json({ error: 'That contract is not on this project.' });
       }
-      // Read on first use rather than at upload, so filing a contract costs nothing and a
-      // contract no change order is measured against is never read.
-      if (contractRow) contractTerms = await ensureTermsRead(contractRow);
     }
+    if (requested?.contract && !contractRow && !contractFile) {
+      return res.status(400).json({ error: 'Choose the contract to check against, or upload one.' });
+    }
+
+    // The RFI(s) or ASI(s) chosen from the project's Shared Documents, scoped to this project inside
+    // the query so an id from elsewhere reads as missing.
+    const referenceIds = projectId ? parseIdList(req.body.reference_ids) : [];
+    const findDoc = db.prepare(
+      `SELECT file_name, file_key, file_blob FROM project_contracts WHERE id=? AND project_id=?`
+    );
+    const sharedRefs = [];
+    for (const id of referenceIds) {
+      const doc = findDoc.get(id, projectId);
+      if (!doc) continue;
+      const buffer = await storage.readFile({ key: doc.file_key, blob: doc.file_blob });
+      if (buffer) sharedRefs.push({ name: doc.file_name, buffer });
+    }
+    const references = [
+      ...uploadedRefs.map(f => ({ name: f.originalname, buffer: f.buffer })),
+      ...sharedRefs,
+    ];
+    if (requested?.reference && references.length === 0) {
+      return res.status(400).json({ error: 'Choose the RFI or ASI to check against, or upload it.' });
+    }
+
+    const checkedAgainst = requested || { contract: !!(contractRow || contractFile), reference: references.length > 0 };
+    const contractLabel = contractRow
+      ? (contractRow.label || contractRow.file_name)
+      : contractFile ? contractFile.originalname.replace(/\.pdf$/i, '') : null;
 
     // The reading no longer happens on this request. Everything above is cheap and has
     // already answered where it needed to; what follows takes minutes, held the connection
     // open throughout, and was lost without trace whenever the service restarted mid-read.
     const jobId = jobs.startFrom(req, 'pco-review', async () => {
       try {
+      // The contract's terms. A filed contract is read on first use and the reading kept for every
+      // review after it; one uploaded for this review alone is read now and not kept, because
+      // keeping it is what saving it to Shared Documents is for.
+      let contractTerms = null;
+      if (contractRow) contractTerms = await ensureTermsRead(contractRow);
+      else if (contractFile) {
+        const { usage, ...terms } = await extractContractTerms(contractFile.buffer);
+        contractTerms = terms;
+      }
+
       const { pco, reference, observations } = await analyzePco({
         pcoBuffer: pcoFile.buffer,
-        referenceBuffer: referenceFile?.buffer,
-        contractTerms,
+        referenceBuffers: checkedAgainst.reference ? references.map(r => r.buffer) : [],
+        contractTerms: checkedAgainst.contract ? contractTerms : null,
       });
 
       // The uploader knows better than the document whether this is an allowance —
@@ -109,7 +178,9 @@ router.post('/', upload.fields([
       if (req.body.is_allowance === 'false') pco.isAllowance = false;
 
       const data = { pco, contractTerms, markupPolicy: null };
-      const results = runPcoChecks(data);
+      const results = runPcoChecks(data, {
+        groups: ['math', 'backup', ...(checkedAgainst.contract ? ['contract'] : [])],
+      });
 
       // Whether there is another way to do what this prices — asked only where the change order
       // buys a product, and never allowed to cost the review itself. A change order that could not
@@ -121,31 +192,35 @@ router.post('/', upload.fields([
         console.error('[pco alternatives] skipped:', err.message);
       }
       const report = buildPcoReport({
-        data, results, observations, reference, alternatives: alternativesView(alternativesFound),
+        data, results, observations, reference,
+        alternatives: alternativesView(alternativesFound),
+        checkedAgainst, contractLabel,
       });
 
       const criticalCount = results.filter(r => r.critical && r.status === 'FAIL').length;
       const failCount = results.filter(r => r.status === 'FAIL').length;
 
       const pcoKey = (await storage.storeFile('pco', pcoFile.buffer, pcoFile.mimetype, pcoFile.originalname)).key;
-      const refKey = referenceFile
-        ? (await storage.storeFile('pco', referenceFile.buffer, referenceFile.mimetype, referenceFile.originalname)).key
+      // The first uploaded RFI/ASI is kept with the review, as the single one always was.
+      const firstRef = uploadedRefs[0] || null;
+      const refKey = firstRef
+        ? (await storage.storeFile('pco', firstRef.buffer, firstRef.mimetype, firstRef.originalname)).key
         : null;
 
       const insert = db.prepare(`
         INSERT INTO pco_reviews (
           org_id, project_id, contract_id, contract_label,
           pco_number, title, contractor, total_amount, is_allowance,
-          extracted_data, checks_result, ai_observations, alternatives_json, report_markdown,
+          extracted_data, checks_result, ai_observations, alternatives_json, checked_against, report_markdown,
           pco_file_name, pco_file, pco_file_key, reference_file_name, reference_file, reference_file_key,
           critical_count, fail_count, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         req.orgId, projectId,
         // Copied rather than joined, so a saved review still says whose terms it applied even
         // after that contract is renamed or removed.
         contractRow?.id ?? null,
-        contractRow ? (contractRow.label || contractRow.file_name) : null,
+        contractLabel,
         pco.pcoNumber || null,
         pco.title || null,
         pco.contractor || null,
@@ -155,10 +230,11 @@ router.post('/', upload.fields([
         JSON.stringify(results),
         JSON.stringify(observations),
         alternativesFound ? JSON.stringify(alternativesFound) : null,
+        JSON.stringify(checkedAgainst),
         report.markdown,
         pcoFile.originalname, pcoKey ? Buffer.alloc(0) : pcoFile.buffer, pcoKey,
-        referenceFile?.originalname || null,
-        referenceFile ? (refKey ? Buffer.alloc(0) : referenceFile.buffer) : null, refKey,
+        firstRef?.originalname || null,
+        firstRef ? (refKey ? Buffer.alloc(0) : firstRef.buffer) : null, refKey,
         criticalCount, failCount,
         req.body.created_by || null
       );
@@ -195,12 +271,7 @@ router.get('/:id', (req, res) => {
   if (!row) return res.status(404).json({ error: 'Not found' });
   const extracted = JSON.parse(row.extracted_data);
   const results = JSON.parse(row.checks_result);
-  const observations = row.ai_observations ? JSON.parse(row.ai_observations) : {};
-  const report = buildPcoReport({
-    data: { pco: extracted.pco, contractTerms: null },
-    results, observations, reference: extracted.reference,
-    alternatives: alternativesView(row.alternatives_json ? JSON.parse(row.alternatives_json) : null),
-  });
+  const report = reportFor(row);
   res.json({
     ...row,
     pco_file: undefined,
@@ -210,6 +281,37 @@ router.get('/:id', (req, res) => {
     checks_result: results,
     report,
   });
+});
+
+// The report a stored review renders as, on screen and in the PDF alike.
+function reportFor(row) {
+  const extracted = JSON.parse(row.extracted_data);
+  return buildPcoReport({
+    data: { pco: extracted.pco, contractTerms: null },
+    results: JSON.parse(row.checks_result),
+    observations: row.ai_observations ? JSON.parse(row.ai_observations) : {},
+    reference: extracted.reference,
+    alternatives: alternativesView(row.alternatives_json ? JSON.parse(row.alternatives_json) : null),
+    checkedAgainst: row.checked_against ? JSON.parse(row.checked_against) : null,
+    contractLabel: row.contract_label || null,
+    contractChosen: row.contract_id != null,
+  });
+}
+
+const safeName = v => String(v || 'review').replace(/[^a-z0-9]+/gi, '_');
+
+router.get('/:id/report.pdf', async (req, res) => {
+  const row = visibleRow(req);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  try {
+    const pdf = await renderPcoReportPdf({ report: reportFor(row) });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="PCO_${safeName(row.pco_number || req.params.id)}_Review.pdf"`);
+    res.send(pdf);
+  } catch (err) {
+    console.error('PCO report PDF error:', err);
+    res.status(500).json({ error: 'The report could not be produced.' });
+  }
 });
 
 router.get('/:id/report.md', (req, res) => {

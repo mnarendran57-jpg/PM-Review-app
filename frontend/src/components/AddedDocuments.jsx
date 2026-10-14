@@ -32,6 +32,12 @@ export const SHARE_CATEGORIES = [
 // schedule or a proposal filed from here would be saved and then not read, with nothing on the
 // page to say why — so they are the only ones offered there. Mirrors DESIGN_TYPES in
 // backend/lib/docTypes.js.
+// What a change order is measured against, when the document added is its contract.
+export const CONTRACT_CATEGORIES = [
+  { key: 'contract', label: 'Contract' },
+  { key: 'purchase-order', label: 'Purchase Order' },
+];
+
 export const DESIGN_CATEGORIES = [
   { key: 'specifications', label: 'Specifications' },
   { key: 'drawings', label: 'Drawings' },
@@ -84,13 +90,21 @@ export function useAddedDocuments(projectId, documentIds, setDocumentIds) {
   };
 }
 
-// `noun` is what the documents are being added to — "RFI" or "submittal" — and is all that differs
-// in the wording between the two logs.
+// `noun` is what the documents are being added to — "RFI", "submittal", "change order" — and is
+// all that differs in the wording between the places this is used. `single` is for a slot that takes
+// one document, a contract: a new pick replaces the old one rather than joining it. With no
+// categories (no project to file into) only "for this one" is offered.
 export default function AddedDocuments({
   items, onChange, disabled, noun = 'RFI', categories = SHARE_CATEGORIES,
-  hint = 'drawings, a specification section, a marked-up sketch',
+  hint = 'drawings, a specification section, a marked-up sketch', single = false,
+  label = "Add documents that aren't in the list",
 }) {
   const add = (fileList) => {
+    if (single) {
+      const file = fileList[0];
+      if (file) onChange([{ file, where: ONCE }]);
+      return;
+    }
     const incoming = [...fileList].filter(f =>
       !items.some(i => i.file.name === f.name && i.file.size === f.size));
     if (incoming.length) onChange([...items, ...incoming.map(file => ({ file, where: ONCE }))]);
@@ -100,15 +114,15 @@ export default function AddedDocuments({
 
   return (
     <div>
-      <label className="label">Add documents that aren't in the list</label>
-      <input type="file" multiple accept=".pdf" disabled={disabled}
+      <label className="label">{label}</label>
+      <input type="file" multiple={!single} accept=".pdf" disabled={disabled}
         className="text-xs text-gray-500 w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 file:cursor-pointer"
         // Cleared after each pick so the same file can be chosen again after being removed, and so
         // a second pick adds to the list instead of replacing it.
         onChange={e => { add(e.target.files); e.target.value = ''; }} />
       <p className="text-[11px] text-gray-400 mt-1">
-        Choose as many PDFs as you need — {hint}. For each one, say whether it is for this {noun} only
-        or should be saved to Shared Documents.
+        {single ? `Choose a PDF — ${hint}.` : `Choose as many PDFs as you need — ${hint}.`}
+        {categories.length > 0 && ` Say whether it is for this ${noun} only or should be saved to Shared Documents.`}
       </p>
 
       {items.length > 0 && (
@@ -132,9 +146,11 @@ export default function AddedDocuments({
                 aria-label={`What to do with ${item.file.name}`}
                 value={item.where} disabled={disabled} onChange={e => setWhere(i, e.target.value)}>
                 <option value={ONCE}>Use for this {noun} only</option>
-                <optgroup label="Save to Shared Documents as">
-                  {categories.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-                </optgroup>
+                {categories.length > 0 && (
+                  <optgroup label="Save to Shared Documents as">
+                    {categories.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+                  </optgroup>
+                )}
               </select>
             </div>
           ))}

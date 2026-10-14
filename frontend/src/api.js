@@ -726,6 +726,10 @@ export const pcoReviewApi = {
     const res = await api.get(`/pco-review/${id}/report.md`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `pco_review_${id}.md`);
   },
+  downloadPdf: async (id, fileName) => {
+    const res = await api.get(`/pco-review/${id}/report.pdf`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `pco_review_${id}.pdf`);
+  },
   downloadOriginal: async (id, fileName) => {
     const res = await api.get(`/pco-review/${id}/original.pdf`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `pco_${id}.pdf`);
