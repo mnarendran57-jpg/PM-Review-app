@@ -1,13 +1,16 @@
 import { useState, useEffect } from 'react';
 import {
   ScaleIcon, SparklesIcon, ArrowDownTrayIcon, TrashIcon, ClockIcon, CheckIcon,
-  ExclamationTriangleIcon, CheckCircleIcon, LightBulbIcon,
 } from '@heroicons/react/24/outline';
 import { pcoReviewApi, payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import { WORD_TEMPLATES } from '../wordTemplates';
 import PageHeader from '../components/PageHeader';
 import FileDrop from '../components/FileDrop';
+import {
+  money, TONE, VerdictBanner, CountTiles, Section, CompareFinding, DeviationFinding, ListFinding,
+  CoasterNotes, PassedLine,
+} from '../components/ReviewReport';
 import AddedDocuments, {
   useAddedDocuments, ONCE, SHARE_CATEGORIES, CONTRACT_CATEGORIES,
 } from '../components/AddedDocuments';
@@ -15,10 +18,6 @@ import AddedDocuments, {
 // A purchase order governs a job that never had a contract, so it belongs in this list too.
 // Mirrors GOVERNING_TYPES in backend/lib/docTypes.js.
 const GOVERNING_DOCS = ['contract', 'purchase-order'];
-
-function money(n) {
-  return typeof n === 'number' ? `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'n/a';
-}
 
 // What a change order can be checked against. The math is checked whatever is chosen; the other two
 // add their checks on top. "Basic" is the choice of neither, so picking it clears the others and
@@ -29,119 +28,8 @@ const CHECK_OPTIONS = [
   { key: 'basic', label: 'Basic check', hint: 'The math only' },
 ];
 
-const TONE = {
-  red: { bg: '#fef2f2', border: '#fecaca', ink: '#b91c1c' },
-  amber: { bg: '#fff7ed', border: '#fed7aa', ink: '#c2410c' },
-  green: { bg: '#ecfdf5', border: '#a7f3d0', ink: '#047857' },
-  grey: { bg: '#f8fafc', border: '#e2e8f0', ink: '#64748b' },
-  indigo: { bg: '#eef2ff', border: '#c7d2fe', ink: '#4338ca' },
-};
-
-// --- The report -----------------------------------------------------------------------------------
-
-function Section({ title, count, tone = 'grey', children }) {
-  const t = TONE[tone];
-  return (
-    <div className="card p-5">
-      <div className="flex items-center gap-2 mb-3">
-        <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
-        {count != null && (
-          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: t.bg, color: t.ink }}>
-            {count}
-          </span>
-        )}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function FindingTitle({ finding }) {
-  return (
-    <p className="text-[13px] font-medium mb-1.5" style={{ color: finding.critical ? TONE.red.ink : '#111827' }}>
-      {finding.title}
-      {finding.critical && <span className="text-[11px] font-semibold ml-2">Resolve before approving</span>}
-    </p>
-  );
-}
-
-const th = 'text-[10px] font-semibold uppercase tracking-wider text-gray-400 py-1.5';
-const td = 'py-2 text-[12px] align-top';
-
-// Wrong arithmetic: what the change order says, what it should say, and the gap.
-function MathFinding({ finding }) {
-  return (
-    <div>
-      <FindingTitle finding={finding} />
-      {/* Fixed columns, so every finding's table lines up with the one above it. */}
-      <table className="w-full table-fixed">
-        <colgroup><col style={{ width: '46%' }} /><col style={{ width: '18%' }} /><col style={{ width: '18%' }} /><col style={{ width: '18%' }} /></colgroup>
-        <thead>
-          <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-            <th className={`${th} text-left`}>Item</th>
-            <th className={`${th} text-right`}>On the PCO</th>
-            <th className={`${th} text-right`}>Should be</th>
-            <th className={`${th} text-right`}>Off by</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(finding.figures?.rows || []).map((r, i) => (
-            <tr key={i} style={{ borderBottom: '1px solid #f8fafc' }}>
-              <td className={td}>
-                <span className="text-gray-800">{r.item}</span>
-                {r.working && <span className="block text-[11px] text-gray-400">{r.working}</span>}
-              </td>
-              <td className={`${td} text-right tabular-nums text-gray-600`}>{money(r.shown)}</td>
-              <td className={`${td} text-right tabular-nums text-gray-600`}>{money(r.computed)}</td>
-              <td className={`${td} text-right tabular-nums font-semibold`} style={{ color: TONE.red.ink }}>{money(r.difference)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// Something the contract does not allow: what was charged, how much, and the term it breaks.
-function ContractFinding({ finding }) {
-  return (
-    <div>
-      <FindingTitle finding={finding} />
-      {finding.byCoaster && (
-        <p className="text-[11px] italic text-gray-400 -mt-1 mb-1.5">Coaster's reading of the contract — verify before acting.</p>
-      )}
-      <table className="w-full table-fixed">
-        <colgroup><col style={{ width: '38%' }} /><col style={{ width: '17%' }} /><col style={{ width: '45%' }} /></colgroup>
-        <thead>
-          <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-            <th className={`${th} text-left`}>On the PCO</th>
-            <th className={`${th} text-right`}>At issue</th>
-            <th className={`${th} text-left pl-4`}>What the contract says</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(finding.figures?.rows || []).map((r, i) => (
-            <tr key={i} style={{ borderBottom: '1px solid #f8fafc' }}>
-              <td className={`${td} text-gray-800`}>{r.item}</td>
-              <td className={`${td} text-right tabular-nums font-semibold`} style={{ color: TONE.red.ink }}>
-                {typeof r.amount === 'number' ? money(r.amount) : '—'}
-              </td>
-              <td className={`${td} pl-4 text-gray-700`}>
-                {r.rule}
-                {r.basis && <span className="block text-[11px] italic text-gray-400">{r.basis}</span>}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 function PcoReportView({ report }) {
   const h = report.header;
-  const v = report.verdict;
-  const vt = TONE[v.tone];
   const alt = report.alternatives;
 
   return (
@@ -158,29 +46,10 @@ function PcoReportView({ report }) {
           {[h.contractor, h.date, h.isAllowance && 'presented as an allowance'].filter(Boolean).join(' · ')}
         </p>
 
-        <div className="mt-4 rounded-xl px-4 py-3 flex items-center gap-3"
-          style={{ background: vt.bg, border: `1px solid ${vt.border}` }}>
-          {v.tone === 'green'
-            ? <CheckCircleIcon className="w-5 h-5 flex-shrink-0" style={{ color: vt.ink }} />
-            : <ExclamationTriangleIcon className="w-5 h-5 flex-shrink-0" style={{ color: vt.ink }} />}
-          <p className="text-[14px] font-semibold" style={{ color: vt.ink }}>
-            {v.headline}{v.sub && <span className="font-normal">, {v.sub}</span>}
-          </p>
-        </div>
-
-        <div className="grid grid-cols-4 gap-2 mt-3">
-          {report.tiles.map(t => {
-            const checked = t.count != null;
-            const tone = !checked ? 'grey' : t.key === 'savings' ? (t.count ? 'indigo' : 'grey') : (t.count ? 'red' : 'green');
-            const c = TONE[tone];
-            return (
-              <div key={t.key} className="rounded-xl px-3 py-2.5" style={{ background: c.bg }}>
-                <p className="text-xl font-bold tabular-nums" style={{ color: c.ink }}>{checked ? t.count : '—'}</p>
-                <p className="text-[11px] text-gray-500 leading-tight">{t.label}</p>
-                {!checked && <p className="text-[10px] italic text-gray-400">not checked</p>}
-              </div>
-            );
-          })}
+        <div className="mt-4"><VerdictBanner verdict={report.verdict} /></div>
+        <div className="mt-3">
+          <CountTiles tiles={report.tiles}
+            toneOf={t => (t.key === 'savings' ? (t.count ? 'indigo' : 'grey') : t.count ? 'red' : 'green')} />
         </div>
         <p className="text-[11px] text-gray-400 mt-3">Checked against {h.checkedAgainst.join(', ')}.</p>
       </div>
@@ -188,7 +57,7 @@ function PcoReportView({ report }) {
       <Section title="Math errors" count={report.math.issues.length} tone={report.math.issues.length ? 'red' : 'green'}>
         {report.math.issues.length === 0
           ? <p className="text-[12px] text-gray-500">The arithmetic on the change order checks out.</p>
-          : <div className="space-y-4">{report.math.issues.map(f => <MathFinding key={f.id} finding={f} />)}</div>}
+          : <div className="space-y-4">{report.math.issues.map(f => <CompareFinding key={f.id} finding={f} before="approving" shownLabel="On the PCO" />)}</div>}
       </Section>
 
       {report.contract && (
@@ -196,7 +65,7 @@ function PcoReportView({ report }) {
           count={report.contract.count ?? report.contract.issues.length} tone={report.contract.issues.length ? 'red' : 'green'}>
           {report.contract.issues.length === 0
             ? <p className="text-[12px] text-gray-500">Nothing on the change order goes against the contract terms that were checked.</p>
-            : <div className="space-y-4">{report.contract.issues.map(f => <ContractFinding key={f.id} finding={f} />)}</div>}
+            : <div className="space-y-4">{report.contract.issues.map(f => <DeviationFinding key={f.id} finding={f} before="approving" whatLabel="On the PCO" />)}</div>}
         </Section>
       )}
 
@@ -231,12 +100,7 @@ function PcoReportView({ report }) {
       {report.askFor.length > 0 && (
         <Section title="Ask for a breakdown" count={report.askFor.length} tone="amber">
           <p className="text-[11px] text-gray-400 mb-2">Single figures with no quantities or unit prices behind them.</p>
-          {report.askFor.map((r, i) => (
-            <div key={i} className="flex items-baseline justify-between gap-3 py-1.5" style={{ borderTop: i ? '1px solid #f8fafc' : 'none' }}>
-              <span className="text-[12px] text-gray-800">{r.item}</span>
-              <span className="text-[12px] font-semibold tabular-nums text-gray-900">{money(r.amount)}</span>
-            </div>
-          ))}
+          <ListFinding finding={{ figures: { rows: report.askFor } }} showTitle={false} />
         </Section>
       )}
 
@@ -278,36 +142,8 @@ function PcoReportView({ report }) {
         </Section>
       )}
 
-      {report.notes.length > 0 && (
-        <div className="card p-5" style={{ background: '#fafaff' }}>
-          <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2 mb-2">
-            <LightBulbIcon className="w-4 h-4" style={{ color: '#6366f1' }} /> Coaster's notes
-          </h3>
-          <div className="space-y-2">
-            {report.notes.map((n, i) => (
-              <p key={i} className="text-[12px] text-gray-700"><span className="font-medium text-gray-900">{n.title}:</span> {n.body}</p>
-            ))}
-          </div>
-          <p className="text-[10px] text-gray-400 mt-2">Coaster reads the documents; it does not verify them on site. Treat these as prompts to check.</p>
-        </div>
-      )}
-
-      {/* One quiet line: there for anyone who asks what was looked at, out of everyone else's way. */}
-      {(report.passed.length > 0 || report.notChecked.length > 0) && (
-        <div className="px-1 space-y-0.5">
-          {report.passed.length > 0 && (
-            <p className="text-[11px] text-gray-400 flex items-start gap-1.5">
-              <CheckIcon className="w-3.5 h-3.5 flex-shrink-0 mt-px" style={{ color: TONE.green.ink }} />
-              <span>Checked and fine: {report.passed.join(', ')}.</span>
-            </p>
-          )}
-          {report.notChecked.length > 0 && (
-            <p className="text-[11px] text-gray-400 pl-5">
-              Could not be checked: {report.notChecked.map(n => n.description).join(', ')}.
-            </p>
-          )}
-        </div>
-      )}
+      <CoasterNotes notes={report.notes} />
+      <PassedLine passed={report.passed} notChecked={report.notChecked} />
     </div>
   );
 }

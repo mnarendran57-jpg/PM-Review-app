@@ -1,91 +1,205 @@
 const { money } = require('./money');
 
-// Assembles the invoice review into the same shape the PCO/pay app reports use: a
-// plain-English summary, the deterministic findings grouped by severity, and — kept
-// deliberately separate — the model's advisory observations, which are judgment.
-function buildInvoiceReport({ data, results, observations }) {
-  const inv = data.invoice;
-  const critical = results.filter(r => r.critical && r.status === 'FAIL');
-  const mathErrors = results.filter(r => !r.critical && r.status === 'FAIL');
-  const warnings = results.filter(r => r.status === 'SKIPPED');
-  const cleanBill = results.filter(r => r.status === 'PASS');
+// The invoice review as somebody deciding whether to pay it reads it: one line saying whether it can
+// be paid, a count of each kind of problem, and each problem with its numbers.
+//
+// The order is the order of consequence. A possible duplicate is an invoice that may already have
+// been paid; wrong arithmetic is money nobody owes; a cost with no receipt is money nobody can show
+// was spent; a contract or PO problem is money the agreement says is not owed, or not owed yet.
+// Coaster's notes come last, because they are prompts for a question rather than reasons to hold
+// payment.
+//
+// The contract and PO section only appears when an agreement was chosen. One that was not checked is
+// left out rather than shown empty, which would read as "checked and clean".
 
-  const total = critical.length + mathErrors.length;
-  let plainEnglish = `This invoice requests ${money(inv.total)}.`;
-  plainEnglish += total === 0
-    ? ' The math, tax, backup, and contract checks found no issues.'
-    : ` ${total} issue${total === 1 ? '' : 's'} found${critical.length ? ` (${critical.length} need${critical.length === 1 ? 's' : ''} resolving before paying)` : ''}.`;
+const FINDING_TITLES = {
+  M1: 'The total does not add up',
+  M2: 'Line totals that do not match quantity × price',
+  M3: 'The lines do not add up to the printed subtotal',
+  T1: 'Tax charged where the contract does not allow it',
+  C1: 'Costs the contract does not allow',
+  PO1: 'Billed against a different PO',
+  PO2: 'Billing goes past what the agreement is worth',
+  R1: 'Reimbursable costs with no receipt',
+  D1: 'This invoice may already have been reviewed',
+};
 
-  const header = {
-    vendor: inv.vendor || 'Not specified',
-    invoiceNumber: inv.invoiceNumber || 'Not specified',
-    invoiceDate: inv.invoiceDate || 'Not specified',
-    poNumber: inv.poNumber || null,
-    total: inv.total,
-  };
+// What each check is called in the one line listing what passed — a name, not a question.
+const CHECK_NAMES = {
+  M1: 'the total', M2: 'line totals', M3: 'the subtotal', T1: 'tax',
+  C1: 'costs the contract forbids', PO1: 'the PO number', PO2: 'billing against the agreement value',
+  R1: 'receipts for reimbursable costs', D1: 'earlier reviews for a duplicate',
+};
 
-  const markdown = renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, cleanBill, observations });
-  return { header, plainEnglish, critical, mathErrors, warnings, cleanBill, observations, markdown };
+// A review stored before checks had groups is placed by its check's id.
+function groupOf(r) {
+  if (r.group) return r.group;
+  if (/^M/.test(r.id)) return 'math';
+  if (r.id === 'R1') return 'backup';
+  if (r.id === 'D1') return 'history';
+  return 'contract';
 }
 
-function renderMarkdown({ header, plainEnglish, critical, mathErrors, warnings, cleanBill, observations }) {
-  const lines = [];
-  lines.push(`# Invoice Review — ${header.vendor}${header.invoiceNumber !== 'Not specified' ? ` (Invoice ${header.invoiceNumber})` : ''}`);
-  lines.push('');
-  lines.push('> The math, tax, backup, and contract checks below are computed from the figures on the documents. The review notes further down are the AI\'s reading of the documents — treat those as prompts to verify, not verdicts.');
-  lines.push('');
-  lines.push(`**Vendor:** ${header.vendor}  `);
-  lines.push(`**Invoice #:** ${header.invoiceNumber}  `);
-  lines.push(`**Date:** ${header.invoiceDate}  `);
-  if (header.poNumber) lines.push(`**PO #:** ${header.poNumber}  `);
-  lines.push(`**Amount requested:** ${money(header.total)}  `);
-  lines.push('');
-  lines.push(`**Summary:** ${plainEnglish}`);
-  lines.push('');
+const finding = r => ({
+  id: r.id,
+  title: FINDING_TITLES[r.id] || r.description,
+  critical: !!r.critical,
+  detail: r.detail,
+  figures: r.figures || null,
+});
 
-  const section = (title, items, emptyText) => {
-    lines.push(`## ${title}`);
+// One row per Coaster finding, one per failed check however many lines it names.
+const countOf = issues => issues.reduce((n, f) => n + (f.byCoaster ? (f.figures?.rows?.length || 1) : 1), 0);
+
+function buildInvoiceReport({ data, results, observations, contractChosen = false, contractLabel = null }) {
+  const inv = data.invoice || {};
+  const o = observations || {};
+  const inGroup = group => results.filter(r => groupOf(r) === group);
+
+  const mathResults = inGroup('math');
+  const backupResult = inGroup('backup')[0] || null;
+  const historyResult = inGroup('history')[0] || null;
+  const contractResults = contractChosen ? inGroup('contract') : [];
+
+  const math = { issues: mathResults.filter(r => r.status === 'FAIL').map(finding) };
+  const backup = backupResult?.status === 'FAIL' ? finding(backupResult) : null;
+  const duplicate = historyResult?.status === 'FAIL' ? finding(historyResult) : null;
+
+  // Costs the contract forbids that Coaster found by reading. Sales tax is dropped: the tax check
+  // already covers it with the contract's own words, and the reading repeats it anyway.
+  const coasterConcerns = (Array.isArray(o.contractConcerns) ? o.contractConcerns : [])
+    .filter(c => c && c.item && c.rule)
+    .filter(c => !/\b(tax|taxes)\b/i.test(c.item));
+  const contractIssues = contractResults.filter(r => r.status === 'FAIL').map(finding);
+  if (contractChosen && coasterConcerns.length) {
+    contractIssues.push({
+      id: 'COASTER',
+      title: 'Also flagged by Coaster against the contract',
+      critical: false,
+      byCoaster: true,
+      detail: null,
+      figures: {
+        kind: 'deviation',
+        rows: coasterConcerns.map(c => ({
+          item: c.item, amount: typeof c.amount === 'number' ? c.amount : null, rule: c.rule, basis: c.section || null,
+        })),
+      },
+    });
+  }
+  const contract = contractChosen ? {
+    label: contractLabel,
+    issues: contractIssues,
+    count: countOf(contractIssues),
+    // Where the agreement stands after this invoice, shown whether or not it is over, because "how
+    // much is left on this PO" is the question asked next.
+    billing: (() => {
+      const r = contractResults.find(x => x.id === 'PO2');
+      return r?.status === 'PASS' ? r.detail : null;
+    })(),
+  } : null;
+
+  const notes = [
+    o.pricingSanity && { title: 'Pricing worth double-checking', body: o.pricingSanity },
+    o.reimbursableBackup && { title: 'Backup', body: o.reimbursableBackup },
+    // A review stored before the contract was read line by line kept its contract note as prose.
+    o.unallowable && !o.contractConcerns && { title: 'Possible contract conflicts', body: o.unallowable },
+  ].filter(Boolean);
+
+  const all = [...math.issues, ...(backup ? [backup] : []), ...(duplicate ? [duplicate] : []), ...(contract?.issues || [])];
+  const toResolve = all.filter(f => f.critical).length;
+  const otherIssues = countOf(all.filter(f => !f.critical));
+
+  const verdict = toResolve > 0
+    ? { tone: 'red', headline: `${toResolve} issue${toResolve === 1 ? '' : 's'} to resolve before paying` }
+    : otherIssues > 0
+      ? { tone: 'amber', headline: `${otherIssues} thing${otherIssues === 1 ? '' : 's'} to check before paying` }
+      : { tone: 'green', headline: 'No issues found' };
+  verdict.sub = toResolve > 0 && otherIssues > 0
+    ? `and ${otherIssues} more thing${otherIssues === 1 ? '' : 's'} to check` : null;
+
+  const header = {
+    vendor: inv.vendor || 'Unknown vendor',
+    invoiceNumber: inv.invoiceNumber || null,
+    invoiceDate: inv.invoiceDate || null,
+    poNumber: inv.poNumber || null,
+    total: inv.total,
+    checkedAgainst: [
+      'its own arithmetic', 'its receipts', 'earlier reviews',
+      contract && (contractLabel ? `the agreement (${contractLabel})` : 'the agreement'),
+    ].filter(Boolean),
+  };
+
+  const tiles = [
+    { key: 'math', label: 'Math errors', count: math.issues.length },
+    { key: 'backup', label: 'Missing receipts', count: backup ? (backup.figures?.rows?.length || 1) : 0 },
+    { key: 'contract', label: 'Contract / PO issues', count: contract ? contract.count : null },
+    { key: 'duplicate', label: 'Possible duplicates', count: duplicate ? (duplicate.figures?.rows?.length || 1) : (historyResult ? 0 : null) },
+  ];
+
+  const nameOf = r => CHECK_NAMES[r.id] || r.description;
+  const ran = [...mathResults, ...(backupResult ? [backupResult] : []), ...(historyResult ? [historyResult] : []), ...contractResults];
+  const passed = ran.filter(r => r.status === 'PASS').map(nameOf);
+  // Only a check that could not run is reported as such; most skips mean it did not apply.
+  const notChecked = ran
+    .filter(r => r.status === 'SKIPPED' && /could not|couldn't|no invoice total/i.test(r.detail || ''))
+    .map(r => ({ description: nameOf(r), detail: r.detail }));
+
+  const report = { header, verdict, tiles, math, backup, duplicate, contract, notes, passed, notChecked };
+  report.markdown = renderMarkdown(report);
+  return report;
+}
+
+function figureLines(f) {
+  const rows = f.figures?.rows || [];
+  const kind = f.figures?.kind;
+  if (kind === 'compare') {
+    return rows.map(r => `  - ${r.item}${r.working ? ` (${r.working})` : ''}: shows ${money(r.shown)}, should be ${money(r.computed)} — off by ${money(r.difference)}`);
+  }
+  if (kind === 'deviation') {
+    return rows.map(r => `  - ${r.item}${typeof r.amount === 'number' ? ` — ${money(r.amount)}` : ''}: ${r.rule}${r.basis ? ` (${r.basis})` : ''}`);
+  }
+  if (kind === 'billing' || kind === 'list') {
+    return rows.map(r => `  - ${r.item}${typeof r.amount === 'number' ? ` — ${money(r.amount)}` : ''}${r.note ? ` (${r.note})` : ''}`);
+  }
+  return [`  ${f.detail}`];
+}
+
+function renderMarkdown(report) {
+  const { header: h, verdict, math, backup, duplicate, contract, notes, passed, notChecked } = report;
+  const lines = [];
+  lines.push(`# Invoice Review — ${h.vendor}${h.invoiceNumber ? ` (Invoice ${h.invoiceNumber})` : ''}`);
+  lines.push('');
+  lines.push(`**${money(h.total)}**${h.invoiceDate ? ` · ${h.invoiceDate}` : ''}${h.poNumber ? ` · PO ${h.poNumber}` : ''}  `);
+  lines.push(`Checked against ${h.checkedAgainst.join(', ')}.`);
+  lines.push('');
+  lines.push(`## ${verdict.headline}${verdict.sub ? `, ${verdict.sub}` : ''}`);
+  lines.push('');
+  const section = (title, findings) => {
+    lines.push(`### ${title}`);
     lines.push('');
-    if (items.length === 0) {
-      lines.push(emptyText);
-    } else {
-      for (const r of items) {
-        lines.push(`- **${r.description}**`);
-        lines.push(`  ${r.detail}`);
-      }
+    if (findings.length === 0) lines.push('None.');
+    for (const f of findings) {
+      lines.push(`- **${f.title}**${f.critical ? ' — resolve before paying' : ''}${f.byCoaster ? " (Coaster's reading — verify)" : ''}`);
+      lines.push(...figureLines(f));
     }
     lines.push('');
   };
-
-  section('Issues to Resolve Before Paying', critical, '_None._');
-  section('Other Problems Found', mathErrors, '_None._');
-
-  const notes = [];
-  if (observations?.reimbursableBackup) {
-    notes.push({ title: 'Reimbursable costs and their backup', body: observations.reimbursableBackup });
+  if (duplicate) section('Possible duplicate', [duplicate]);
+  section('Math errors', math.issues);
+  if (backup) section('Missing receipts', [backup]);
+  if (contract) {
+    section(`Contract and PO${contract.label ? ` — ${contract.label}` : ''}`, contract.issues);
+    if (contract.billing) { lines.push(contract.billing); lines.push(''); }
   }
-  if (observations?.unallowable) {
-    notes.push({ title: 'Possible contract conflicts', body: observations.unallowable });
+  if (notes.length) {
+    lines.push("### Coaster's notes — verify before acting");
+    lines.push('');
+    for (const n of notes) lines.push(`- **${n.title}:** ${n.body}`);
+    lines.push('');
   }
-  if (observations?.pricingSanity) {
-    notes.push({ title: 'Pricing worth double-checking', body: observations.pricingSanity });
-  }
-  lines.push('## Review Notes — the AI\'s read, verify before acting');
-  lines.push('');
-  if (notes.length === 0) {
-    lines.push('_Nothing stood out beyond the checks above._');
-  } else {
-    for (const n of notes) {
-      lines.push(`- **${n.title}**`);
-      lines.push(`  ${n.body}`);
-    }
-  }
-  lines.push('');
-
-  section('Checks We Couldn\'t Fully Complete', warnings, '_None._');
-  section('Everything Else Checked Out Fine', cleanBill, '_None passed._');
-
+  if (passed.length) lines.push(`**Checked and fine:** ${passed.join(', ')}.  `);
+  if (notChecked.length) lines.push(`**Could not be checked:** ${notChecked.map(n => n.description).join(', ')}.`);
   return lines.join('\n');
 }
 
-module.exports = { buildInvoiceReport };
+module.exports = { buildInvoiceReport, FINDING_TITLES };

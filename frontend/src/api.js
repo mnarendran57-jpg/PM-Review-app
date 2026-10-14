@@ -743,11 +743,13 @@ export const pcoReviewApi = {
 export const invoiceReviewApi = {
   list: params => api.get('/invoice-review', { params }).then(r => r.data),
   get: id => api.get(`/invoice-review/${id}`).then(r => r.data),
-  // REVERTED to answering on the request. The move to the job queue broke this module in
-  // production and the cause was not yet understood; restoring what worked came first.
-  create: formData => api.post('/invoice-review', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT
-  }).then(r => r.data),
+  // The reading happens on the job queue, not on this connection. It was moved there once before
+  // and put back when it broke in production; the cause was the job poller asking at an address
+  // that did not exist (see waitForJob), which is fixed. The upload keeps its timeout — a stall
+  // transferring a file is a real fault — but the review itself has none.
+  create: (formData, onTick) => api.post('/invoice-review', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }, timeout: AI_TIMEOUT,
+  }).then(r => waitForJob(r.data.jobId, { onTick })),
   downloadMarkdown: async (id, fileName) => {
     const res = await api.get(`/invoice-review/${id}/report.md`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `invoice_review_${id}.md`);
@@ -755,6 +757,10 @@ export const invoiceReviewApi = {
   downloadFile: async (reviewId, fileId, fileName) => {
     const res = await api.get(`/invoice-review/${reviewId}/files/${fileId}`, { responseType: 'blob' });
     triggerDownload(res.data, fileName || `invoice_${fileId}.pdf`);
+  },
+  downloadPdf: async (id, fileName) => {
+    const res = await api.get(`/invoice-review/${id}/report.pdf`, { responseType: 'blob' });
+    triggerDownload(res.data, fileName || `invoice_review_${id}.pdf`);
   },
   delete: id => api.delete(`/invoice-review/${id}`).then(r => r.data),
 };

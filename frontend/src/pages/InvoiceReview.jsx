@@ -1,103 +1,78 @@
 import { useState, useEffect } from 'react';
 import {
-  ReceiptPercentIcon, SparklesIcon, ArrowDownTrayIcon, TrashIcon, ClockIcon, DocumentTextIcon,
-  ExclamationTriangleIcon, CheckCircleIcon, LightBulbIcon,
+  ReceiptPercentIcon, SparklesIcon, ArrowDownTrayIcon, TrashIcon, ClockIcon,
 } from '@heroicons/react/24/outline';
 import { invoiceReviewApi, payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import MultiFileDrop from '../components/MultiFileDrop';
+import {
+  money, VerdictBanner, CountTiles, Section, CompareFinding, DeviationFinding, ListFinding,
+  CoasterNotes, PassedLine,
+} from '../components/ReviewReport';
 
 // A purchase order governs a job that never had a contract, so it belongs in this list too.
 // Mirrors GOVERNING_TYPES in backend/lib/docTypes.js.
 const GOVERNING_DOCS = ['contract', 'purchase-order'];
 
-function money(n) {
-  return typeof n === 'number' ? `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'n/a';
-}
-
-// Findings grouped the same way the PCO / pay app reports are: what blocks payment,
-// what else is wrong, then — visually separated — the AI's advisory reading.
+// Whether the invoice can be paid, a count of each kind of problem, and each problem with its numbers —
+// the same layout as the change order review, from the same pieces.
 function InvoiceReportView({ report }) {
-  const sectionCard = (title, items, tone) => {
-    if (items.length === 0) return null;
-    const styles = tone === 'critical'
-      ? { border: '#fecaca', bg: '#fef2f2', heading: '#b91c1c', Icon: ExclamationTriangleIcon }
-      : { border: '#fed7aa', bg: '#fff7ed', heading: '#c2410c', Icon: ExclamationTriangleIcon };
-    return (
-      <div className="card p-5 space-y-3" style={{ background: styles.bg, border: `1px solid ${styles.border}` }}>
-        <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: styles.heading }}>
-          <styles.Icon className="w-4 h-4" /> {title}
-        </h3>
-        {items.map((r, i) => (
-          <div key={i}>
-            <p className="text-sm font-medium text-gray-900">{r.description}</p>
-            <p className="text-xs text-gray-600 mt-0.5">{r.detail}</p>
-          </div>
-        ))}
-      </div>
-    );
-  };
-
-  const o = report.observations || {};
-  const notes = [
-    o.reimbursableBackup && { title: 'Reimbursable costs and their backup', body: o.reimbursableBackup },
-    o.unallowable && { title: 'Possible contract conflicts', body: o.unallowable },
-    o.pricingSanity && { title: 'Pricing worth double-checking', body: o.pricingSanity },
-  ].filter(Boolean);
-
+  const h = report.header;
   return (
     <div className="space-y-4">
       <div className="card p-5">
         <div className="flex items-baseline justify-between gap-3 flex-wrap">
-          <h3 className="text-sm font-semibold text-gray-900">
-            {report.header.vendor}{report.header.invoiceNumber !== 'Not specified' ? ` — Invoice ${report.header.invoiceNumber}` : ''}
+          <h3 className="text-[15px] font-semibold text-gray-900">
+            {h.vendor}{h.invoiceNumber ? ` — Invoice ${h.invoiceNumber}` : ''}
           </h3>
-          <span className="text-lg font-semibold text-gray-900 tabular-nums">{money(report.header.total)}</span>
+          <span className="text-lg font-semibold text-gray-900 tabular-nums">{money(h.total)}</span>
         </div>
-        <p className="text-xs text-gray-400 mt-1">
-          {report.header.invoiceDate}
-          {report.header.poNumber ? ` · PO ${report.header.poNumber}` : ''}
-        </p>
-        <p className="text-sm text-gray-700 mt-3">{report.plainEnglish}</p>
+        <p className="text-xs text-gray-400 mt-1">{[h.invoiceDate, h.poNumber && `PO ${h.poNumber}`].filter(Boolean).join(' · ')}</p>
+        <div className="mt-4"><VerdictBanner verdict={report.verdict} /></div>
+        <div className="mt-3"><CountTiles tiles={report.tiles} /></div>
+        <p className="text-[11px] text-gray-400 mt-3">Checked against {h.checkedAgainst.join(', ')}.</p>
       </div>
 
-      {sectionCard('Issues to Resolve Before Paying', report.critical, 'critical')}
-      {sectionCard('Other Problems Found', report.mathErrors, 'warn')}
+      {report.duplicate && (
+        <Section title="Possible duplicate" count={report.duplicate.figures?.rows?.length || 1} tone="red">
+          <ListFinding finding={report.duplicate} before="paying" />
+        </Section>
+      )}
 
-      {notes.length > 0 && (
-        <div className="card p-5 space-y-3" style={{ background: '#f5f3ff', border: '1px solid #ddd6fe' }}>
-          <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: '#6d28d9' }}>
-            <LightBulbIcon className="w-4 h-4" /> Review Notes — the AI's read, verify before acting
-          </h3>
-          {notes.map((n, i) => (
-            <div key={i}>
-              <p className="text-sm font-medium text-gray-900">{n.title}</p>
-              <p className="text-xs text-gray-600 mt-0.5">{n.body}</p>
+      <Section title="Math errors" count={report.math.issues.length} tone={report.math.issues.length ? 'red' : 'green'}>
+        {report.math.issues.length === 0
+          ? <p className="text-[12px] text-gray-500">The arithmetic on the invoice checks out.</p>
+          : <div className="space-y-4">{report.math.issues.map(f => <CompareFinding key={f.id} finding={f} before="paying" shownLabel="On the invoice" />)}</div>}
+      </Section>
+
+      {report.backup && (
+        <Section title="Missing receipts" count={report.backup.figures?.rows?.length || 1} tone="red">
+          <p className="text-[11px] text-gray-400 mb-2">
+            Billed as costs the vendor paid and is passing on, with no receipt or invoice among the uploads.
+          </p>
+          <ListFinding finding={report.backup} before="paying" showTitle={false} />
+        </Section>
+      )}
+
+      {report.contract && (
+        <Section title={`Contract and PO${report.contract.label ? ` — ${report.contract.label}` : ''}`}
+          count={report.contract.count} tone={report.contract.issues.length ? 'red' : 'green'}>
+          {report.contract.issues.length === 0 ? (
+            <p className="text-[12px] text-gray-500">Nothing on the invoice goes against the agreement terms that were checked.</p>
+          ) : (
+            <div className="space-y-4">
+              {report.contract.issues.map(f => (f.figures?.kind === 'billing'
+                ? <ListFinding key={f.id} finding={f} before="paying" />
+                : <DeviationFinding key={f.id} finding={f} before="paying" whatLabel="On the invoice" />))}
             </div>
-          ))}
-        </div>
+          )}
+          {report.contract.billing && <p className="text-[11px] text-gray-500 mt-3">{report.contract.billing}</p>}
+        </Section>
       )}
 
-      {report.cleanBill.length > 0 && (
-        <div className="card p-5 space-y-2">
-          <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-            <CheckCircleIcon className="w-4 h-4" style={{ color: '#059669' }} /> Everything Else Checked Out Fine
-          </h3>
-          {report.cleanBill.map((r, i) => (
-            <p key={i} className="text-xs text-gray-500"><span className="font-medium text-gray-700">{r.description}</span> {r.detail}</p>
-          ))}
-        </div>
-      )}
-
-      {report.warnings.length > 0 && (
-        <div className="card p-5 space-y-2">
-          <h3 className="text-sm font-semibold text-gray-400">Checks We Couldn't Fully Complete</h3>
-          {report.warnings.map((r, i) => (
-            <p key={i} className="text-xs text-gray-400">{r.description} — {r.detail}</p>
-          ))}
-        </div>
-      )}
+      <CoasterNotes notes={report.notes} />
+      <PassedLine passed={report.passed} notChecked={report.notChecked} />
     </div>
   );
 }
@@ -105,9 +80,9 @@ function InvoiceReportView({ report }) {
 function HistoryRow({ item, onView, onDelete }) {
   const date = new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const badge = item.critical_count > 0
-    ? { bg: '#fef2f2', color: '#b91c1c', text: `${item.critical_count} critical` }
+    ? { bg: '#fef2f2', color: '#b91c1c', text: `${item.critical_count} to resolve` }
     : item.fail_count > 0
-      ? { bg: '#fff7ed', color: '#c2410c', text: `${item.fail_count} issue${item.fail_count === 1 ? '' : 's'}` }
+      ? { bg: '#fff7ed', color: '#c2410c', text: `${item.fail_count} to check` }
       : { bg: '#d1fae5', color: '#065f46', text: 'Clean' };
   return (
     <div className="card px-5 py-3.5 flex items-center justify-between cursor-pointer" onClick={() => onView(item.id)}>
@@ -176,7 +151,9 @@ export default function InvoiceReview() {
       const fd = new FormData();
       files.forEach(f => fd.append('invoices', f));
       if (routeProjectId) fd.append('project_id', routeProjectId);
-      if (contractId) fd.append('contract_id', contractId);
+      // Always sent, empty when "no contract" is chosen, so the server does not fall back to the
+      // project's default contract behind the PM's back.
+      fd.append('contract_id', contractId || '');
       const data = await invoiceReviewApi.create(fd);
       setResult({ id: data.id, report: data.report });
       loadHistory();
@@ -209,7 +186,7 @@ export default function InvoiceReview() {
         icon={ReceiptPercentIcon}
         accent="teal"
         title="Invoice Review"
-        subtitle="Upload a vendor invoice — get math, tax, reimbursable-backup, and contract checks against the project's contract"
+        subtitle="Check a vendor invoice's math, its receipts, earlier reviews for a duplicate, and the contract or PO it is billed against"
       />
 
       <div className="grid grid-cols-5 gap-6">
@@ -240,9 +217,9 @@ export default function InvoiceReview() {
                 <p className="text-xs text-gray-400 mt-1.5">Loading contracts…</p>
               ) : contracts.length === 0 ? (
                 <p className="text-xs mt-1.5" style={{ color: '#c2410c' }}>
-                  No contract in this project's Shared Documents yet — add one there and it will
-                  appear here. You can still review the invoice; the maths is checked either way,
-                  but tax and unallowable-cost findings need a contract.
+                  No contract or PO in this project's Shared Documents yet — add one there and it will
+                  appear here. You can still review the invoice: the math, receipts and duplicates are
+                  checked either way.
                 </p>
               ) : (
                 <>
@@ -256,8 +233,8 @@ export default function InvoiceReview() {
                   </select>
                   <p className="text-[11px] text-gray-400 mt-1">
                     {contractId
-                      ? "This contract's tax and cost terms are what the invoice is checked against."
-                      : 'Nothing to check tax or unallowable costs against — arithmetic findings only.'}
+                      ? "Tax, costs it forbids, the PO number, and how much is left on it are checked against this."
+                      : 'Nothing to check tax, the PO or forbidden costs against — the math, receipts and duplicates only.'}
                   </p>
                 </>
               )}
@@ -295,6 +272,10 @@ export default function InvoiceReview() {
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">{result ? 'Review Result' : 'Stored Review'}</h2>
                 <div className="flex items-center gap-2">
+                  <button className="btn-primary px-3 py-1.5"
+                    onClick={() => invoiceReviewApi.downloadPdf(active.id, `Invoice_${active.report.header.invoiceNumber || active.id}_Review.pdf`)}>
+                    <ArrowDownTrayIcon className="w-4 h-4" /> Report PDF
+                  </button>
                   <button className="btn-secondary px-3 py-1.5" onClick={() => { setResult(null); setViewing(null); }}>Close</button>
                 </div>
               </div>

@@ -3,76 +3,99 @@ const { askForJson } = require('./aiJson');
 
 // Line descriptions on a materials invoice are full of dimensions written with inch marks, so
 // this comes back through a tool call rather than as parsed text. See lib/aiJson.js.
-const INVOICE_TOOL = {
-  name: 'record_invoice_review',
-  description: 'Record an invoice\'s figures and what is worth the PM\'s attention.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      invoice: {
-        type: 'object',
-        properties: {
-          vendor: { type: 'string', description: 'Who issued the invoice.' },
-          invoiceNumber: { type: 'string' },
-          invoiceDate: { type: 'string', description: 'YYYY-MM-DD.' },
-          poNumber: { type: 'string', description: 'Referenced PO number.' },
-          subtotal: { type: 'number' },
-          taxAmount: { type: 'number' },
-          taxRate: { type: 'number', description: 'A decimal — 8.25% is 0.0825.' },
-          total: { type: 'number' },
-          lineItems: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                description: { type: 'string' },
-                qty: { type: 'number' },
-                unit: { type: 'string' },
-                unitPrice: { type: 'number' },
-                total: { type: 'number' },
-                isReimbursable: { type: 'boolean' },
-                hasBackup: {
-                  type: 'boolean',
-                  description: 'True if a matching backup receipt/invoice for this reimbursable '
-                    + 'line is present among the uploaded documents; false if this is '
-                    + 'reimbursable but no backup was found. Omit if the line is not reimbursable.',
+// `hasContract` adds the one observation that needs the contract's terms: costs it forbids that a
+// wording match in code would miss.
+function invoiceTool(hasContract) {
+  const tool = {
+    name: 'record_invoice_review',
+    description: 'Record an invoice\'s figures and what is worth the PM\'s attention.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        invoice: {
+          type: 'object',
+          properties: {
+            vendor: { type: 'string', description: 'Who issued the invoice.' },
+            invoiceNumber: { type: 'string' },
+            invoiceDate: { type: 'string', description: 'YYYY-MM-DD.' },
+            poNumber: { type: 'string', description: 'Referenced PO number.' },
+            subtotal: { type: 'number' },
+            taxAmount: { type: 'number' },
+            taxRate: { type: 'number', description: 'A decimal — 8.25% is 0.0825.' },
+            total: { type: 'number' },
+            lineItems: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  description: { type: 'string' },
+                  qty: { type: 'number' },
+                  unit: { type: 'string' },
+                  unitPrice: { type: 'number' },
+                  total: { type: 'number' },
+                  isReimbursable: { type: 'boolean' },
+                  hasBackup: {
+                    type: 'boolean',
+                    description: 'True if a matching backup receipt/invoice for this reimbursable '
+                      + 'line is present among the uploaded documents; false if this is '
+                      + 'reimbursable but no backup was found. Omit if the line is not reimbursable.',
+                  },
+                  backupNote: {
+                    type: 'string',
+                    description: 'Which uploaded document backs this line, or what is missing.',
+                  },
                 },
-                backupNote: {
-                  type: 'string',
-                  description: 'Which uploaded document backs this line, or what is missing.',
-                },
+                required: ['description'],
               },
-              required: ['description'],
+            },
+          },
+          required: ['lineItems'],
+        },
+        observations: {
+          type: 'object',
+          properties: {
+            reimbursableBackup: {
+              type: 'string',
+              description: 'Plain English, at most two short sentences: anything about the backup '
+                + 'worth knowing that the per-line backup answers above do not say — a receipt that '
+                + 'does not match its line, a backup total that differs from what was billed. Omit '
+                + 'when there is nothing beyond what the lines already record.',
+            },
+            pricingSanity: {
+              type: 'string',
+              description: 'Plain English, at most two short sentences: based on general construction '
+                + 'cost knowledge (which may be out of date), does any unit price or total look far '
+                + 'outside the normal range? Name the line. This is a prompt for the PM to check, not '
+                + 'a verdict. About price levels only — do not repeat tax or anything the contract '
+                + 'allows or forbids. Omit entirely when nothing stands out.',
             },
           },
         },
-        required: ['lineItems'],
       },
-      observations: {
+      required: ['invoice'],
+    },
+  };
+  if (hasContract) {
+    tool.input_schema.properties.observations.properties.contractConcerns = {
+      type: 'array',
+      description: 'Lines on the invoice that the contract terms you were given forbid or restrict — '
+        + 'for example overtime billed without the written direction the contract requires, or a '
+        + 'cost the contract lists as not reimbursable. Leave out sales tax; it is checked '
+        + 'separately. Empty when nothing on the invoice goes against the contract.',
+      items: {
         type: 'object',
         properties: {
-          reimbursableBackup: {
-            type: 'string',
-            description: 'Plain English: which reimbursable line items have proper backup and '
-              + 'which do not. Name the specific lines. Omit if there are no reimbursable lines.',
-          },
-          unallowable: {
-            type: 'string',
-            description: 'Plain English: does anything on the invoice bill for a cost the '
-              + 'contract does not allow? Name the line and the contract basis.',
-          },
-          pricingSanity: {
-            type: 'string',
-            description: 'Plain English: based on general construction cost knowledge (which may '
-              + 'be out of date), do any unit prices or totals look far outside the normal range? '
-              + 'Be specific. This is a prompt for the PM to check, not a verdict.',
-          },
+          item: { type: 'string', description: 'The invoice line, by its description as printed.' },
+          amount: { type: 'number', description: 'The amount on that line.' },
+          rule: { type: 'string', description: 'What the contract says, in one short plain-English sentence.' },
+          section: { type: 'string', description: 'The section or clause it comes from, if the terms name one.' },
         },
+        required: ['item', 'rule'],
       },
-    },
-    required: ['invoice'],
-  },
-};
+    };
+  }
+  return tool;
+}
 
 // The extraction returns two clearly separated things:
 //  - "invoice": raw figures and structure, which feed the deterministic checks in
@@ -121,7 +144,8 @@ Rules:
   them. Return an EMPTY "lineItems" array. Read these pages only for what they support, and leave
   the invoice's own figures to the pass that can actually see them.`}
 - In "observations", write plain English for a reader who is not in construction. No IDs,
-  no jargon. Ground every concern in something visible in the documents.`;
+  no jargon. Ground every concern in something visible in the documents. Be brief, and leave a
+  note out rather than fill it with something unremarkable.`;
 }
 
 // Deliberately does not suggest removing an attachment. How much backup a vendor binds in must never
@@ -133,10 +157,10 @@ const TOO_MANY_LINE_ITEMS = 'This invoice carries more itemised detail than one 
 // contract PDF itself is deliberately NOT re-sent — its terms were extracted once at
 // upload. All uploaded documents go in together so the model can match reimbursable
 // lines on the primary invoice to their backup receipts.
-async function callWithRetry(content) {
+async function callWithRetry(content, hasContract) {
   const { data } = await askForJson({
     content,
-    tool: INVOICE_TOOL,
+    tool: invoiceTool(hasContract),
     maxTokens: 12000,
     label: 'invoice extract',
     truncatedMessage: TOO_MANY_LINE_ITEMS,
@@ -157,7 +181,7 @@ async function analyzeInvoices({ invoiceBuffers, contractTerms }) {
     }));
     content.push({ type: 'text', text: buildPrompt({ fileCount: invoiceBuffers.length, contractTerms }) });
 
-    const parsed = await callWithRetry(content);
+    const parsed = await callWithRetry(content, !!contractTerms);
     return { invoice: parsed.invoice || {}, observations: parsed.observations || {} };
   }
 
@@ -176,7 +200,7 @@ async function analyzeInvoices({ invoiceBuffers, contractTerms }) {
         canSeeInvoice: (context?.startPage ?? 1) <= 1,
       }) + partNotice(context) },
     ];
-    return callWithRetry(content);
+    return callWithRetry(content, !!contractTerms);
   };
 
   // All of them at once. Each file is independent — merging happens afterwards — and these ran in
