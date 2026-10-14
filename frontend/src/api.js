@@ -522,9 +522,12 @@ function triggerDownload(blob, fileName) {
 // request that either says "running" or hands back the result.
 // `base` is required in spirit: Reviewer 1 is held at its August behaviour and has no jobs
 // endpoint, so a caller that forgets to name its own module would poll a 404 for ever.
-// `base` is the module's own /jobs endpoint for the three that grew one before there was a shared
-// one. Everything converted since polls /api/jobs, which is the same rule written once.
-async function waitForJob(jobId, { onTick, base = '/jobs' } = {}) {
+// `base` is the module whose own /jobs endpoint to poll, for the three that grew one before there was
+// a shared one. Everything converted since polls the shared /api/jobs/:id — which is what the empty
+// default gives. The default was '/jobs', which made the address /api/jobs/jobs/:id: a route that
+// does not exist, so every module on the shared endpoint failed on screen with "not found" while the
+// server finished the work and saved it.
+async function waitForJob(jobId, { onTick, base = '' } = {}) {
   const started = Date.now();
   // Quick at first — a small pay application is read in seconds and should not sit waiting on a
   // slow poll — then easing off so a twenty-minute read is not a thousand requests.
