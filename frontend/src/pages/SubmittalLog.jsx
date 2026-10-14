@@ -273,14 +273,9 @@ function NewSubmittalForm({ onSaved, onCancel }) {
             </div>
           )}
 
-          {docs.length === 0 && (
-            <p className="text-[11px] text-gray-500 mb-2">
-              Nothing is filed on this project yet. Add the specification below and choose to save
-              it, and it will be listed here.
-            </p>
-          )}
           <AddedDocuments items={added} onChange={setAdded} noun="submittal" categories={DESIGN_CATEGORIES}
             hint="the specification, a drawing, a design narrative"
+            label={docs.length > 0 ? "Add documents that aren't in the list" : 'Upload them'}
             disabled={filing || analysing || saving} />
         </Field>
 
@@ -787,11 +782,6 @@ function PredictedReviewPanel({ record, onRan }) {
           <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 pt-1">
             Read it against
           </p>
-          {docs.length === 0 && (
-            <p className="text-[12px] text-gray-500">
-              Nothing is filed on this project yet — attach the specification below.
-            </p>
-          )}
           {docs.map(d => (
             <label key={d.id} className="flex items-start gap-2 cursor-pointer">
               <input type="checkbox" className="mt-0.5" checked={selected.includes(d.id)}
@@ -821,6 +811,7 @@ function PredictedReviewPanel({ record, onRan }) {
           <div className="pt-1">
             <AddedDocuments items={added} onChange={setAdded} noun="submittal" categories={DESIGN_CATEGORIES}
               hint="the specification, a drawing, a design narrative"
+              label={docs.length > 0 || kept.length > 0 ? "Add documents that aren't in the list" : 'Upload them'}
               disabled={filing || running} />
           </div>
 

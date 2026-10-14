@@ -342,9 +342,11 @@ function HistoryRow({ item, onView, onDelete }) {
 
 // --- The form -------------------------------------------------------------------------------------
 
-function DocList({ docs, selectedIds, onToggle, type = 'checkbox', emptyText }) {
+function DocList({ docs, selectedIds, onToggle, type = 'checkbox' }) {
   if (docs === null) return <p className="text-xs text-gray-400">Loading shared documents…</p>;
-  if (docs.length === 0) return <p className="text-[11px] text-gray-500">{emptyText}</p>;
+  // Nothing filed: nothing to show. The upload beneath is the way in, and saying "nothing is filed —
+  // upload one below" above an "or upload one" said it twice.
+  if (docs.length === 0) return null;
   return (
     <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
       {docs.map(d => (
@@ -558,16 +560,15 @@ export default function PcoReview() {
             {wants('contract') && (
               <div className="p-4 rounded-xl space-y-3" style={{ background: '#fbfdff', border: '1px solid #dbeafe' }}>
                 <p className="text-[12px] font-bold text-gray-900">The contract</p>
-                {projectId && (
+                {projectId && contracts?.length !== 0 && (
                   <div style={{ opacity: uploadedContract ? 0.5 : 1 }}>
                     <p className="text-[11px] text-gray-400 mb-1.5">From the project's Shared Documents:</p>
                     <DocList docs={contracts} selectedIds={contractId ? [contractId] : []} type="radio"
-                      onToggle={id => setContractId(id)}
-                      emptyText="No contract or purchase order is filed for this project yet — upload one below." />
+                      onToggle={id => setContractId(id)} />
                   </div>
                 )}
                 <AddedDocuments items={contractAdd.added} onChange={contractAdd.setAdded} single
-                  noun="change order" label={projectId ? 'Or upload one' : 'Upload the contract'}
+                  noun="change order" label={contracts?.length ? 'Or upload one' : 'Upload it'}
                   hint="the agreement or purchase order this change order is billed under"
                   categories={projectId ? CONTRACT_CATEGORIES : []} disabled={busy} />
                 {uploadedContract && projectId && (
@@ -579,16 +580,15 @@ export default function PcoReview() {
             {wants('reference') && (
               <div className="p-4 rounded-xl space-y-3" style={{ background: '#fbfdff', border: '1px solid #dbeafe' }}>
                 <p className="text-[12px] font-bold text-gray-900">The RFI or ASI behind it</p>
-                {projectId && (
+                {projectId && others?.length !== 0 && (
                   <div>
                     <p className="text-[11px] text-gray-400 mb-1.5">From the project's Shared Documents — tick any that apply:</p>
                     <DocList docs={others} selectedIds={referenceIds}
-                      onToggle={id => setReferenceIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))}
-                      emptyText="Nothing is filed for this project yet — upload the RFI or ASI below." />
+                      onToggle={id => setReferenceIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))} />
                   </div>
                 )}
                 <AddedDocuments items={refAdd.added} onChange={refAdd.setAdded}
-                  noun="change order" label={projectId ? 'Or upload them' : 'Upload the RFI or ASI'}
+                  noun="change order" label={others?.length ? 'Or upload them' : 'Upload them'}
                   hint="the RFI, the ASI, the sketch that came with it"
                   categories={projectId ? SHARE_CATEGORIES : []} disabled={busy} />
               </div>

@@ -121,14 +121,9 @@ function DocumentPicker({ projectId, selected, onChange, onLoaded, refreshKey = 
   );
 
   if (docs === undefined) return <p className="text-xs text-gray-400">Loading shared documents…</p>;
-  if (docs.length === 0) {
-    return (
-      <p className="text-xs text-gray-500">
-        This project has no shared documents yet. Add the drawings or specifications below and
-        choose to save them, and they will be listed here.
-      </p>
-    );
-  }
+  // Nothing filed: nothing to show. Saying so, and then offering the upload underneath, told the PM
+  // the same thing twice — the upload is the answer, so it is all that is shown.
+  if (docs.length === 0) return null;
 
   return (
     <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
@@ -274,6 +269,9 @@ function NewRfiForm({ onSaved, onCancel }) {
   const [documentIds, setDocumentIds] = useState([]);
   const { added, setAdded, filing, listVersion, fileShared, onceFiles } =
     useAddedDocuments(projectId, documentIds, setDocumentIds);
+  // How many Shared Documents there are to tick — none means the upload is the only way in, and the
+  // wording around it says so once rather than twice.
+  const [sharedCount, setSharedCount] = useState(null);
   // Ticks the project's drawings the first time the list arrives. An RFI is answered from the
   // drawings, so starting from a blank list asked the PM to restate something the project
   // already knows. Only ever a default: it runs once, and never over a choice already made.
@@ -443,14 +441,17 @@ function NewRfiForm({ onSaved, onCancel }) {
               whichever document holds them.
             </p>
           )}
-          <p className="text-[11px] text-gray-400 mb-1.5">
-            These are the project's Shared Documents. Tick the ones to read.
-          </p>
+          {sharedCount > 0 && (
+            <p className="text-[11px] text-gray-400 mb-1.5">
+              These are the project's Shared Documents. Tick the ones to read.
+            </p>
+          )}
           <DocumentPicker projectId={projectId} selected={documentIds} onChange={setDocumentIds}
-            onLoaded={preselectDrawings} refreshKey={listVersion} />
+            onLoaded={all => { setSharedCount(all.length); preselectDrawings(all); }} refreshKey={listVersion} />
         </div>
 
-        <AddedDocuments items={added} onChange={setAdded} disabled={filing || analysing || saving} />
+        <AddedDocuments items={added} onChange={setAdded} disabled={filing || analysing || saving}
+          label={sharedCount > 0 ? "Add documents that aren't in the list" : 'Upload them'} />
 
         <div className="pt-1" style={{ borderTop: '1px solid #dbeafe' }}>
           {!preview && (
@@ -572,6 +573,7 @@ function AnalysisPanel({ rfi, onRan }) {
   // ticked where the last reading used them, so "run it again" means the same documents, and
   // unticked where it did not.
   const kept = (rfi.files || []).filter(f => f.kind === 'reference');
+  const [sharedCount, setSharedCount] = useState(null);
   const [keptIds, setKeptIds] = useState(() => {
     const lastRead = new Set((rfi.analysis?.sources || [])
       .filter(s => s.docType === 'attachment').map(s => s.label));
@@ -625,11 +627,13 @@ function AnalysisPanel({ rfi, onRan }) {
           </Field>
           <div>
             <label className="label">Documents to read it against</label>
-            <p className="text-[11px] text-gray-400 mb-1.5">
-              These are the project's Shared Documents. Tick the ones to read.
-            </p>
+            {sharedCount > 0 && (
+              <p className="text-[11px] text-gray-400 mb-1.5">
+                These are the project's Shared Documents. Tick the ones to read.
+              </p>
+            )}
             <DocumentPicker projectId={projectId} selected={documentIds} onChange={setDocumentIds}
-              refreshKey={listVersion} />
+              onLoaded={all => setSharedCount(all.length)} refreshKey={listVersion} />
             {kept.length > 0 && (
               <div className="mt-3">
                 <p className="text-[11px] text-gray-400 mb-1.5">
@@ -651,7 +655,8 @@ function AnalysisPanel({ rfi, onRan }) {
               </div>
             )}
           </div>
-          <AddedDocuments items={added} onChange={setAdded} disabled={filing || running} />
+          <AddedDocuments items={added} onChange={setAdded} disabled={filing || running}
+            label={sharedCount > 0 || kept.length > 0 ? "Add documents that aren't in the list" : 'Upload them'} />
           <div className="flex gap-2">
             <button className="btn-primary" onClick={run} disabled={running || !canRun}>
               <SparklesIcon className="w-4 h-4" />
