@@ -6,6 +6,7 @@ import {
 import { programsApi, authApi, selectedOrg, selectedProgram } from '../api';
 import Modal from '../components/Modal';
 import Breadcrumbs from '../components/Breadcrumbs';
+import GlobalSearch from '../components/GlobalSearch';
 
 // Step two: the programs inside the chosen organization. An Org Admin sees every program;
 // everyone else sees only the ones holding a project they're actually on — so this list is
@@ -105,6 +106,11 @@ export default function ProgramSelect() {
         </div>
 
         <Breadcrumbs className="mb-4 -ml-1.5 animate-fade-up" />
+
+        {/* Raised, so the results list opens over the cards below rather than underneath them. */}
+        <div className="mb-8 animate-fade-up relative" style={{ zIndex: 30 }}>
+          <GlobalSearch wide />
+        </div>
 
         <div className="flex items-end justify-between mb-6 animate-fade-up">
           <div>

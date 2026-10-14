@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MagnifyingGlassIcon, RectangleGroupIcon, FolderIcon } from '@heroicons/react/24/outline';
-import { programsApi, projectsApi, selectedOrg, selectedProgram } from '../api';
+import { programsApi, projectsApi, orgsApi, selectedOrg, selectedProgram } from '../api';
 import { useProject } from '../context/ProjectContext';
 
 // One box at the top of every page that goes to a program or a project.
@@ -14,6 +14,11 @@ import { useProject } from '../context/ProjectContext';
 // Scoped to the organization that is open, because that is the boundary everything else in
 // Coaster respects. Projects come from every program the user can see, so a project can be reached
 // without first remembering which program it sits in.
+//
+// The one exception is the opening page, where no organization has been chosen yet: there it looks
+// in every organization the user belongs to (`everyOrganization`), so the first thing they can do
+// after signing in is type the project they came for. Choosing a result there opens its
+// organization too.
 
 // How many of each kind are shown at once. A list longer than this is a sign the search should be
 // narrower, not that the list should scroll.
@@ -47,7 +52,9 @@ const ranked = (items, query, nameOf, extraOf) => items
   .slice(0, PER_GROUP)
   .map(x => x.item);
 
-export default function GlobalSearch() {
+// `everyOrganization` searches all of the user's organizations rather than the open one.
+// `wide` is for a page where the box is the main thing on it rather than a corner of the header.
+export default function GlobalSearch({ everyOrganization = false, wide = false }) {
   const navigate = useNavigate();
   const ctx = useProject();
 
@@ -56,6 +63,9 @@ export default function GlobalSearch() {
   const [active, setActive] = useState(0);
   const [programs, setPrograms] = useState([]);
   const [projects, setProjects] = useState([]);
+  // How many organizations the results span. Only past one is the organization worth naming on
+  // each result.
+  const [orgCount, setOrgCount] = useState(1);
   const loadedAt = useRef(0);
   const inputRef = useRef(null);
   const boxRef = useRef(null);
@@ -67,12 +77,33 @@ export default function GlobalSearch() {
 
   // Fetched when the box is first used rather than on every page, so pages that nobody searches
   // from cost nothing.
-  const load = useCallback(() => {
-    if (!orgId || Date.now() - loadedAt.current < FRESH_MS) return;
+  //
+  // Every result carries the organization it came from, which is what lets one chosen from the
+  // opening page take the user into the right organization as well as the right project.
+  const load = useCallback(async () => {
+    if (Date.now() - loadedAt.current < FRESH_MS) return;
+    if (!everyOrganization && !orgId) return;
     loadedAt.current = Date.now();
-    programsApi.list().then(setPrograms).catch(() => setPrograms([]));
-    projectsApi.list().then(setProjects).catch(() => setProjects([]));
-  }, [orgId]);
+    const current = selectedOrg.get();
+    const orgs = everyOrganization
+      ? await orgsApi.mine().catch(() => [])
+      : [current];
+    const inEach = await Promise.all(orgs.map(async (org) => {
+      const id = everyOrganization ? org.id : undefined;
+      const tag = { id: org.id, name: org.name, is_admin: !!org.is_admin };
+      const [progs, projs] = await Promise.all([
+        programsApi.list(id).catch(() => []),
+        projectsApi.list(undefined, id).catch(() => []),
+      ]);
+      return {
+        programs: progs.map(g => ({ ...g, org: tag })),
+        projects: projs.map(p => ({ ...p, org: tag })),
+      };
+    }));
+    setPrograms(inEach.flatMap(x => x.programs));
+    setProjects(inEach.flatMap(x => x.projects));
+    setOrgCount(orgs.length);
+  }, [orgId, everyOrganization]);
 
   // ⌘K / Ctrl+K from anywhere, the shortcut most people already reach for.
   useEffect(() => {
@@ -100,6 +131,9 @@ export default function GlobalSearch() {
     const q = query.trim();
     if (!q) {
       // Nothing typed yet: offer the projects in the program that is open, rather than an empty box.
+      // On the opening page nothing is open yet, and every project the user has would be a list,
+      // not a suggestion — so it waits to be told.
+      if (everyOrganization) return [];
       const here = projects.filter(p => !currentProgramId || p.program_id === currentProgramId).slice(0, PER_GROUP);
       return here.length ? [{ key: 'projects', title: 'Projects', items: here.map(p => ({ kind: 'project', project: p })) }] : [];
     }
@@ -109,13 +143,17 @@ export default function GlobalSearch() {
     const g = ranked(programs, q, x => x.name, () => '');
     if (g.length) out.push({ key: 'programs', title: 'Programs', items: g.map(x => ({ kind: 'program', program: x })) });
     return out;
-  }, [query, projects, programs, currentProgramId]);
+  }, [query, projects, programs, currentProgramId, everyOrganization]);
 
   const flat = useMemo(() => groups.flatMap(g => g.items), [groups]);
   useEffect(() => { setActive(0); }, [query]);
 
   const go = (item) => {
     if (!item) return;
+    // A result from another organization takes the user into it first. Choosing an organization
+    // clears the program, which belongs to the old one; the lines below set the right one.
+    const org = (item.project || item.program)?.org;
+    if (org && org.id !== selectedOrg.get()?.id) selectedOrg.set(org);
     if (item.kind === 'project') {
       const p = item.project;
       // The path at the top of the page names the program, so it has to be the project's own.
@@ -137,16 +175,16 @@ export default function GlobalSearch() {
     else if (e.key === 'Escape') { setOpen(false); inputRef.current?.blur(); }
   };
 
-  if (!orgId) return null;
+  if (!orgId && !everyOrganization) return null;
 
   const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || '');
   let index = -1;
 
   return (
-    <div ref={boxRef} className="relative w-full max-w-[340px]">
-      <div className="flex items-center gap-2 h-9 px-3 rounded-xl transition-all"
+    <div ref={boxRef} className={`relative w-full ${wide ? 'max-w-[560px]' : 'max-w-[340px]'}`}>
+      <div className={`flex items-center gap-2 px-3 rounded-xl transition-all ${wide ? 'h-11' : 'h-9'}`}
         style={{
-          background: open ? '#fff' : 'rgba(255,255,255,0.7)',
+          background: open || wide ? '#fff' : 'rgba(255,255,255,0.7)',
           border: `1px solid ${open ? '#c7d2fe' : '#e5e7eb'}`,
           boxShadow: open ? '0 0 0 3px rgba(99,102,241,0.08)' : 'none',
         }}>
@@ -195,9 +233,9 @@ export default function GlobalSearch() {
                     index += 1;
                     const i = index;
                     const selected = i === active;
-                    const { Icon, label, detail } = describe(item);
+                    const { Icon, label, detail } = describe(item, orgCount > 1);
                     return (
-                      <button key={`${item.kind}-${item.project?.id ?? item.program?.id}`}
+                      <button key={`${item.kind}-${(item.project || item.program).org?.id}-${item.project?.id ?? item.program?.id}`}
                         type="button" role="option" aria-selected={selected}
                         // Mouse down rather than click, so the box does not close before the choice lands.
                         onMouseDown={e => { e.preventDefault(); go(item); }}
@@ -225,12 +263,16 @@ export default function GlobalSearch() {
   );
 }
 
-function describe(item) {
+// `withOrg` puts the organization first in the line under each result, for when they come from
+// more than one — two customers can each have a program called "2026 Bond".
+function describe(item, withOrg) {
   if (item.kind === 'project') {
     const p = item.project;
-    return { Icon: FolderIcon, label: p.project_name, detail: [p.program, p.client_name].filter(Boolean).join(' · ') || null };
+    const parts = [withOrg && p.org?.name, p.program, p.client_name].filter(Boolean);
+    return { Icon: FolderIcon, label: p.project_name, detail: parts.join(' · ') || null };
   }
   const g = item.program;
   const count = typeof g.project_count === 'number' ? `${g.project_count} project${g.project_count === 1 ? '' : 's'}` : null;
-  return { Icon: RectangleGroupIcon, label: g.name, detail: count };
+  const parts = [withOrg && g.org?.name, count].filter(Boolean);
+  return { Icon: RectangleGroupIcon, label: g.name, detail: parts.join(' · ') || null };
 }

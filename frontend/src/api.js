@@ -157,7 +157,9 @@ export const orgsApi = {
 };
 
 export const programsApi = {
-  list: () => api.get('/programs').then(r => r.data),
+  // `orgId` names an organization other than the selected one — the search on the opening page
+  // looks in every organization before any has been chosen.
+  list: orgId => api.get('/programs', inOrg(orgId)).then(r => r.data),
   get: id => api.get(`/programs/${id}`).then(r => r.data),
   create: data => api.post('/programs', data).then(r => r.data),
   update: (id, data) => api.put(`/programs/${id}`, data).then(r => r.data),
@@ -217,7 +219,7 @@ export const projectMembersApi = {
 };
 
 export const projectsApi = {
-  list: params => api.get('/projects', { params }).then(r => r.data),
+  list: (params, orgId) => api.get('/projects', { params, ...inOrg(orgId) }).then(r => r.data),
   get: id => api.get(`/projects/${id}`).then(r => r.data),
   create: data => api.post('/projects', data).then(r => r.data),
   update: (id, data) => api.put(`/projects/${id}`, data).then(r => r.data),

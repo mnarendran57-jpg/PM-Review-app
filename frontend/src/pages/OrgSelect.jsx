@@ -5,6 +5,7 @@ import {
   UserGroupIcon, Cog6ToothIcon, EnvelopeIcon,
 } from '@heroicons/react/24/outline';
 import { authApi, selectedOrg } from '../api';
+import GlobalSearch from '../components/GlobalSearch';
 
 // Step one after signing in. A user account isn't tied to an organization — a consultant
 // may work for several — so we ask which one they're working in. The list comes from the
@@ -88,6 +89,15 @@ export default function OrgSelect() {
             </button>
           </div>
         </div>
+
+        {/* The quickest way in: straight to the project, from the first page after signing in,
+            in whichever organization it belongs to. */}
+        {(orgs || []).length > 0 && (
+          // Raised, so the results list opens over the cards below rather than underneath them.
+          <div className="mb-10 animate-fade-up relative" style={{ zIndex: 30 }}>
+            <GlobalSearch everyOrganization wide />
+          </div>
+        )}
 
         <div className="mb-6 animate-fade-up">
           <h2 className="text-lg font-bold text-gray-900">Select an organization</h2>
