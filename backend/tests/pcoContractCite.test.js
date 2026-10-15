@@ -4,6 +4,7 @@ const { tidy, combine, citeLabel, clauseFor } = require('../lib/contractClauses'
 const { runPcoChecks } = require('../lib/pcoChecks');
 const { buildPcoReport } = require('../lib/pcoReport');
 const { addMarkedPages } = require('../lib/pcoMarkup');
+const { combineAgreements } = require('../lib/agreementSet');
 
 // A change order checked against a contract cites where in the contract each finding comes from.
 // No API call is made: the clauses below stand in for what lib/contractClauses.js reads.
@@ -128,6 +129,18 @@ const rows = (results, id) => results.find(r => r.id === id)?.figures?.rows || [
     if (process.env.MARKUP_SAMPLES) {
       require('fs').writeFileSync(require('path').join(process.env.MARKUP_SAMPLES, 'markup-cite.pdf'), Buffer.from(await target.save()));
     }
+  });
+
+  await check('a contract and a PO together: the contract\'s limits apply, each cited from its own document', () => {
+    const po = { id: 4, label: 'PO 253016-005', docType: 'purchase-order', terms: {
+      taxExempt: null, originalContractSum: 60000, commitment: '253016-005', unallowableItems: [],
+      clauses: { contractSum: { page: 1, quote: 'Purchase order amount: $60,000.00', amount: 60000 } },
+    } };
+    const { terms: both } = combineAgreements([{ id: 5, label: 'Owner-Contractor Agreement', docType: 'contract', terms }, po]);
+    const results = runPcoChecks({ pco, contractTerms: both, markupPolicy: null });
+    assert.strictEqual(citeLabel(rows(results, 'A2')[0].clause), 'Owner-Contractor Agreement · Section 7.4 Markup on Changes, page 12');
+    assert.strictEqual(rows(results, 'T1')[0].clause.source, 'Owner-Contractor Agreement');
+    assert.strictEqual(rows(results, 'C1')[0].clause.source, 'Owner-Contractor Agreement');
   });
 
   console.log(`\n${failed === 0 ? 'All' : ''} ${passed} check${passed === 1 ? '' : 's'} passed`

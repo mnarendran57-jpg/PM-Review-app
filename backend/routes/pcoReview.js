@@ -8,9 +8,8 @@ const { buildPcoReport } = require('../lib/pcoReport');
 const { findAlternatives, alternativesView } = require('../lib/pcoAlternatives');
 const { friendlyAiError } = require('../lib/aiErrors');
 const { GOVERNING_SQL } = require('../lib/docTypes');
-const { ensureTermsWithClauses } = require('../lib/contractTerms');
-const { readContractClauses, clauseFor } = require('../lib/contractClauses');
-const { extractContractTerms } = require('../lib/contractExtract');
+const { clauseFor } = require('../lib/contractClauses');
+const { readAgreements, labelAll } = require('../lib/agreementSet');
 const { renderPcoReportPdf } = require('../lib/pcoReportPdf');
 const { rfiReference } = require('../lib/pcoRfiReference');
 const storage = require('../lib/storage');
@@ -75,7 +74,9 @@ router.post('/', upload.fields([
   // page from before several could be given still sends.
   { name: 'reference_files', maxCount: 6 },
   { name: 'reference_file', maxCount: 1 },
-  // A contract uploaded for this review alone, rather than chosen from Shared Documents.
+  // Agreements uploaded for this review alone, rather than chosen from Shared Documents — a contract,
+  // a PO, or both. contract_file is the single one a page from before several could be given sends.
+  { name: 'contract_files', maxCount: 20 },
   { name: 'contract_file', maxCount: 1 },
 ]), async (req, res) => {
   try {
@@ -84,46 +85,44 @@ router.post('/', upload.fields([
     if (pcoFile.mimetype !== 'application/pdf') return res.status(400).json({ error: 'PCO must be a PDF' });
 
     const uploadedRefs = [...(req.files?.reference_files || []), ...(req.files?.reference_file || [])];
-    const contractFile = req.files?.contract_file?.[0] || null;
-    for (const f of [...uploadedRefs, ...(contractFile ? [contractFile] : [])]) {
+    const contractFiles = [...(req.files?.contract_files || []), ...(req.files?.contract_file || [])];
+    for (const f of [...uploadedRefs, ...contractFiles]) {
       if (f.mimetype !== 'application/pdf') {
         return res.status(400).json({ error: `${f.originalname} is not a PDF — only PDFs can be read.` });
       }
     }
 
     const projectId = req.body.project_id ? Number(req.body.project_id) : null;
-    const contractId = req.body.contract_id ? Number(req.body.contract_id) : null;
     const requested = checksRequested(req.body);
+    // The filed agreements chosen: contract_ids, a list, or contract_id, the single one a page from
+    // before several could be chosen sends.
+    const chosenIds = [
+      ...(projectId ? parseIdList(req.body.contract_ids) : []),
+      ...(req.body.contract_id ? [Number(req.body.contract_id)] : []),
+    ].filter((id, i, all) => all.indexOf(id) === i);
 
-    // Which agreement this change order is measured against. A project carries several — the
-    // architect's, the general contractor's — and the markup ceiling and unallowable-item list
-    // differ between them, so the reviewer picks. A request that does not say falls back to the
-    // project's primary contract, which is what a single-contract job wants.
-    let contractRow = null;
+    // Which agreements this change order is measured against. A project carries several — the
+    // architect's, the general contractor's, a PO beside a contract — and the markup ceiling and
+    // unallowable-item list differ between them, so the reviewer picks, as many as apply. A request
+    // that does not say falls back to the project's primary contract, which is what a single-contract
+    // job wants.
+    const SELECT = `SELECT id, label, file_name, terms, doc_type, terms_status, file_key, file_blob, party, party_role
+                    FROM project_contracts`;
+    let contractRows = [];
     const wantsContract = requested ? requested.contract : true;
-    if (projectId && wantsContract && !contractFile) {
-      contractRow = contractId
-        ? db.prepare(`
-            SELECT id, label, file_name, terms, doc_type, terms_status, file_key, file_blob,
-                   party, party_role
-            FROM project_contracts
-            WHERE id = ? AND project_id = ? AND doc_type IN (${GOVERNING_SQL})
-          `).get(contractId, projectId)
-        : (requested ? null : db.prepare(`
-            SELECT id, label, file_name, terms, doc_type, terms_status, file_key, file_blob,
-                   party, party_role
-            FROM project_contracts
-            WHERE project_id = ? AND doc_type IN (${GOVERNING_SQL})
-            ORDER BY is_primary DESC, created_at ASC LIMIT 1
-          `).get(projectId));
-
-      // A contract id belonging to another project is a mistake worth surfacing, not something
-      // to silently swap for a different agreement.
-      if (contractId && !contractRow) {
-        return res.status(400).json({ error: 'That contract is not on this project.' });
+    if (projectId && wantsContract) {
+      if (chosenIds.length) {
+        const find = db.prepare(`${SELECT} WHERE id = ? AND project_id = ? AND doc_type IN (${GOVERNING_SQL})`);
+        contractRows = chosenIds.map(id => find.get(id, projectId));
+        // An id belonging to another project is a mistake worth surfacing, not something to skip.
+        if (contractRows.some(r => !r)) return res.status(400).json({ error: 'That contract is not on this project.' });
+      } else if (!requested && contractFiles.length === 0) {
+        const primary = db.prepare(`${SELECT} WHERE project_id = ? AND doc_type IN (${GOVERNING_SQL})
+                                    ORDER BY is_primary DESC, created_at ASC LIMIT 1`).get(projectId);
+        if (primary) contractRows = [primary];
       }
     }
-    if (requested?.contract && !contractRow && !contractFile) {
+    if (requested?.contract && contractRows.length === 0 && contractFiles.length === 0) {
       return res.status(400).json({ error: 'Choose the contract to check against, or upload one.' });
     }
 
@@ -155,32 +154,18 @@ router.post('/', upload.fields([
       return res.status(400).json({ error: 'Choose the RFI or ASI to check against, or upload it.' });
     }
 
-    const checkedAgainst = requested || { contract: !!(contractRow || contractFile), reference: references.length > 0 };
-    const contractLabel = contractRow
-      ? (contractRow.label || contractRow.file_name)
-      : contractFile ? contractFile.originalname.replace(/\.pdf$/i, '') : null;
+    const checkedAgainst = requested || { contract: contractRows.length > 0 || contractFiles.length > 0, reference: references.length > 0 };
+    const contractLabel = labelAll({ rows: contractRows, files: contractFiles });
 
     // The reading no longer happens on this request. Everything above is cheap and has
     // already answered where it needed to; what follows takes minutes, held the connection
     // open throughout, and was lost without trace whenever the service restarted mid-read.
     const jobId = jobs.startFrom(req, 'pco-review', async () => {
       try {
-      // The contract's terms. A filed contract is read on first use and the reading kept for every
-      // review after it; one uploaded for this review alone is read now and not kept, because
-      // keeping it is what saving it to Shared Documents is for.
-      // Either way it comes with where each change order rule is written, so a finding can cite it.
-      let contractTerms = null;
-      if (contractRow) contractTerms = await ensureTermsWithClauses(contractRow);
-      else if (contractFile) {
-        const [{ usage, ...terms }, clauses] = await Promise.all([
-          extractContractTerms(contractFile.buffer),
-          readContractClauses(contractFile.buffer).then(r => r.clauses).catch(err => {
-            console.error('[contract clauses] uploaded contract failed:', err.message);
-            return null;
-          }),
-        ]);
-        contractTerms = { ...terms, clauses: clauses };
-      }
+      // The agreements' terms, read as one set when there are several; see lib/agreementSet.js.
+      const { terms: contractTerms } = checkedAgainst.contract
+        ? await readAgreements({ rows: contractRows, files: contractFiles })
+        : { terms: null };
 
       const { pco, reference, observations } = await analyzePco({
         pcoBuffer: pcoFile.buffer,
@@ -242,7 +227,7 @@ router.post('/', upload.fields([
         req.orgId, projectId,
         // Copied rather than joined, so a saved review still says whose terms it applied even
         // after that contract is renamed or removed.
-        contractRow?.id ?? null,
+        contractRows[0]?.id ?? null,
         contractLabel,
         pco.pcoNumber || null,
         pco.title || null,

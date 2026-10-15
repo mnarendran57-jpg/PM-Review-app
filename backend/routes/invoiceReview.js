@@ -8,10 +8,8 @@ const { buildInvoiceReport } = require('../lib/invoiceReport');
 const { renderInvoiceReportPdf } = require('../lib/invoiceReportPdf');
 const { friendlyAiError } = require('../lib/aiErrors');
 const { GOVERNING_SQL } = require('../lib/docTypes');
-const { ensureTermsWithClauses } = require('../lib/contractTerms');
-const { extractContractTerms } = require('../lib/contractExtract');
-const { readContractClauses, clauseFor } = require('../lib/contractClauses');
-const { combineAgreements } = require('../lib/agreementSet');
+const { clauseFor } = require('../lib/contractClauses');
+const { readAgreements, labelAll } = require('../lib/agreementSet');
 const storage = require('../lib/storage');
 const jobs = require('../lib/jobs');
 
@@ -116,11 +114,7 @@ router.post('/', upload.fields([
       return res.status(400).json({ error: `Choose the ${agreement}'s contract or PO, or upload it.` });
     }
     const chosen = contractRows.length > 0 || contractFiles.length > 0;
-    const labels = [
-      ...contractRows.map(r => r.label || r.file_name),
-      ...contractFiles.map(f => f.originalname.replace(/\.pdf$/i, '')),
-    ];
-    const contractLabel = labels.length ? labels.join(' + ') : null;
+    const contractLabel = labelAll({ rows: contractRows, files: contractFiles });
 
     // The reading does not happen on this request. Everything above is cheap and has already
     // answered where it needed to; what follows takes as long as the package is long, held the
@@ -128,31 +122,8 @@ router.post('/', upload.fields([
     // mid-read or the browser gave up waiting.
     const jobId = jobs.startFrom(req, 'invoice-review', async () => {
       try {
-        // Read on first use rather than at upload, so filing a contract costs nothing and a
-        // contract nobody invoices against is never read. Either way the terms come with where each
-        // rule is written, so a finding can cite it. One uploaded for this review alone is read now
-        // and not kept — keeping it is what saving it to Shared Documents is for. All of them at once:
-        // each is independent of the others.
-        const readUploaded = async f => {
-          const [{ usage, ...terms }, clauses] = await Promise.all([
-            extractContractTerms(f.buffer),
-            readContractClauses(f.buffer).then(r => r.clauses).catch(err => {
-              console.error('[contract clauses] uploaded contract failed:', err.message);
-              return null;
-            }),
-          ]);
-          return { ...terms, clauses };
-        };
-        const agreements = await Promise.all([
-          ...contractRows.map(async r => ({
-            id: r.id, label: r.label || r.file_name, docType: r.doc_type, terms: await ensureTermsWithClauses(r),
-          })),
-          ...contractFiles.map(async f => ({
-            id: null, label: f.originalname.replace(/\.pdf$/i, ''), docType: null, terms: await readUploaded(f),
-          })),
-        ]);
         // Several agreements are checked as one set of terms; see lib/agreementSet.js.
-        const { terms: contractTerms, valueFrom } = combineAgreements(agreements);
+        const { terms: contractTerms, valueFrom } = await readAgreements({ rows: contractRows, files: contractFiles });
 
         const { invoice, observations } = await analyzeInvoices({
           invoiceBuffers: files.map(f => f.buffer),

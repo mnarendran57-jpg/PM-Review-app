@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   ScaleIcon, SparklesIcon, ArrowDownTrayIcon, TrashIcon, ClockIcon, CheckIcon, MagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
@@ -13,7 +13,7 @@ import {
   CoasterNotes, PassedLine,
 } from '../components/ReviewReport';
 import AddedDocuments, {
-  useAddedDocuments, ONCE, SHARE_CATEGORIES, CONTRACT_CATEGORIES,
+  useAddedDocuments, SHARE_CATEGORIES, CONTRACT_CATEGORIES,
 } from '../components/AddedDocuments';
 
 // A purchase order governs a job that never had a contract, so it belongs in this list too.
@@ -24,7 +24,7 @@ const GOVERNING_DOCS = ['contract', 'purchase-order'];
 // add their checks on top. "Basic" is the choice of neither, so picking it clears the others and
 // picking either of the others clears it.
 const CHECK_OPTIONS = [
-  { key: 'contract', label: 'Contract', hint: 'Tax, markup limits, allowances, costs it forbids' },
+  { key: 'contract', label: 'Contract / PO', hint: 'Tax, markup limits, allowances, costs it forbids' },
   { key: 'reference', label: 'RFI / ASI', hint: 'Whether it prices only what was asked for' },
   { key: 'basic', label: 'Basic check', hint: 'The math only' },
 ];
@@ -234,9 +234,11 @@ export default function PcoReview() {
   // and everything an RFI or ASI might have been filed as.
   const [contracts, setContracts] = useState(null);
   const [others, setOthers] = useState(null);
-  const [contractId, setContractId] = useState('');
+  // As many as the change order is priced under — a contract and a PO beside it, say.
+  const [contractIds, setContractIds] = useState([]);
+  // Which project the default was last ticked for, so it is ticked once and an untick sticks.
+  const suggestedFor = useRef('');
   const [referenceIds, setReferenceIds] = useState([]);
-  const [listVersion, setListVersion] = useState(0);
   // The project's RFI Log, and which of its RFIs are ticked. Loaded when the RFI/ASI choice is made,
   // not before: most change orders are not checked against one.
   const [rfis, setRfis] = useState(null);
@@ -244,8 +246,7 @@ export default function PcoReview() {
   const [refQuery, setRefQuery] = useState('');
 
   // Documents added on this form, each kept for this review or filed in Shared Documents.
-  const [contractFiled, setContractFiled] = useState([]);
-  const contractAdd = useAddedDocuments(projectId, contractFiled, setContractFiled);
+  const contractAdd = useAddedDocuments(projectId, contractIds.map(Number), ids => setContractIds(ids.map(String)));
   const refAdd = useAddedDocuments(projectId, referenceIds.map(Number), ids => setReferenceIds(ids.map(String)));
 
   const [analyzing, setAnalyzing] = useState(false);
@@ -260,7 +261,7 @@ export default function PcoReview() {
   useEffect(() => { if (routeProjectId) setProjectId(String(routeProjectId)); }, [routeProjectId]);
 
   useEffect(() => {
-    if (!projectId) { setContracts(null); setOthers(null); setContractId(''); return undefined; }
+    if (!projectId) { setContracts(null); setOthers(null); setContractIds([]); suggestedFor.current = ''; return undefined; }
     let cancelled = false;
     payAppReviewApi.listDocuments(projectId)
       .then(docs => {
@@ -269,16 +270,16 @@ export default function PcoReview() {
         const agreements = all.filter(d => GOVERNING_DOCS.includes(d.doc_type));
         setContracts(agreements);
         setOthers(all.filter(d => !GOVERNING_DOCS.includes(d.doc_type)));
-        // The project default is chosen for you, so a single-contract job needs no click.
-        setContractId(prev => {
-          if (prev && agreements.some(c => String(c.id) === String(prev))) return prev;
+        // The project default is ticked for you, once, so a single-contract job needs no click.
+        if (suggestedFor.current !== projectId) {
+          suggestedFor.current = projectId;
           const primary = agreements.find(c => c.is_primary) || agreements[0];
-          return primary ? String(primary.id) : '';
-        });
+          setContractIds(primary ? [String(primary.id)] : []);
+        }
       })
       .catch(() => { if (!cancelled) { setContracts([]); setOthers([]); } });
     return () => { cancelled = true; };
-  }, [projectId, listVersion, contractAdd.listVersion, refAdd.listVersion]);
+  }, [projectId, contractAdd.listVersion, refAdd.listVersion]);
 
   useEffect(() => {
     if (!projectId || !checks.includes('reference')) return undefined;
@@ -295,12 +296,13 @@ export default function PcoReview() {
     return key === 'basic' ? ['basic'] : [...prev.filter(k => k !== 'basic'), key];
   });
   const wants = key => checks.includes(key);
-  const uploadedContract = contractAdd.added[0] || null;
+  const contractCount = contractIds.length + contractAdd.added.length;
+  const toggleContract = id => setContractIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
 
   // What is still missing before the review can run, in words, so the button says why it is off.
   const missing = !pcoFile ? 'Upload the change order first.'
     : checks.length === 0 ? 'Choose what to check it against.'
-      : wants('contract') && !contractId && !uploadedContract ? 'Choose the contract, or upload one.'
+      : wants('contract') && contractCount === 0 ? 'Choose the contract, or upload one.'
         : wants('reference') && referenceIds.length === 0 && rfiIds.length === 0 && refAdd.added.length === 0 ? 'Choose the RFI or ASI, or upload it.'
           : null;
 
@@ -315,17 +317,10 @@ export default function PcoReview() {
       fd.append('is_allowance', String(isAllowance));
 
       if (wants('contract')) {
-        if (uploadedContract && uploadedContract.where !== ONCE) {
-          // Filed in Shared Documents first, then checked against like any filed contract.
-          const ids = await contractAdd.fileShared();
-          const filed = ids[ids.length - 1];
-          if (filed) fd.append('contract_id', String(filed));
-          setListVersion(v => v + 1);
-        } else if (uploadedContract) {
-          fd.append('contract_file', uploadedContract.file);
-        } else {
-          fd.append('contract_id', contractId);
-        }
+        // Every one ticked, plus every one uploaded: those saved to Shared Documents are filed first
+        // and checked against like any filed agreement, the rest are read for this review alone.
+        fd.append('contract_ids', JSON.stringify(await contractAdd.fileShared()));
+        for (const once of contractAdd.onceFiles) fd.append('contract_files', once);
       }
       if (wants('reference')) {
         fd.append('reference_ids', JSON.stringify(await refAdd.fileShared()));
@@ -428,21 +423,23 @@ export default function PcoReview() {
 
             {wants('contract') && (
               <div className="p-4 rounded-xl space-y-3" style={{ background: '#fbfdff', border: '1px solid #dbeafe' }}>
-                <p className="text-[12px] font-bold text-gray-900">The contract</p>
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="text-[12px] font-bold text-gray-900">The contract or PO</p>
+                  {contractCount > 0 && <span className="text-[11px] font-semibold" style={{ color: '#1d4ed8' }}>{contractCount} chosen</span>}
+                </div>
+                <p className="text-[11px] text-gray-400 -mt-1.5">
+                  Choose as many as it is priced under — the contract for its terms, the PO for its amount.
+                </p>
                 {projectId && contracts?.length !== 0 && (
-                  <div style={{ opacity: uploadedContract ? 0.5 : 1 }}>
+                  <div>
                     <p className="text-[11px] text-gray-400 mb-1.5">From the project's Shared Documents:</p>
-                    <DocList docs={contracts} selectedIds={contractId ? [contractId] : []} type="radio"
-                      onToggle={id => setContractId(id)} />
+                    <DocList docs={contracts} selectedIds={contractIds} onToggle={toggleContract} />
                   </div>
                 )}
-                <AddedDocuments items={contractAdd.added} onChange={contractAdd.setAdded} single
-                  noun="change order" label={contracts?.length ? 'Or upload one' : 'Upload it'}
-                  hint="the agreement or purchase order this change order is billed under"
+                <AddedDocuments items={contractAdd.added} onChange={contractAdd.setAdded}
+                  noun="change order" label={contracts?.length ? 'And upload more' : 'Upload them'}
+                  hint="the contract, purchase order, or both"
                   categories={projectId ? CONTRACT_CATEGORIES : []} disabled={busy} />
-                {uploadedContract && projectId && (
-                  <p className="text-[11px]" style={{ color: '#1d4ed8' }}>The uploaded contract is used instead of the one ticked above.</p>
-                )}
               </div>
             )}
 
