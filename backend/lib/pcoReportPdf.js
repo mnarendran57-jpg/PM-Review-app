@@ -1,13 +1,16 @@
 const { createReviewPdf } = require('./reviewPdfKit');
 const { MARGIN, CONTENT_WIDTH } = require('./pdfGen');
 const { money } = require('./money');
+const { addMarkedPages } = require('./pcoMarkup');
 
 // The change order review as a document to hand to an owner: one line saying whether it can be
 // approved, a count of each kind of problem, and each problem as a small table of its numbers.
 // Built from the same report object the screen shows, so the two cannot disagree. The drawing is
 // shared with the invoice report — see lib/reviewPdfKit.js.
 
-async function renderPcoReportPdf({ report }) {
+// `original` is the change order as uploaded and `pco` what was read from it. Given both, the
+// change order's own pages follow the report, marked up — see lib/pcoMarkup.js.
+async function renderPcoReportPdf({ report, original = null, pco = null }) {
   const h = report.header || {};
   const name = `PCO ${h.pcoNumber}${h.title ? ` — ${h.title}` : ''}`;
   const pdf = await createReviewPdf({ kind: 'Change Order Review', name });
@@ -66,7 +69,7 @@ async function renderPcoReportPdf({ report }) {
 
   const alt = report.alternatives;
   if (alt?.lines?.length) {
-    pdf.heading('Savings ideas', alt.optionCount, alt.optionCount ? 'indigo' : 'grey');
+    pdf.heading('Value engineering options', alt.optionCount, alt.optionCount ? 'indigo' : 'grey');
     pdf.text("Coaster's suggestions for the materials and equipment priced. Rough ranges against each line, not quotes — confirm with the design team.", { size: 8.5, color: pdf.GREY, gapAfter: 2 });
     const COL_I = 150; const COL_D = 100; const COL_A = CONTENT_WIDTH - COL_I - COL_D;
     pdf.row([
@@ -95,6 +98,15 @@ async function renderPcoReportPdf({ report }) {
   }
 
   pdf.notesSection(report.notes);
+  if (original) {
+    try {
+      await addMarkedPages(pdf.doc, { pdfBuffer: original, report, pco });
+    } catch (err) {
+      // The report stands on its own. A change order that cannot be marked up — damaged, encrypted,
+      // a format pdf-lib cannot copy pages from — must not cost the reader the report.
+      console.error('[pco markup] skipped:', err.message);
+    }
+  }
   return pdf.save();
 }
 

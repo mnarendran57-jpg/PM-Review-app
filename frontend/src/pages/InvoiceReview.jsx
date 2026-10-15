@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import {
-  ReceiptPercentIcon, SparklesIcon, ArrowDownTrayIcon, TrashIcon, ClockIcon,
+  ReceiptPercentIcon, SparklesIcon, ArrowDownTrayIcon, TrashIcon, ClockIcon, CheckIcon,
 } from '@heroicons/react/24/outline';
 import { invoiceReviewApi, payAppReviewApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import MultiFileDrop from '../components/MultiFileDrop';
+import DocList from '../components/DocList';
+import AddedDocuments, { useAddedDocuments, ONCE, CONTRACT_CATEGORIES } from '../components/AddedDocuments';
 import {
   money, VerdictBanner, CountTiles, Section, CompareFinding, DeviationFinding, ListFinding,
   CoasterNotes, PassedLine,
@@ -14,6 +16,20 @@ import {
 // A purchase order governs a job that never had a contract, so it belongs in this list too.
 // Mirrors GOVERNING_TYPES in backend/lib/docTypes.js.
 const GOVERNING_DOCS = ['contract', 'purchase-order'];
+
+// What an invoice can be checked against. One at a time: an invoice is billed under one agreement, and
+// an architect's invoice measured against the contractor's terms reports problems that are not there.
+// The math, receipts and earlier reviews are checked whichever is chosen.
+const CHECK_OPTIONS = [
+  { key: 'architect', label: "Architect's contract / PO", hint: 'Tax, costs it forbids, rates, the PO number, how much is left on it' },
+  { key: 'contractor', label: "Contractor's contract / PO", hint: 'Tax, costs it forbids, the PO number, how much is left on it' },
+  { key: 'basic', label: 'Math checks', hint: 'The arithmetic, receipts and duplicates only' },
+];
+
+// A filed agreement that reads as the architect's: named for the architect or the design team, or an
+// AIA owner-architect form. Used only to suggest which one to tick; the PM can tick another.
+const looksArchitect = d => /architect|\ba\/e\b|design|engineer|b10[1-9]|b1\d\d/i
+  .test([d.label, d.file_name, d.party].filter(Boolean).join(' '));
 
 // Whether the invoice can be paid, a count of each kind of problem, and each problem with its numbers —
 // the same layout as the change order review, from the same pieces.
@@ -56,7 +72,7 @@ function InvoiceReportView({ report }) {
       )}
 
       {report.contract && (
-        <Section title={`Contract and PO${report.contract.label ? ` — ${report.contract.label}` : ''}`}
+        <Section title={`${report.contract.title || 'Contract and PO'}${report.contract.label ? ` — ${report.contract.label}` : ''}`}
           count={report.contract.count} tone={report.contract.issues.length ? 'red' : 'green'}>
           {report.contract.issues.length === 0 ? (
             <p className="text-[12px] text-gray-500">Nothing on the invoice goes against the agreement terms that were checked.</p>
@@ -110,11 +126,13 @@ export default function InvoiceReview() {
   const routeProjectId = ctx?.projectId;
 
   const [files, setFiles] = useState([]);
-  // Every contract on the project, and which one this invoice is being checked against. An
-  // architect's invoice must be measured against the architect's agreement, not the
-  // contractor's, so the reviewer chooses rather than the app guessing.
+  // What it is checked against — one of CHECK_OPTIONS' keys, or '' until the PM says.
+  const [check, setCheck] = useState('');
+  // Every contract and PO on the project, and which one this invoice is being checked against.
   const [contracts, setContracts] = useState(null);
   const [contractId, setContractId] = useState('');
+  const [contractFiled, setContractFiled] = useState([]);
+  const contractAdd = useAddedDocuments(routeProjectId, contractFiled, setContractFiled);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);   // { id, report }
@@ -130,32 +148,65 @@ export default function InvoiceReview() {
     if (!routeProjectId) { setContracts(null); return Promise.resolve(); }
     return payAppReviewApi.listDocuments(routeProjectId)
       .then(docs => {
-        const onlyContracts = (docs || []).filter(d => GOVERNING_DOCS.includes(d.doc_type));
-        setContracts(onlyContracts);
-        // Pre-select so a one-contract project needs no click, and so the choice is never
-        // left blank when there is an obvious answer.
-        setContractId(prev => {
-          if (prev && onlyContracts.some(c => String(c.id) === String(prev))) return prev;
-          const primary = onlyContracts.find(c => c.is_primary) || onlyContracts[0];
-          return primary ? String(primary.id) : '';
-        });
+        setContracts((docs || []).filter(d => GOVERNING_DOCS.includes(d.doc_type)));
       })
       .catch(() => setContracts([]));
   };
-  useEffect(() => { loadContracts(); }, [routeProjectId]);
+  useEffect(() => { loadContracts(); }, [routeProjectId, contractAdd.listVersion]);
+
+  // The agreement suggested for the choice made: the architect's-looking one for the architect, the
+  // project default (or the first that is not the architect's) for the contractor. Only when nothing
+  // suitable is ticked already, so a PM's own pick is never moved.
+  useEffect(() => {
+    if (!contracts || !['architect', 'contractor'].includes(check)) return;
+    setContractId(prev => {
+      if (prev && contracts.some(c => String(c.id) === String(prev))) return prev;
+      const pick = check === 'architect'
+        ? contracts.find(looksArchitect)
+        : (contracts.find(c => c.is_primary && !looksArchitect(c)) || contracts.find(c => !looksArchitect(c)));
+      return pick ? String(pick.id) : '';
+    });
+  }, [contracts, check]);
+
+  const choose = key => {
+    // Switching whose agreement it is clears the one ticked for the other.
+    if (key !== check) setContractId('');
+    setCheck(prev => (prev === key ? '' : key));
+  };
+  const wantsAgreement = check === 'architect' || check === 'contractor';
+  const uploadedContract = contractAdd.added[0] || null;
+  const whose = check === 'architect' ? "architect's" : "contractor's";
+  const missing = files.length === 0 ? 'Upload the vendor invoice PDF first.'
+    : !check ? 'Choose what to check it against.'
+      : wantsAgreement && !contractId && !uploadedContract ? `Choose the ${whose} contract or PO, or upload it.`
+        : null;
 
   const handleAnalyze = async () => {
-    if (files.length === 0) { setError('Upload the vendor invoice PDF first.'); return; }
+    if (missing) { setError(missing); return; }
     setError(''); setAnalyzing(true); setResult(null); setViewing(null);
     try {
       const fd = new FormData();
       files.forEach(f => fd.append('invoices', f));
       if (routeProjectId) fd.append('project_id', routeProjectId);
-      // Always sent, empty when "no contract" is chosen, so the server does not fall back to the
-      // project's default contract behind the PM's back.
-      fd.append('contract_id', contractId || '');
+      fd.append('checks', JSON.stringify(wantsAgreement ? [check] : []));
+      if (wantsAgreement) {
+        if (uploadedContract && uploadedContract.where !== ONCE) {
+          // Filed in Shared Documents first, then checked against like any filed agreement.
+          const ids = await contractAdd.fileShared();
+          const filed = ids[ids.length - 1];
+          fd.append('contract_id', filed ? String(filed) : '');
+        } else if (uploadedContract) {
+          fd.append('contract_file', uploadedContract.file);
+        } else {
+          fd.append('contract_id', contractId);
+        }
+      } else {
+        // Sent empty, so the server does not fall back to the project's default contract.
+        fd.append('contract_id', '');
+      }
       const data = await invoiceReviewApi.create(fd);
       setResult({ id: data.id, report: data.report });
+      contractAdd.setAdded([]);
       loadHistory();
     } catch (err) {
       setError(err.friendlyMessage || err.response?.data?.error || 'Could not analyze this invoice.');
@@ -177,8 +228,9 @@ export default function InvoiceReview() {
     loadHistory();
   };
 
-  const reset = () => { setFiles([]); setResult(null); setError(''); };
+  const reset = () => { setFiles([]); setCheck(''); contractAdd.setAdded([]); setResult(null); setError(''); };
   const active = result || viewing;
+  const busy = analyzing || contractAdd.filing;
 
   return (
     <div className="p-8 space-y-6">
@@ -200,43 +252,8 @@ export default function InvoiceReview() {
                 </div>
                 <h2 className="text-sm font-semibold text-gray-900">New Invoice Review</h2>
               </div>
-              {(files.length > 0 || result) && (
+              {(files.length > 0 || check || result) && (
                 <button type="button" className="btn-secondary px-2.5 py-1 text-xs" onClick={reset}>Reset</button>
-              )}
-            </div>
-
-            {/* Which agreement this invoice is measured against. First thing on the form,
-                because picking the wrong one invalidates every contract-based finding. */}
-            <div className="pt-1">
-              {/* No "add a contract" button here. Contracts are uploaded once in Shared
-                  Documents and every tool reads them from there; a second way in made it look
-                  as though this review kept its own. */}
-              <label className="label mb-0">Review against which contract?</label>
-
-              {contracts === null ? (
-                <p className="text-xs text-gray-400 mt-1.5">Loading contracts…</p>
-              ) : contracts.length === 0 ? (
-                <p className="text-xs mt-1.5" style={{ color: '#c2410c' }}>
-                  No contract or PO in this project's Shared Documents yet — add one there and it will
-                  appear here. You can still review the invoice: the math, receipts and duplicates are
-                  checked either way.
-                </p>
-              ) : (
-                <>
-                  <select className="input mt-1.5" value={contractId} onChange={e => setContractId(e.target.value)}>
-                    {contracts.map(c => (
-                      <option key={c.id} value={c.id}>
-                        {c.label || c.file_name}{c.is_primary ? ' — project default' : ''}
-                      </option>
-                    ))}
-                    <option value="">No contract — check the maths only</option>
-                  </select>
-                  <p className="text-[11px] text-gray-400 mt-1">
-                    {contractId
-                      ? "Tax, costs it forbids, the PO number, and how much is left on it are checked against this."
-                      : 'Nothing to check tax, the PO or forbidden costs against — the math, receipts and duplicates only.'}
-                  </p>
-                </>
               )}
             </div>
 
@@ -245,19 +262,66 @@ export default function InvoiceReview() {
               hint="The vendor invoice, plus any backup receipts/invoices for reimbursable costs · PDF"
               label="Invoice(s) (PDF) *" />
 
+            <div>
+              <label className="label">What should it be checked against?</label>
+              <p className="text-[11px] text-gray-400 -mt-0.5 mb-2">
+                The math, receipts and earlier reviews are checked whichever you choose.
+              </p>
+              <div className="space-y-1.5">
+                {CHECK_OPTIONS.map(o => {
+                  const on = check === o.key;
+                  return (
+                    <button key={o.key} type="button" onClick={() => choose(o.key)} aria-pressed={on}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-colors"
+                      style={{ background: on ? '#eff6ff' : '#fafbfc', border: `1px solid ${on ? '#bfdbfe' : '#eef1f4'}` }}>
+                      <span className="w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0"
+                        style={{ background: on ? '#2563eb' : '#fff', border: `1px solid ${on ? '#2563eb' : '#cbd5e1'}` }}>
+                        {on && <CheckIcon className="w-3 h-3 text-white" strokeWidth={3} />}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-[13px] font-medium text-gray-900">{o.label}</span>
+                        <span className="block text-[11px] text-gray-400">{o.hint}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {wantsAgreement && (
+              <div className="p-4 rounded-xl space-y-3" style={{ background: '#fbfdff', border: '1px solid #dbeafe' }}>
+                <p className="text-[12px] font-bold text-gray-900">The {whose} contract or PO</p>
+                {routeProjectId && contracts?.length !== 0 && (
+                  <div style={{ opacity: uploadedContract ? 0.5 : 1 }}>
+                    <p className="text-[11px] text-gray-400 mb-1.5">From the project's Shared Documents:</p>
+                    <DocList docs={contracts} selectedIds={contractId ? [contractId] : []} type="radio"
+                      onToggle={id => setContractId(id)} />
+                  </div>
+                )}
+                <AddedDocuments items={contractAdd.added} onChange={contractAdd.setAdded} single
+                  noun="invoice" label={contracts?.length ? 'Or upload one' : 'Upload it'}
+                  hint={`the ${whose} agreement or purchase order this invoice is billed under`}
+                  categories={routeProjectId ? CONTRACT_CATEGORIES : []} disabled={busy} />
+                {uploadedContract && contracts?.length > 0 && (
+                  <p className="text-[11px]" style={{ color: '#1d4ed8' }}>The uploaded one is used instead of the one ticked above.</p>
+                )}
+              </div>
+            )}
+
             {error && (
               <div className="p-3 rounded-xl text-sm" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c' }}>
                 {error}
               </div>
             )}
 
-            <button type="button" className="btn-primary w-full justify-center" onClick={handleAnalyze} disabled={analyzing || files.length === 0}>
-              {analyzing ? (
+            <button type="button" className="btn-primary w-full justify-center" onClick={handleAnalyze} disabled={busy || !!missing}>
+              {busy ? (
                 <><SparklesIcon className="w-4 h-4 animate-pulse" /> Reviewing…</>
               ) : (
                 <><SparklesIcon className="w-4 h-4" /> Review Invoice</>
               )}
             </button>
+            {missing && !busy && <p className="text-[11px] text-gray-400 -mt-2 text-center">{missing}</p>}
 
             <p className="text-[11px] text-gray-400">
               Include any backup receipts or subcontractor invoices in the same upload — the review checks that

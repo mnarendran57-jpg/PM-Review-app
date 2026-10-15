@@ -79,8 +79,9 @@ function invoiceTool(hasContract) {
     tool.input_schema.properties.observations.properties.contractConcerns = {
       type: 'array',
       description: 'Lines on the invoice that the contract terms you were given forbid or restrict — '
-        + 'for example overtime billed without the written direction the contract requires, or a '
-        + 'cost the contract lists as not reimbursable. Leave out sales tax; it is checked '
+        + 'for example overtime billed without the written direction the contract requires, an '
+        + 'hourly rate above the agreed rate schedule, a reimbursable billed above its agreed '
+        + 'multiplier, or a cost the contract lists as not reimbursable. Leave out sales tax; it is checked '
         + 'separately. Empty when nothing on the invoice goes against the contract.',
       items: {
         type: 'object',
@@ -89,6 +90,11 @@ function invoiceTool(hasContract) {
           amount: { type: 'number', description: 'The amount on that line.' },
           rule: { type: 'string', description: 'What the contract says, in one short plain-English sentence.' },
           section: { type: 'string', description: 'The section or clause it comes from, if the terms name one.' },
+          quote: {
+            type: 'string',
+            description: 'The contract wording behind it, copied exactly from a "quote" in the terms\' '
+              + '"clauses". Omit when no quote there says it — never write one of your own.',
+          },
         },
         required: ['item', 'rule'],
       },

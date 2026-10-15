@@ -110,13 +110,13 @@ const reportFor = alternatives => buildPcoReport({
 
 check('the written report carries the section when there are alternatives', () => {
   const md = reportFor(alternativesView(STORED)).markdown;
-  assert.ok(md.includes('### Savings ideas'));
+  assert.ok(md.includes('### Value engineering options'));
   assert.ok(md.includes('Standard-efficiency packaged unit — 10% to 20% less.'));
   assert.ok(md.includes('No alternative suggested. This is the standard way to do it.'));
 });
 
 check('and leaves it out entirely when there are none', () => {
-  assert.ok(!reportFor(null).markdown.includes('Savings ideas'));
+  assert.ok(!reportFor(null).markdown.includes('Value engineering options'));
 });
 
 console.log(`\n${failed === 0 ? 'All' : ''} ${passed} check${passed === 1 ? '' : 's'} passed`

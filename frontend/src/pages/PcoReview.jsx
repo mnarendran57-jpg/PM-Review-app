@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import {
-  ScaleIcon, SparklesIcon, ArrowDownTrayIcon, TrashIcon, ClockIcon, CheckIcon,
+  ScaleIcon, SparklesIcon, ArrowDownTrayIcon, TrashIcon, ClockIcon, CheckIcon, MagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
-import { pcoReviewApi, payAppReviewApi } from '../api';
+import { pcoReviewApi, payAppReviewApi, rfisApi } from '../api';
 import { useProject } from '../context/ProjectContext';
 import { WORD_TEMPLATES } from '../wordTemplates';
 import PageHeader from '../components/PageHeader';
 import FileDrop from '../components/FileDrop';
+import DocList from '../components/DocList';
 import {
   money, TONE, VerdictBanner, CountTiles, Section, CompareFinding, DeviationFinding, ListFinding,
   CoasterNotes, PassedLine,
@@ -106,7 +107,7 @@ function PcoReportView({ report }) {
 
       {/* Only there when the change order prices materials or equipment. */}
       {alt?.lines?.length > 0 && (
-        <Section title="Savings ideas" count={alt.optionCount} tone={alt.optionCount ? 'indigo' : 'grey'}>
+        <Section title="Value engineering options" count={alt.optionCount} tone={alt.optionCount ? 'indigo' : 'grey'}>
           <p className="text-[11px] text-gray-400 mb-3">
             Coaster's suggestions for the materials and equipment priced. Rough ranges against each line,
             not quotes — confirm with the design team before acting on any of them.
@@ -178,25 +179,41 @@ function HistoryRow({ item, onView, onDelete }) {
 
 // --- The form -------------------------------------------------------------------------------------
 
-function DocList({ docs, selectedIds, onToggle, type = 'checkbox' }) {
-  if (docs === null) return <p className="text-xs text-gray-400">Loading shared documents…</p>;
-  // Nothing filed: nothing to show. The upload beneath is the way in, and saying "nothing is filed —
-  // upload one below" above an "or upload one" said it twice.
-  if (docs.length === 0) return null;
+// Whether every word typed appears somewhere in the text — "duct 031" finds "RFI-031 Duct conflict".
+const matches = (query, ...texts) => {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const hay = texts.filter(Boolean).join(' ').toLowerCase();
+  return words.every(w => hay.includes(w));
+};
+
+// The project's RFI Log, to tick RFIs from. Each RFI is sent as its log entry — the question and the
+// A/E's answer — with the front of its files, so it can be checked against whether or not anybody
+// filed a PDF of it in Shared Documents.
+function RfiPicker({ rfis, query, selectedIds, onToggle }) {
+  if (rfis === null) return <p className="text-xs text-gray-400">Loading the RFI log…</p>;
+  const shown = rfis.filter(r => !query || matches(query, r.rfi_number, r.subject, r.statusLabel));
+  if (shown.length === 0) {
+    return <p className="text-[11px] text-gray-400">No RFI in the log matches “{query}”.</p>;
+  }
   return (
-    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-      {docs.map(d => (
-        <label key={d.id} className="flex items-start gap-2.5 p-2 rounded-lg cursor-pointer transition-colors"
-          style={{ background: selectedIds.includes(String(d.id)) ? '#eff6ff' : '#fafbfc' }}>
-          <input type={type} className="mt-0.5" checked={selectedIds.includes(String(d.id))} onChange={() => onToggle(String(d.id))} />
-          <span className="min-w-0">
-            <span className="block text-[12px] font-semibold text-gray-800 truncate">{d.label || d.file_name}</span>
-            <span className="block text-[10px] text-gray-400">
-              {d.is_primary ? 'Project default · ' : ''}{d.file_name}
+    <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+      {shown.map(r => {
+        const on = selectedIds.includes(String(r.id));
+        return (
+          <label key={r.id} className="flex items-start gap-2.5 p-2 rounded-lg cursor-pointer transition-colors"
+            style={{ background: on ? '#eff6ff' : '#fafbfc' }}>
+            <input type="checkbox" className="mt-0.5" checked={on} onChange={() => onToggle(String(r.id))} />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[12px] font-semibold text-gray-800 truncate">
+                {r.rfi_number}{r.subject ? ` — ${r.subject}` : ''}
+              </span>
+              <span className="block text-[10px] text-gray-400">
+                {r.statusLabel}{r.responseAction ? ` · ${r.responseAction}` : ''}
+              </span>
             </span>
-          </span>
-        </label>
-      ))}
+          </label>
+        );
+      })}
     </div>
   );
 }
@@ -220,6 +237,11 @@ export default function PcoReview() {
   const [contractId, setContractId] = useState('');
   const [referenceIds, setReferenceIds] = useState([]);
   const [listVersion, setListVersion] = useState(0);
+  // The project's RFI Log, and which of its RFIs are ticked. Loaded when the RFI/ASI choice is made,
+  // not before: most change orders are not checked against one.
+  const [rfis, setRfis] = useState(null);
+  const [rfiIds, setRfiIds] = useState([]);
+  const [refQuery, setRefQuery] = useState('');
 
   // Documents added on this form, each kept for this review or filed in Shared Documents.
   const [contractFiled, setContractFiled] = useState([]);
@@ -258,6 +280,16 @@ export default function PcoReview() {
     return () => { cancelled = true; };
   }, [projectId, listVersion, contractAdd.listVersion, refAdd.listVersion]);
 
+  useEffect(() => {
+    if (!projectId || !checks.includes('reference')) return undefined;
+    let cancelled = false;
+    setRfis(null);
+    rfisApi.list({ project_id: projectId })
+      .then(data => { if (!cancelled) setRfis(data.rfis || []); })
+      .catch(() => { if (!cancelled) setRfis([]); });
+    return () => { cancelled = true; };
+  }, [projectId, checks.includes('reference')]);
+
   const toggleCheck = key => setChecks(prev => {
     if (prev.includes(key)) return prev.filter(k => k !== key);
     return key === 'basic' ? ['basic'] : [...prev.filter(k => k !== 'basic'), key];
@@ -269,7 +301,7 @@ export default function PcoReview() {
   const missing = !pcoFile ? 'Upload the change order first.'
     : checks.length === 0 ? 'Choose what to check it against.'
       : wants('contract') && !contractId && !uploadedContract ? 'Choose the contract, or upload one.'
-        : wants('reference') && referenceIds.length === 0 && refAdd.added.length === 0 ? 'Choose the RFI or ASI, or upload it.'
+        : wants('reference') && referenceIds.length === 0 && rfiIds.length === 0 && refAdd.added.length === 0 ? 'Choose the RFI or ASI, or upload it.'
           : null;
 
   const handleAnalyze = async () => {
@@ -297,6 +329,7 @@ export default function PcoReview() {
       }
       if (wants('reference')) {
         fd.append('reference_ids', JSON.stringify(await refAdd.fileShared()));
+        fd.append('rfi_ids', JSON.stringify(rfiIds));
         for (const once of refAdd.onceFiles) fd.append('reference_files', once);
       }
 
@@ -326,7 +359,7 @@ export default function PcoReview() {
   };
 
   const reset = () => {
-    setPcoFile(null); setIsAllowance(false); setChecks([]); setReferenceIds([]);
+    setPcoFile(null); setIsAllowance(false); setChecks([]); setReferenceIds([]); setRfiIds([]); setRefQuery('');
     contractAdd.setAdded([]); refAdd.setAdded([]); setResult(null); setError('');
   };
   const active = result || viewing;
@@ -413,22 +446,59 @@ export default function PcoReview() {
               </div>
             )}
 
-            {wants('reference') && (
-              <div className="p-4 rounded-xl space-y-3" style={{ background: '#fbfdff', border: '1px solid #dbeafe' }}>
-                <p className="text-[12px] font-bold text-gray-900">The RFI or ASI behind it</p>
-                {projectId && others?.length !== 0 && (
-                  <div>
-                    <p className="text-[11px] text-gray-400 mb-1.5">From the project's Shared Documents — tick any that apply:</p>
-                    <DocList docs={others} selectedIds={referenceIds}
-                      onToggle={id => setReferenceIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))} />
+            {wants('reference') && (() => {
+              // One search over both lists. On a large job the log runs to a hundred RFIs and more, and
+              // the one wanted is remembered by its number or a word of its subject.
+              const docsShown = (others || []).filter(d => !refQuery || matches(refQuery, d.label, d.file_name));
+              const hasLog = projectId && rfis?.length > 0;
+              const hasDocs = projectId && others?.length > 0;
+              const ticked = rfiIds.length + referenceIds.length;
+              return (
+                <div className="p-4 rounded-xl space-y-3" style={{ background: '#fbfdff', border: '1px solid #dbeafe' }}>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <p className="text-[12px] font-bold text-gray-900">The RFI or ASI behind it</p>
+                    {ticked > 0 && <span className="text-[11px] font-semibold" style={{ color: '#1d4ed8' }}>{ticked} chosen</span>}
                   </div>
-                )}
-                <AddedDocuments items={refAdd.added} onChange={refAdd.setAdded}
-                  noun="change order" label={others?.length ? 'Or upload them' : 'Upload them'}
-                  hint="the RFI, the ASI, the sketch that came with it"
-                  categories={projectId ? SHARE_CATEGORIES : []} disabled={busy} />
-              </div>
-            )}
+
+                  {(hasLog || hasDocs) && (
+                    <div className="flex items-center gap-2 h-9 px-3 rounded-lg bg-white" style={{ border: '1px solid #e5e7eb' }}>
+                      <MagnifyingGlassIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      <input value={refQuery} onChange={e => setRefQuery(e.target.value)}
+                        placeholder="Search by RFI number, subject or file name"
+                        aria-label="Search RFIs and documents"
+                        className="flex-1 min-w-0 bg-transparent text-[12px] text-gray-800 placeholder-gray-400"
+                        style={{ outline: 'none', border: 0, boxShadow: 'none' }} />
+                      {refQuery && (
+                        <button type="button" className="text-[11px] text-gray-400 hover:text-gray-600" onClick={() => setRefQuery('')}>Clear</button>
+                      )}
+                    </div>
+                  )}
+
+                  {projectId && rfis !== null && rfis.length === 0 ? null : projectId && (
+                    <div>
+                      <p className="text-[11px] text-gray-400 mb-1.5">From the RFI Log — the question and the A/E's answer go with it:</p>
+                      <RfiPicker rfis={rfis} query={refQuery} selectedIds={rfiIds}
+                        onToggle={id => setRfiIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))} />
+                    </div>
+                  )}
+
+                  {hasDocs && (
+                    <div>
+                      <p className="text-[11px] text-gray-400 mb-1.5">From the project's Shared Documents — for an ASI, or an RFI filed there:</p>
+                      {docsShown.length === 0
+                        ? <p className="text-[11px] text-gray-400">No document matches “{refQuery}”.</p>
+                        : <DocList docs={docsShown} selectedIds={referenceIds}
+                            onToggle={id => setReferenceIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))} />}
+                    </div>
+                  )}
+
+                  <AddedDocuments items={refAdd.added} onChange={refAdd.setAdded}
+                    noun="change order" label={hasLog || hasDocs ? 'Or upload them' : 'Upload them'}
+                    hint="the RFI, the ASI, the sketch that came with it"
+                    categories={projectId ? SHARE_CATEGORIES : []} disabled={busy} />
+                </div>
+              );
+            })()}
 
             <label className="flex items-start gap-2 cursor-pointer">
               <input type="checkbox" className="mt-0.5" checked={isAllowance} onChange={e => setIsAllowance(e.target.checked)} />

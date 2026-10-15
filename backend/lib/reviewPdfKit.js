@@ -1,6 +1,7 @@
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const { wrapLine, toWinAnsi, PAGE_WIDTH, PAGE_HEIGHT, MARGIN, CONTENT_WIDTH } = require('./pdfGen');
 const { money } = require('./money');
+const { citeLabel } = require('./contractClauses');
 
 // The pieces a review report is drawn from — a title block, a verdict banner, a row of counts, and
 // small tables of the figures behind each finding — shared by the change order and invoice reports
@@ -150,10 +151,19 @@ async function createReviewPdf({ kind, name }) {
     y -= 4;
   };
 
+  // Room is kept for the title, the table's head and a first row — taller now that a row can carry
+  // the contract's own words — so a finding's name never sits alone at the foot of a page.
   const findingTitle = (f, resolveWord) => {
+    ensure(110);
     text(`${f.title}${f.critical ? `  —  resolve before ${resolveWord}` : ''}`, { f: bold, size: 9.5, color: f.critical ? TONES.red.ink : INK, gapAfter: 2 });
     if (f.byCoaster) text("Coaster's reading of the contract — verify before acting.", { size: 8, f: italic, color: GREY, gapAfter: 2 });
   };
+
+  // Where the contract says it, and its words, as the last lines of a table cell.
+  const citeParts = clause => (clause ? [
+    { text: `CONTRACT${citeLabel(clause) ? ` · ${citeLabel(clause)}` : ''}`, size: 7, f: bold, color: TONES.indigo.ink },
+    { text: `"${clause.quote}"`, size: 8, f: italic, color: INK },
+  ] : []);
 
   // What the document says, what it should say, and the gap.
   const compareTable = (rows, shownLabel) => {
@@ -187,7 +197,11 @@ async function createReviewPdf({ kind, name }) {
       row([
         { width: cW, parts: [{ text: r.item }] },
         { width: cA, parts: [{ text: typeof r.amount === 'number' ? money(r.amount) : '—', f: bold, color: TONES.red.ink, align: 'right' }] },
-        { width: cR, parts: [{ text: r.rule }, ...(r.basis ? [{ text: r.basis, size: 8, f: italic, color: GREY }] : [])] },
+        { width: cR, parts: [
+          { text: r.rule },
+          ...(r.basis ? [{ text: r.basis, size: 8, f: italic, color: GREY }] : []),
+          ...citeParts(r.clause),
+        ] },
       ]);
     }
     y -= 6;
@@ -197,7 +211,11 @@ async function createReviewPdf({ kind, name }) {
   const listTable = (rows, { emphasise = false } = {}) => {
     for (const r of rows) {
       row([
-        { width: CONTENT_WIDTH - 110, parts: [{ text: r.item, f: r.emphasis ? bold : font }, ...(r.note ? [{ text: r.note, size: 8, color: GREY }] : [])] },
+        { width: CONTENT_WIDTH - 110, parts: [
+          { text: r.item, f: r.emphasis ? bold : font },
+          ...(r.note ? [{ text: r.note, size: 8, color: GREY }] : []),
+          ...citeParts(r.clause),
+        ] },
         { width: 110, parts: [{ text: typeof r.amount === 'number' ? money(r.amount) : '—', align: 'right', f: bold, color: (emphasise || r.emphasis) ? TONES.red.ink : INK }] },
       ]);
     }
@@ -218,6 +236,8 @@ async function createReviewPdf({ kind, name }) {
     fonts: { font, bold, italic },
     text, row, heading, gap, titleBlock, verdictBanner, countTiles, passedLines,
     findingTitle, compareTable, deviationTable, listTable, notesSection, TONES, GREY, INK,
+    // The document itself, for a report that adds pages of its own after the findings.
+    doc: pdfDoc,
     save: async () => Buffer.from(await pdfDoc.save()),
   };
 }

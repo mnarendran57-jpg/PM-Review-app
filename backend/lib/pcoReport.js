@@ -1,4 +1,5 @@
 const { money } = require('./money');
+const { citeLabel, clauseFor, sectionLike } = require('./contractClauses');
 
 // The change order review as somebody approving it reads it: one line saying whether it can be
 // approved, a count of each kind of problem, and then each problem with its numbers. Nothing a reader
@@ -79,7 +80,14 @@ function buildPcoReport({
     .filter(c => c && c.item && c.rule)
     .filter(c => !/\b(tax|markup|mark-up|overhead|profit|o\s*&\s*p)\b/i.test(c.item));
   const contractIssues = contractResults.filter(r => r.status === 'FAIL').map(finding);
-  if (against.contract && coasterConcerns.length) {
+  // A cost the checks already caught from the contract's clauses is not flagged a second time as
+  // Coaster's reading — the same clause, cited twice, would count as two deviations.
+  const caught = new Set(contractIssues.flatMap(f => (f.figures?.rows || []).map(r => r.clause?.quote)).filter(Boolean));
+  const coasterOwn = coasterConcerns.filter(c => {
+    const clause = c.clause || clauseFor(c, data.contractTerms);
+    return !(clause && caught.has(clause.quote));
+  });
+  if (against.contract && coasterOwn.length) {
     contractIssues.push({
       id: 'COASTER',
       title: 'Also flagged by Coaster against the contract',
@@ -88,10 +96,13 @@ function buildPcoReport({
       detail: null,
       figures: {
         kind: 'deviation',
-        rows: coasterConcerns.map(c => ({
-          item: c.item, amount: typeof c.amount === 'number' ? c.amount : null,
-          rule: c.rule, basis: c.section || null,
-        })),
+        rows: coasterOwn.map(c => {
+          const clause = c.clause || clauseFor(c, data.contractTerms);
+          return {
+            item: c.item, amount: typeof c.amount === 'number' ? c.amount : null,
+            rule: c.rule, basis: clause ? null : sectionLike(c.section), clause,
+          };
+        }),
       },
     });
   }
@@ -167,7 +178,7 @@ function buildPcoReport({
     { key: 'math', label: 'Math errors', count: math.issues.length },
     { key: 'contract', label: 'Contract deviations', count: contract ? contract.count : null },
     { key: 'scope', label: 'Outside the RFI/ASI', count: scope ? (scope.compared ? scope.extraItems.length || (scope.aligned ? 0 : 1) : null) : null },
-    { key: 'savings', label: 'Savings ideas', count: alternatives ? alternativeCount : null },
+    { key: 'savings', label: 'VE options', count: alternatives ? alternativeCount : null },
   ];
 
   // What passed and what could not be checked, by name, for the reader who wants to know what was
@@ -196,7 +207,10 @@ function figureLines(f) {
     return rows.map(r => `  - ${r.item}${r.working ? ` (${r.working})` : ''}: shows ${money(r.shown)}, should be ${money(r.computed)} — off by ${money(r.difference)}`);
   }
   if (f.figures?.kind === 'deviation') {
-    return rows.map(r => `  - ${r.item}${typeof r.amount === 'number' ? ` — ${money(r.amount)}` : ''}: ${r.rule}${r.basis ? ` (${r.basis})` : ''}`);
+    return rows.flatMap(r => [
+      `  - ${r.item}${typeof r.amount === 'number' ? ` — ${money(r.amount)}` : ''}: ${r.rule}${r.basis ? ` (${r.basis})` : ''}`,
+      ...(r.clause ? [`    - Contract${citeLabel(r.clause) ? `, ${citeLabel(r.clause)}` : ''}: "${r.clause.quote}"`] : []),
+    ]);
   }
   return [`  ${f.detail}`];
 }
@@ -246,7 +260,7 @@ function renderMarkdown(report) {
   }
 
   if (alternatives?.lines?.length) {
-    lines.push('### Savings ideas — Coaster\'s suggestions, not prices');
+    lines.push("### Value engineering options — Coaster's suggestions, not prices");
     lines.push('');
     for (const line of alternatives.lines) {
       lines.push(`- **${line.description}**${typeof line.amount === 'number' ? ` (${money(line.amount)})` : ''}`);

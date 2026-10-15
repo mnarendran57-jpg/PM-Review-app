@@ -1311,6 +1311,13 @@ if (!columnsOf('invoice_reviews').includes('contract_id')) {
 if (!columnsOf('invoice_reviews').includes('contract_label')) {
   db.exec(`ALTER TABLE invoice_reviews ADD COLUMN contract_label TEXT`);
 }
+// What the PM asked for the invoice to be checked against — { agreement: 'architect' | 'contractor'
+// | null, contract } — so a stored review says whose agreement it was measured against, and one
+// checked against an agreement uploaded for that review alone still shows its contract section.
+// Null on a review from before the choice existed.
+if (!columnsOf('invoice_reviews').includes('checked_against')) {
+  db.exec(`ALTER TABLE invoice_reviews ADD COLUMN checked_against TEXT`);
+}
 // What was read out of a project document that is not a governing agreement — the drawing set's
 // sheet index, the project manual's sections, the scope letter's exclusions. A contract's reading
 // goes in `terms` and keeps its own shape; everything else lands here, so the two never have to

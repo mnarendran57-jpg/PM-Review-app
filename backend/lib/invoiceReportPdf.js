@@ -1,10 +1,14 @@
 const { createReviewPdf } = require('./reviewPdfKit');
 const { money } = require('./money');
+const { addMarkedPages } = require('./invoiceMarkup');
 
 // The invoice review as a document: whether it can be paid, a count of each kind of problem, and each
 // problem as a small table of its numbers. Built from the same report object the screen shows.
+//
+// `sources` are the files as uploaded — the invoice, and any receipts sent with it. Given them, the
+// pages with findings on them follow the report, marked up — see lib/invoiceMarkup.js.
 
-async function renderInvoiceReportPdf({ report }) {
+async function renderInvoiceReportPdf({ report, sources = [] }) {
   const h = report.header;
   const name = `${h.vendor}${h.invoiceNumber ? ` — Invoice ${h.invoiceNumber}` : ''}`;
   const pdf = await createReviewPdf({ kind: 'Invoice Review', name });
@@ -41,7 +45,7 @@ async function renderInvoiceReportPdf({ report }) {
 
   if (report.contract) {
     const c = report.contract;
-    pdf.heading(`Contract and PO${c.label ? ` — ${c.label}` : ''}`, c.count, c.issues.length ? 'red' : 'green');
+    pdf.heading(`${c.title || 'Contract and PO'}${c.label ? ` — ${c.label}` : ''}`, c.count, c.issues.length ? 'red' : 'green');
     if (c.issues.length === 0) pdf.text('Nothing on the invoice goes against the agreement terms that were checked.', { size: 9, color: pdf.GREY, gapAfter: 4 });
     for (const f of c.issues) {
       pdf.findingTitle(f, 'paying');
@@ -52,6 +56,14 @@ async function renderInvoiceReportPdf({ report }) {
   }
 
   pdf.notesSection(report.notes);
+  if (sources.length) {
+    try {
+      await addMarkedPages(pdf.doc, { sources, report });
+    } catch (err) {
+      // The report stands on its own. An invoice that cannot be marked up must not cost the reader it.
+      console.error('[invoice markup] skipped:', err.message);
+    }
+  }
   return pdf.save();
 }
 

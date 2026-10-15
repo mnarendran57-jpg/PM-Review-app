@@ -8,7 +8,9 @@ const { buildInvoiceReport } = require('../lib/invoiceReport');
 const { renderInvoiceReportPdf } = require('../lib/invoiceReportPdf');
 const { friendlyAiError } = require('../lib/aiErrors');
 const { GOVERNING_SQL } = require('../lib/docTypes');
-const { ensureTermsRead } = require('../lib/contractTerms');
+const { ensureTermsWithClauses } = require('../lib/contractTerms');
+const { extractContractTerms } = require('../lib/contractExtract');
+const { readContractClauses, clauseFor } = require('../lib/contractClauses');
 const storage = require('../lib/storage');
 const jobs = require('../lib/jobs');
 
@@ -36,19 +38,36 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024, files: 100 },
 });
 
+// What the PM chose to check the invoice against: the architect's agreement, the contractor's, or
+// neither ("math checks"). `checks` is a JSON list holding at most one of 'architect' and
+// 'contractor'; an empty list is the math alone. Null when the request does not say — one from before
+// the choice existed — which is then decided by contract_id as it always was.
+const AGREEMENTS = ['architect', 'contractor'];
+function agreementRequested(body) {
+  if (body.checks === undefined) return undefined;
+  let list;
+  try { list = JSON.parse(body.checks); } catch { list = String(body.checks).split(','); }
+  return (Array.isArray(list) ? list : []).find(k => AGREEMENTS.includes(k)) || null;
+}
+
 // One-shot analysis: extract the invoice(s) in a single AI call, then run the
-// deterministic checks in code. The project's stored contract terms feed the tax,
-// unallowable-item, and reimbursable-backup checks — the contract PDF itself is never
-// re-sent. The uploaded set is one primary invoice plus any backup receipts/invoices.
-router.post('/', upload.array('invoices', 100), async (req, res) => {
+// deterministic checks in code. The agreement's stored terms feed the tax, unallowable-item,
+// PO and billing checks — the contract PDF itself is never re-sent once read. The uploaded set
+// is one primary invoice plus any backup receipts/invoices.
+router.post('/', upload.fields([{ name: 'invoices', maxCount: 100 }, { name: 'contract_file', maxCount: 1 }]), async (req, res) => {
   try {
-    const files = req.files || [];
+    const files = req.files?.invoices || [];
     if (files.length === 0) return res.status(400).json({ error: 'At least one invoice PDF is required' });
     const nonPdf = files.find(f => f.mimetype !== 'application/pdf');
     if (nonPdf) return res.status(400).json({ error: `Every file must be a PDF (${nonPdf.originalname} is not)` });
+    const contractFile = req.files?.contract_file?.[0] || null;
+    if (contractFile && contractFile.mimetype !== 'application/pdf') {
+      return res.status(400).json({ error: `${contractFile.originalname} is not a PDF — only PDFs can be read.` });
+    }
 
     const projectId = req.body.project_id ? Number(req.body.project_id) : null;
     const contractId = req.body.contract_id ? Number(req.body.contract_id) : null;
+    const agreement = agreementRequested(req.body);
 
     // Which agreement this invoice is checked against. A project has several — the
     // architect's, the general contractor's — so the reviewer picks, and an architect's
@@ -59,7 +78,9 @@ router.post('/', upload.array('invoices', 100), async (req, res) => {
     // is honoured as that. The fallback is only for a request that does not mention one.
     let contractTerms = null;
     let contractRow = null;
-    const chosenNone = 'contract_id' in req.body && !req.body.contract_id;
+    const chosenNone = agreement === null
+      || (agreement === undefined && 'contract_id' in req.body && !req.body.contract_id)
+      || !!contractFile;
     if (projectId && !chosenNone) {
       contractRow = contractId
         ? db.prepare(`
@@ -82,6 +103,12 @@ router.post('/', upload.array('invoices', 100), async (req, res) => {
         return res.status(400).json({ error: 'That contract is not on this project.' });
       }
     }
+    if (agreement && !contractRow && !contractFile) {
+      return res.status(400).json({ error: `Choose the ${agreement}'s contract or PO, or upload it.` });
+    }
+    const contractLabel = contractRow
+      ? (contractRow.label || contractRow.file_name)
+      : contractFile ? contractFile.originalname.replace(/\.pdf$/i, '') : null;
 
     // The reading does not happen on this request. Everything above is cheap and has already
     // answered where it needed to; what follows takes as long as the package is long, held the
@@ -90,38 +117,59 @@ router.post('/', upload.array('invoices', 100), async (req, res) => {
     const jobId = jobs.startFrom(req, 'invoice-review', async () => {
       try {
         // Read on first use rather than at upload, so filing a contract costs nothing and a
-        // contract nobody invoices against is never read.
-        if (contractRow) contractTerms = await ensureTermsRead(contractRow);
+        // contract nobody invoices against is never read. Either way the terms come with where each
+        // rule is written, so a finding can cite it. One uploaded for this review alone is read now
+        // and not kept — keeping it is what saving it to Shared Documents is for.
+        if (contractRow) contractTerms = await ensureTermsWithClauses(contractRow);
+        else if (contractFile) {
+          const [{ usage, ...terms }, clauses] = await Promise.all([
+            extractContractTerms(contractFile.buffer),
+            readContractClauses(contractFile.buffer).then(r => r.clauses).catch(err => {
+              console.error('[contract clauses] uploaded contract failed:', err.message);
+              return null;
+            }),
+          ]);
+          contractTerms = { ...terms, clauses };
+        }
 
         const { invoice, observations } = await analyzeInvoices({
           invoiceBuffers: files.map(f => f.buffer),
           contractTerms,
         });
+        // Each of Coaster's contract flags keeps the clause it quoted, found now while the clauses
+        // are to hand: a stored review is rebuilt without them.
+        if (contractTerms && Array.isArray(observations.contractConcerns)) {
+          observations.contractConcerns = observations.contractConcerns.map(c => (c && typeof c === 'object'
+            ? { ...c, clause: clauseFor(c, contractTerms) } : c));
+        }
 
+        const chosen = !!(contractRow || contractFile);
         const data = {
           invoice, contractTerms,
           duplicates: earlierReviewsOf(req, projectId, invoice),
-          billing: contractRow ? billedAgainst(req, contractRow.id, contractTerms, invoice) : null,
+          billing: chosen ? billedAgainst(req, contractRow?.id ?? null, contractTerms, invoice) : null,
         };
         const results = runInvoiceChecks(data, {
-          groups: ['math', 'backup', 'history', ...(contractRow ? ['contract'] : [])],
+          groups: ['math', 'backup', 'history', ...(chosen ? ['contract'] : [])],
         });
-        const contractLabel = contractRow ? (contractRow.label || contractRow.file_name) : null;
-        const report = buildInvoiceReport({ data, results, observations, contractChosen: !!contractRow, contractLabel });
+        const report = buildInvoiceReport({
+          data, results, observations, contractChosen: chosen, contractLabel, agreement: agreement || null,
+        });
 
         const criticalCount = results.filter(r => r.critical && r.status === 'FAIL').length;
         const failCount = results.filter(r => r.status === 'FAIL').length;
 
         const insert = db.prepare(`
           INSERT INTO invoice_reviews (
-            org_id, project_id, contract_id, contract_label, vendor, invoice_number, invoice_date, total_amount,
+            org_id, project_id, contract_id, contract_label, checked_against, vendor, invoice_number, invoice_date, total_amount,
             extracted_data, checks_result, ai_observations, report_markdown,
             critical_count, fail_count, created_by
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           req.orgId, projectId,
           contractRow?.id ?? null,
-          contractRow ? (contractRow.label || contractRow.file_name) : null,
+          contractLabel,
+          JSON.stringify({ agreement: agreement || null, contract: chosen }),
           invoice.vendor || null,
           invoice.invoiceNumber || null,
           invoice.invoiceDate || null,
@@ -187,10 +235,11 @@ function earlierReviewsOf(req, projectId, invoice) {
 // invoices reviewed against it before. An invoice reviewed twice counts once — the same vendor and
 // number is one bill, whichever review of it was the last — and this one, if it was reviewed
 // before, does not count against itself.
+// An agreement uploaded for one review is not filed, so nothing was billed against it before.
 function billedAgainst(req, contractId, contractTerms, invoice) {
-  const value = Number(contractTerms?.originalContractSum);
+  const value = Number(contractTerms?.originalContractSum) || Number(contractTerms?.clauses?.contractSum?.amount);
   if (!(value > 0)) return null;
-  const rows = db.prepare(
+  const rows = contractId == null ? [] : db.prepare(
     `SELECT vendor, invoice_number, invoice_date, total_amount FROM invoice_reviews WHERE org_id=? AND contract_id=?`
   ).all(req.orgId, contractId);
   const keyOf = r => `${firstWord(r.vendor)}|${sameText(r.invoice_number) || `${r.invoice_date}|${r.total_amount}`}`;
@@ -207,13 +256,30 @@ function billedAgainst(req, contractId, contractTerms, invoice) {
 // The report a stored review renders as, on screen and in the PDF alike.
 function reportFor(row) {
   const extracted = JSON.parse(row.extracted_data);
+  // What the PM chose; a review from before the choice was checked against a contract if it named one.
+  let checked = null;
+  try { checked = row.checked_against ? JSON.parse(row.checked_against) : null; } catch { checked = null; }
   return buildInvoiceReport({
     data: { invoice: extracted.invoice, contractTerms: null },
     results: JSON.parse(row.checks_result),
     observations: row.ai_observations ? JSON.parse(row.ai_observations) : {},
-    contractChosen: row.contract_id != null,
+    contractChosen: checked ? !!checked.contract : row.contract_id != null,
     contractLabel: row.contract_label || null,
+    agreement: checked?.agreement || null,
   });
+}
+
+// The files as uploaded, in order, for the marked-up pages. One that cannot be read back is left out.
+async function sourcesOf(row) {
+  const files = db.prepare(
+    'SELECT file_name, file_key, file_blob FROM invoice_review_files WHERE review_id=? ORDER BY id'
+  ).all(row.id);
+  const out = [];
+  for (const f of files) {
+    const buffer = await storage.readFile({ key: f.file_key, blob: f.file_blob }).catch(() => null);
+    if (buffer && buffer.length) out.push({ name: f.file_name, buffer });
+  }
+  return out;
 }
 
 router.get('/', (req, res) => {
@@ -251,7 +317,7 @@ router.get('/:id/report.pdf', async (req, res) => {
   const row = visibleRow(req);
   if (!row) return res.status(404).json({ error: 'Not found' });
   try {
-    const pdf = await renderInvoiceReportPdf({ report: reportFor(row) });
+    const pdf = await renderInvoiceReportPdf({ report: reportFor(row), sources: await sourcesOf(row) });
     const stem = (row.invoice_number || row.vendor || req.params.id).toString().replace(/[^a-z0-9]+/gi, '_');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="Invoice_${stem}_Review.pdf"`);

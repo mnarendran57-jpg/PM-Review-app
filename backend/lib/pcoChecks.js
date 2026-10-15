@@ -21,11 +21,18 @@
 //     markups: [{ party, tier, label, rate, base, amount }],
 //     lineItems: [{ description, qty, unit, unitPrice, total, hasBreakdown }]
 //   },
-//   contractTerms: { taxExempt, taxExemptBasis, unallowableItems[], ... } | null,
-//   markupPolicy: { subRate, secondTierRate } | null   (defaults 10% / 5%)
+//   contractTerms: { taxExempt, taxExemptBasis, unallowableItems[], clauses, ... } | null,
+//   markupPolicy: { subRate, secondTierRate } | null   (defaults: the contract's, else 10% / 5%)
 // }
+//
+// A contract finding cites where the contract says it: each deviation row carries `clause` —
+// { section, heading, page, quote } from lib/contractClauses.js — when the contract's clauses were
+// read. A rule the contract does not state (Coaster's usual markup limits, no overhead on an
+// allowance) carries none, and its `basis` says it is Coaster's, so nothing is pinned on a clause
+// that does not say it.
 
 const { money } = require('./money');
+const { forbiddenCosts } = require('./contractClauses');
 
 const LINE_TOL = 0.02;
 const AGG_TOL = 1.0;
@@ -41,6 +48,17 @@ function close(a, b, tol) {
 function pass(detail) { return { status: 'PASS', detail }; }
 function fail(detail) { return { status: 'FAIL', detail }; }
 function skip(detail) { return { status: 'SKIPPED', detail }; }
+
+const clausesOf = terms => terms?.clauses || null;
+
+// The markup limits: the contract's own when it states them, with the clause; Coaster's usual ones
+// otherwise, said to be so.
+function markupLimit({ markupPolicy, contractTerms }, key) {
+  if (markupPolicy?.[key] != null) return { cap: markupPolicy[key], clause: null, fromContract: false };
+  const m = clausesOf(contractTerms)?.markups;
+  if (typeof m?.[key] === 'number') return { cap: m[key], clause: m, fromContract: true };
+  return { cap: DEFAULT_MARKUP_POLICY[key], clause: null, fromContract: false };
+}
 
 function pct(rate) {
   return typeof rate === 'number' ? `${(rate * 100).toFixed(1).replace(/\.0$/, '')}%` : 'n/a';
@@ -136,7 +154,11 @@ const CHECKS = [
               kind: 'deviation',
               rows: [{
                 item: 'Sales tax charged', amount: Number(pco.taxAmount) || null,
-                rule: 'The project is tax exempt', basis: contractTerms.taxExemptBasis || null,
+                rule: 'The project is tax exempt',
+                // The clause, when there is one, says it in the contract's own words; the summary of
+                // it beside them would only say it twice.
+                basis: clausesOf(contractTerms)?.tax ? null : (contractTerms.taxExemptBasis || null),
+                clause: clausesOf(contractTerms)?.tax || null,
               }],
             },
           }
@@ -167,9 +189,13 @@ const CHECKS = [
   {
     id: 'A1', group: 'contract', category: 'Markup Rules', critical: true,
     description: 'If this PCO is an allowance, is the contractor taking overhead and profit on it?',
-    run: ({ pco }) => {
+    run: ({ pco, contractTerms }) => {
       if (!pco.isAllowance) return skip('Skipped — this PCO is not presented as an allowance.');
       const oh = (pco.markups || []).filter(m => (Number(m.amount) || 0) > 0);
+      const clause = clausesOf(contractTerms)?.allowances || null;
+      if (oh.length > 0 && clause?.markupAllowed === true) {
+        return pass(`This is an allowance carrying markup, which the contract allows on allowance work.`);
+      }
       if (oh.length === 0) return pass('This is an allowance and no overhead, profit, or markup is charged on it — which is correct: an allowance is the owner\'s set-aside money, not changed work.');
       const total = oh.reduce((a, m) => a + m.amount, 0);
       return {
@@ -178,7 +204,10 @@ const CHECKS = [
           kind: 'deviation',
           rows: oh.map(m => ({
             item: m.label, amount: m.amount,
-            rule: 'No overhead or profit on an allowance', basis: null,
+            rule: 'No overhead or profit on an allowance',
+            ...(clause && clause.markupAllowed === false
+              ? { basis: null, clause }
+              : { basis: 'Standard practice — the contract on file does not address markup on allowances', clause: null }),
           })),
         },
       };
@@ -186,9 +215,9 @@ const CHECKS = [
   },
   {
     id: 'A2', group: 'contract', category: 'Markup Rules', critical: false,
-    description: 'Is the subcontractor markup within the allowed 10%?',
-    run: ({ pco, markupPolicy }) => {
-      const cap = (markupPolicy || DEFAULT_MARKUP_POLICY).subRate;
+    description: 'Is the subcontractor markup within the allowed limit?',
+    run: ({ pco, markupPolicy, contractTerms }) => {
+      const { cap, clause, fromContract } = markupLimit({ markupPolicy, contractTerms }, 'subRate');
       const subs = (pco.markups || []).filter(m => m.tier === 'sub' && m.rate != null);
       if (subs.length === 0) return skip('Skipped — no subcontractor markup with a stated rate appears on this PCO.');
       const over = subs.filter(m => m.rate > cap + 0.0001);
@@ -202,7 +231,9 @@ const CHECKS = [
           rows: over.map(m => ({
             item: `${m.label} — ${pct(m.rate)} charged`,
             amount: m.base != null ? (m.rate - cap) * m.base : null,
-            rule: `Subcontractor markup is limited to ${pct(cap)}`, basis: null,
+            rule: `Subcontractor markup is limited to ${pct(cap)}`,
+            basis: fromContract ? null : "Coaster's usual limit — the contract on file does not state one",
+            clause,
           })),
         },
       };
@@ -210,9 +241,9 @@ const CHECKS = [
   },
   {
     id: 'A3', group: 'contract', category: 'Markup Rules', critical: false,
-    description: 'Is the markup on second-tier subcontractor work within the allowed 5%?',
-    run: ({ pco, markupPolicy }) => {
-      const cap = (markupPolicy || DEFAULT_MARKUP_POLICY).secondTierRate;
+    description: 'Is the markup on second-tier subcontractor work within the allowed limit?',
+    run: ({ pco, markupPolicy, contractTerms }) => {
+      const { cap, clause, fromContract } = markupLimit({ markupPolicy, contractTerms }, 'secondTierRate');
       const tier2 = (pco.markups || []).filter(m => m.tier === 'second-tier' && m.rate != null);
       if (tier2.length === 0) return skip('Skipped — no second-tier subcontractor markup with a stated rate appears on this PCO.');
       const over = tier2.filter(m => m.rate > cap + 0.0001);
@@ -226,7 +257,9 @@ const CHECKS = [
           rows: over.map(m => ({
             item: `${m.label} — ${pct(m.rate)} charged`,
             amount: m.base != null ? (m.rate - cap) * m.base : null,
-            rule: `Second-tier markup is limited to ${pct(cap)}`, basis: null,
+            rule: `Second-tier markup is limited to ${pct(cap)}`,
+            basis: fromContract ? null : "Coaster's usual limit — the contract on file does not state one",
+            clause,
           })),
         },
       };
@@ -257,14 +290,19 @@ const CHECKS = [
     id: 'C1', group: 'contract', category: 'Contract Terms', critical: false,
     description: 'Does this PCO bill for anything the contract says may not be billed?',
     run: ({ pco, contractTerms }) => {
-      const banned = contractTerms?.unallowableItems || [];
+      // The contract's unallowable items, and the costs its clauses restrict, once each — a cost
+      // found in both keeps the clause, which says where it is written.
+      const banned = forbiddenCosts(contractTerms);
       if (banned.length === 0) return skip('Skipped — no contract on file, or the contract on file lists no unallowable cost items.');
+      const lines = pco.lineItems || [];
+      const wordsOf = b => String(b.item).toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 3);
+      const lineFor = b => lines.find(li => wordsOf(b).every(w => String(li.description || '').toLowerCase().includes(w)));
       const hay = [
         ...(pco.lineItems || []).map(li => li.description || ''),
         ...(pco.markups || []).map(m => m.label || ''),
       ].join(' \n ').toLowerCase();
       const hits = banned.filter(b => {
-        const words = String(b.item).toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        const words = String(b.item).toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 3);
         return words.length > 0 && words.every(w => hay.includes(w));
       });
       if (hits.length === 0) return pass(`Nothing on this PCO matches the ${banned.length} cost item${banned.length === 1 ? '' : 's'} the contract forbids billing for. (This is a wording match — the compliance notes below take a closer look.)`);
@@ -274,7 +312,14 @@ const CHECKS = [
         ).join(' ')),
         figures: {
           kind: 'deviation',
-          rows: hits.map(b => ({ item: b.item, amount: null, rule: 'The contract does not allow billing for this', basis: b.basis || null })),
+          rows: hits.map(b => ({
+            item: lineFor(b)?.description || b.item,
+            amount: typeof lineFor(b)?.total === 'number' ? lineFor(b).total : null,
+            // A cost the contract restricts says how ("only with written direction"); one it simply
+            // lists as unallowable says that.
+            rule: b.rule || 'The contract does not allow billing for this',
+            basis: b.clause ? null : (b.basis || null), clause: b.clause || null,
+          })),
         },
       };
     }

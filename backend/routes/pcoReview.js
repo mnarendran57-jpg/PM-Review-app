@@ -8,9 +8,11 @@ const { buildPcoReport } = require('../lib/pcoReport');
 const { findAlternatives, alternativesView } = require('../lib/pcoAlternatives');
 const { friendlyAiError } = require('../lib/aiErrors');
 const { GOVERNING_SQL } = require('../lib/docTypes');
-const { ensureTermsRead } = require('../lib/contractTerms');
+const { ensureTermsWithClauses } = require('../lib/contractTerms');
+const { readContractClauses, clauseFor } = require('../lib/contractClauses');
 const { extractContractTerms } = require('../lib/contractExtract');
 const { renderPcoReportPdf } = require('../lib/pcoReportPdf');
+const { rfiReference } = require('../lib/pcoRfiReference');
 const storage = require('../lib/storage');
 const jobs = require('../lib/jobs');
 
@@ -138,7 +140,14 @@ router.post('/', upload.fields([
       const buffer = await storage.readFile({ key: doc.file_key, blob: doc.file_blob });
       if (buffer) sharedRefs.push({ name: doc.file_name, buffer });
     }
+    // RFIs chosen from the project's RFI Log, each as its log entry plus the front of its files.
+    const fromLog = [];
+    for (const id of projectId ? parseIdList(req.body.rfi_ids) : []) {
+      const ref = await rfiReference(id, projectId);
+      if (ref) fromLog.push(ref);
+    }
     const references = [
+      ...fromLog,
       ...uploadedRefs.map(f => ({ name: f.originalname, buffer: f.buffer })),
       ...sharedRefs,
     ];
@@ -159,11 +168,18 @@ router.post('/', upload.fields([
       // The contract's terms. A filed contract is read on first use and the reading kept for every
       // review after it; one uploaded for this review alone is read now and not kept, because
       // keeping it is what saving it to Shared Documents is for.
+      // Either way it comes with where each change order rule is written, so a finding can cite it.
       let contractTerms = null;
-      if (contractRow) contractTerms = await ensureTermsRead(contractRow);
+      if (contractRow) contractTerms = await ensureTermsWithClauses(contractRow);
       else if (contractFile) {
-        const { usage, ...terms } = await extractContractTerms(contractFile.buffer);
-        contractTerms = terms;
+        const [{ usage, ...terms }, clauses] = await Promise.all([
+          extractContractTerms(contractFile.buffer),
+          readContractClauses(contractFile.buffer).then(r => r.clauses).catch(err => {
+            console.error('[contract clauses] uploaded contract failed:', err.message);
+            return null;
+          }),
+        ]);
+        contractTerms = { ...terms, clauses: clauses };
       }
 
       const { pco, reference, observations } = await analyzePco({
@@ -171,6 +187,13 @@ router.post('/', upload.fields([
         referenceBuffers: checkedAgainst.reference ? references.map(r => r.buffer) : [],
         contractTerms: checkedAgainst.contract ? contractTerms : null,
       });
+
+      // Each of Coaster's contract flags keeps the clause it quoted, found now while the contract's
+      // clauses are to hand: a stored review is rebuilt without them.
+      if (contractTerms && Array.isArray(observations.contractConcerns)) {
+        observations.contractConcerns = observations.contractConcerns.map(c => (c && typeof c === 'object'
+          ? { ...c, clause: clauseFor(c, contractTerms) } : c));
+      }
 
       // The uploader knows better than the document whether this is an allowance —
       // an explicit flag from the form overrides the model's reading.
@@ -304,7 +327,10 @@ router.get('/:id/report.pdf', async (req, res) => {
   const row = visibleRow(req);
   if (!row) return res.status(404).json({ error: 'Not found' });
   try {
-    const pdf = await renderPcoReportPdf({ report: reportFor(row) });
+    // The change order itself follows the report, marked up where the findings are.
+    const original = await storage.readFile({ key: row.pco_file_key, blob: row.pco_file }).catch(() => null);
+    const pco = JSON.parse(row.extracted_data).pco;
+    const pdf = await renderPcoReportPdf({ report: reportFor(row), original, pco });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="PCO_${safeName(row.pco_number || req.params.id)}_Review.pdf"`);
     res.send(pdf);

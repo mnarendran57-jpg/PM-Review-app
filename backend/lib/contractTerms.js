@@ -1,6 +1,7 @@
 const db = require('../database');
 const storage = require('./storage');
 const { extractContractTerms } = require('./contractExtract');
+const { readContractClauses } = require('./contractClauses');
 const { isGoverning } = require('./docTypes');
 
 // Reads a contract's terms the first time a review actually needs them, and never before.
@@ -86,4 +87,42 @@ async function ensureAllRead(rows) {
   await Promise.all(rows.map(row => ensureTermsRead(row)));
 }
 
-module.exports = { ensureTermsRead, ensureAllRead };
+// The contract's terms, and where in it each rule is written (lib/contractClauses.js), for a change
+// order or invoice review. The clauses are read the first time either is checked against this
+// contract and kept beside its terms; a contract read before clauses were recorded gets them on its
+// next such review, once. Pay app reviews read the terms alone and never pay for this.
+//
+// The two reads run side by side, and the clauses are stored only after both are done: the terms
+// read writes the whole terms column, and would otherwise overwrite clauses stored a moment before.
+// A clause read that fails costs the review its citations, never the review — the checks then fall
+// back to the terms alone.
+async function ensureTermsWithClauses(row) {
+  const cached = (() => {
+    try { return JSON.parse(row.terms || '{}').clauses || null; } catch { return null; }
+  })();
+  const readClauses = async () => {
+    if (cached || !isGoverning(row.doc_type) || row.terms_status === 'failed') return null;
+    try {
+      const buffer = await storage.readFile({ key: row.file_key, blob: row.file_blob });
+      if (!buffer || !buffer.length) return null;
+      const { clauses, usage } = await readContractClauses(buffer);
+      if (usage) console.log(`[contract clauses] contract=${row.id} in=${usage.inputTokens} out=${usage.outputTokens} tokens`);
+      return clauses;
+    } catch (err) {
+      console.error(`[contract clauses] contract=${row.id} failed:`, err.message);
+      return null;
+    }
+  };
+  const [terms, fresh] = await Promise.all([ensureTermsRead(row), readClauses()]);
+  if (!terms) return null;
+  if (fresh) {
+    const stored = db.prepare(`SELECT terms FROM project_contracts WHERE id=?`).get(row.id);
+    let current = {};
+    try { current = JSON.parse(stored?.terms || '{}'); } catch { /* keep {} */ }
+    db.prepare(`UPDATE project_contracts SET terms=? WHERE id=?`)
+      .run(JSON.stringify({ ...current, clauses: fresh }), row.id);
+  }
+  return { ...terms, clauses: fresh || cached || terms.clauses || null };
+}
+
+module.exports = { ensureTermsRead, ensureAllRead, ensureTermsWithClauses };

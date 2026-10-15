@@ -121,6 +121,25 @@ export function CompareFinding({ finding, before, shownLabel }) {
   );
 }
 
+// Where in the contract a finding comes from: the section and page, then its own words — so a
+// reviewer can turn to it, and hand it to the contractor, without hunting.
+export function citeLabel(clause) {
+  const where = [clause.section, clause.heading].filter(Boolean).join(' ');
+  return [where, clause.page ? `page ${clause.page}` : null].filter(Boolean).join(', ');
+}
+
+function ContractCite({ clause }) {
+  const label = citeLabel(clause);
+  return (
+    <span className="mt-1.5 block rounded-md border-l-2 border-indigo-300 bg-indigo-50/60 px-2.5 py-1.5">
+      <span className="block text-[10px] font-semibold uppercase tracking-wide text-indigo-700">
+        Contract{label ? ` · ${label}` : ''}
+      </span>
+      <span className="block text-[12px] italic leading-snug text-gray-700">&ldquo;{clause.quote}&rdquo;</span>
+    </span>
+  );
+}
+
 // Something the agreement does not allow: what was charged, the amount at issue, and the term.
 export function DeviationFinding({ finding, before, whatLabel }) {
   return (
@@ -145,6 +164,7 @@ export function DeviationFinding({ finding, before, whatLabel }) {
               <td className={`${td} pl-4 text-gray-700`}>
                 {r.rule}
                 {r.basis && <span className="block text-[11px] italic text-gray-400">{r.basis}</span>}
+                {r.clause && <ContractCite clause={r.clause} />}
               </td>
             </tr>
           ))}
@@ -164,6 +184,7 @@ export function ListFinding({ finding, before, showTitle = true }) {
           <span className="min-w-0">
             <span className={`text-[12px] ${r.emphasis ? 'font-semibold text-gray-900' : 'text-gray-800'}`}>{r.item}</span>
             {r.note && <span className="block text-[11px] text-gray-400">{r.note}</span>}
+            {r.clause && <ContractCite clause={r.clause} />}
           </span>
           <span className="text-[12px] font-semibold tabular-nums flex-shrink-0" style={{ color: r.emphasis ? TONE.red.ink : '#111827' }}>
             {typeof r.amount === 'number' ? money(r.amount) : '—'}

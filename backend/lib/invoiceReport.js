@@ -1,4 +1,10 @@
 const { money } = require('./money');
+const { citeLabel, clauseFor, sectionLike } = require('./contractClauses');
+
+// Whose agreement the invoice was checked against, as the report names it. Null for a review from
+// before the PM said, or one checked against an agreement without saying whose.
+const AGREEMENT_NAMES = { architect: "the architect's contract or PO", contractor: "the contractor's contract or PO" };
+const AGREEMENT_TITLES = { architect: "Architect's contract / PO", contractor: "Contractor's contract / PO" };
 
 // The invoice review as somebody deciding whether to pay it reads it: one line saying whether it can
 // be paid, a count of each kind of problem, and each problem with its numbers.
@@ -51,7 +57,7 @@ const finding = r => ({
 // One row per Coaster finding, one per failed check however many lines it names.
 const countOf = issues => issues.reduce((n, f) => n + (f.byCoaster ? (f.figures?.rows?.length || 1) : 1), 0);
 
-function buildInvoiceReport({ data, results, observations, contractChosen = false, contractLabel = null }) {
+function buildInvoiceReport({ data, results, observations, contractChosen = false, contractLabel = null, agreement = null }) {
   const inv = data.invoice || {};
   const o = observations || {};
   const inGroup = group => results.filter(r => groupOf(r) === group);
@@ -71,7 +77,12 @@ function buildInvoiceReport({ data, results, observations, contractChosen = fals
     .filter(c => c && c.item && c.rule)
     .filter(c => !/\b(tax|taxes)\b/i.test(c.item));
   const contractIssues = contractResults.filter(r => r.status === 'FAIL').map(finding);
-  if (contractChosen && coasterConcerns.length) {
+  // A cost the checks already caught from the agreement's clauses is not flagged a second time as
+  // Coaster's reading — the same clause, cited twice, would count as two problems.
+  const caught = new Set(contractIssues.flatMap(f => (f.figures?.rows || []).map(r => r.clause?.quote)).filter(Boolean));
+  const withClause = coasterConcerns.map(c => ({ ...c, clause: c.clause || clauseFor(c, data.contractTerms) }));
+  const coasterOwn = withClause.filter(c => !(c.clause && caught.has(c.clause.quote)));
+  if (contractChosen && coasterOwn.length) {
     contractIssues.push({
       id: 'COASTER',
       title: 'Also flagged by Coaster against the contract',
@@ -80,14 +91,16 @@ function buildInvoiceReport({ data, results, observations, contractChosen = fals
       detail: null,
       figures: {
         kind: 'deviation',
-        rows: coasterConcerns.map(c => ({
-          item: c.item, amount: typeof c.amount === 'number' ? c.amount : null, rule: c.rule, basis: c.section || null,
+        rows: coasterOwn.map(c => ({
+          item: c.item, amount: typeof c.amount === 'number' ? c.amount : null, rule: c.rule,
+          basis: c.clause ? null : sectionLike(c.section), clause: c.clause || null,
         })),
       },
     });
   }
   const contract = contractChosen ? {
     label: contractLabel,
+    title: AGREEMENT_TITLES[agreement] || 'Contract and PO',
     issues: contractIssues,
     count: countOf(contractIssues),
     // Where the agreement stands after this invoice, shown whether or not it is over, because "how
@@ -125,7 +138,7 @@ function buildInvoiceReport({ data, results, observations, contractChosen = fals
     total: inv.total,
     checkedAgainst: [
       'its own arithmetic', 'its receipts', 'earlier reviews',
-      contract && (contractLabel ? `the agreement (${contractLabel})` : 'the agreement'),
+      contract && `${AGREEMENT_NAMES[agreement] || 'the agreement'}${contractLabel ? ` (${contractLabel})` : ''}`,
     ].filter(Boolean),
   };
 
@@ -149,6 +162,9 @@ function buildInvoiceReport({ data, results, observations, contractChosen = fals
   return report;
 }
 
+// Where in the agreement a row's finding comes from, as a line under it.
+const citeLine = r => (r.clause ? [`    - Contract${citeLabel(r.clause) ? `, ${citeLabel(r.clause)}` : ''}: "${r.clause.quote}"`] : []);
+
 function figureLines(f) {
   const rows = f.figures?.rows || [];
   const kind = f.figures?.kind;
@@ -156,10 +172,10 @@ function figureLines(f) {
     return rows.map(r => `  - ${r.item}${r.working ? ` (${r.working})` : ''}: shows ${money(r.shown)}, should be ${money(r.computed)} — off by ${money(r.difference)}`);
   }
   if (kind === 'deviation') {
-    return rows.map(r => `  - ${r.item}${typeof r.amount === 'number' ? ` — ${money(r.amount)}` : ''}: ${r.rule}${r.basis ? ` (${r.basis})` : ''}`);
+    return rows.flatMap(r => [`  - ${r.item}${typeof r.amount === 'number' ? ` — ${money(r.amount)}` : ''}: ${r.rule}${r.basis ? ` (${r.basis})` : ''}`, ...citeLine(r)]);
   }
   if (kind === 'billing' || kind === 'list') {
-    return rows.map(r => `  - ${r.item}${typeof r.amount === 'number' ? ` — ${money(r.amount)}` : ''}${r.note ? ` (${r.note})` : ''}`);
+    return rows.flatMap(r => [`  - ${r.item}${typeof r.amount === 'number' ? ` — ${money(r.amount)}` : ''}${r.note ? ` (${r.note})` : ''}`, ...citeLine(r)]);
   }
   return [`  ${f.detail}`];
 }
@@ -188,7 +204,7 @@ function renderMarkdown(report) {
   section('Math errors', math.issues);
   if (backup) section('Missing receipts', [backup]);
   if (contract) {
-    section(`Contract and PO${contract.label ? ` — ${contract.label}` : ''}`, contract.issues);
+    section(`${contract.title || 'Contract and PO'}${contract.label ? ` — ${contract.label}` : ''}`, contract.issues);
     if (contract.billing) { lines.push(contract.billing); lines.push(''); }
   }
   if (notes.length) {

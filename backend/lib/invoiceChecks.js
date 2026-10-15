@@ -13,7 +13,7 @@
 //                   isReimbursable, hasBackup, backupNote }]
 //   },
 //   contractTerms: { taxExempt, taxExemptBasis, unallowableItems[], commitment,
-//                    originalContractSum, ... } | null,
+//                    originalContractSum, clauses, ... } | null,
 //   billing: { contractValue, priorBilled, priorCount } | null — what Coaster has already reviewed
 //            against the same contract or PO, worked out by the route,
 //   duplicates: [{ id, invoiceNumber, total, invoiceDate, reviewedOn }] — earlier reviews of what
@@ -29,8 +29,13 @@
 //
 // A failed check also carries `figures`, the numbers behind the finding, so the report can show
 // them as a small table rather than a sentence.
+//
+// A finding that comes from the agreement cites where the agreement says it: its rows carry `clause`
+// — { section, heading, page, quote } from lib/contractClauses.js — when the agreement's clauses were
+// read. Nothing is cited that the agreement does not say.
 
 const { money } = require('./money');
+const { forbiddenCosts } = require('./contractClauses');
 
 const LINE_TOL = 0.02;
 const AGG_TOL = 1.0;
@@ -38,6 +43,8 @@ const AGG_TOL = 1.0;
 function close(a, b, tol) {
   return Math.abs((a ?? 0) - (b ?? 0)) <= tol;
 }
+
+const clausesOf = terms => terms?.clauses || null;
 
 function pass(detail) { return { status: 'PASS', detail }; }
 function fail(detail) { return { status: 'FAIL', detail }; }
@@ -114,7 +121,15 @@ const CHECKS = [
         return taxed
           ? {
             ...fail(`This invoice includes ${invoice.taxAmount ? money(invoice.taxAmount) + ' of' : ''} tax, but the contract states the project is tax exempt${contractTerms.taxExemptBasis ? ` (${contractTerms.taxExemptBasis})` : ''}. The tax should be removed before this is paid.`),
-            figures: { kind: 'deviation', rows: [{ item: 'Sales tax charged', amount: Number(invoice.taxAmount) || null, rule: 'The project is tax exempt', basis: contractTerms.taxExemptBasis || null }] },
+            figures: {
+              kind: 'deviation',
+              rows: [{
+                item: 'Sales tax charged', amount: Number(invoice.taxAmount) || null, rule: 'The project is tax exempt',
+                // The clause, when there is one, says it in the agreement's own words.
+                basis: clausesOf(contractTerms)?.tax ? null : (contractTerms.taxExemptBasis || null),
+                clause: clausesOf(contractTerms)?.tax || null,
+              }],
+            },
           }
           : pass('No tax is charged, which matches the contract — this project is tax exempt.');
       }
@@ -136,8 +151,11 @@ const CHECKS = [
   {
     id: 'R1', group: 'backup', category: 'Reimbursable Backup', critical: true,
     description: 'Does every reimbursable (pass-through) cost have a backup receipt or invoice?',
-    run: ({ invoice }) => {
+    run: ({ invoice, contractTerms }) => {
       const reimbursable = (invoice.lineItems || []).filter(li => li.isReimbursable === true);
+      // Where the agreement asks for backup, the finding cites it; without one this is good practice.
+      const rule = clausesOf(contractTerms)?.reimbursables;
+      const clause = rule && rule.backupRequired !== false ? rule : null;
       if (reimbursable.length === 0) return skip('Skipped — no reimbursable, cost-plus, or pass-through lines were found on this invoice.');
       const missing = reimbursable.filter(li => li.hasBackup === false);
       if (missing.length === 0) {
@@ -147,7 +165,7 @@ const CHECKS = [
         ...fail(missing.map(li =>
           `"${li.description}"${li.total != null ? ` (${money(li.total)})` : ''} is billed as a reimbursable cost but no backup receipt or invoice was found for it${li.backupNote ? ` — ${li.backupNote}` : ''}. Ask the vendor for the supporting document before paying.`
         ).join(' ')),
-        figures: { kind: 'list', rows: missing.map(li => ({ item: li.description, amount: li.total ?? null, note: li.backupNote || null })) },
+        figures: { kind: 'list', rows: missing.map(li => ({ item: li.description, amount: li.total ?? null, note: li.backupNote || null, clause })) },
       };
     }
   },
@@ -157,11 +175,16 @@ const CHECKS = [
     id: 'C1', group: 'contract', category: 'Contract Terms', critical: false,
     description: 'Does this invoice bill for anything the contract says may not be billed?',
     run: ({ invoice, contractTerms }) => {
-      const banned = contractTerms?.unallowableItems || [];
+      // The agreement's unallowable items, and the costs its clauses restrict, once each — a cost
+      // found in both keeps the clause, which says where it is written.
+      const banned = forbiddenCosts(contractTerms);
       if (banned.length === 0) return skip('Skipped — no contract on file, or the contract on file lists no unallowable cost items.');
-      const hay = (invoice.lineItems || []).map(li => li.description || '').join(' \n ').toLowerCase();
+      const lines = invoice.lineItems || [];
+      const wordsOf = b => String(b.item).toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 3);
+      const lineFor = b => lines.find(li => wordsOf(b).every(w => String(li.description || '').toLowerCase().includes(w)));
+      const hay = lines.map(li => li.description || '').join(' \n ').toLowerCase();
       const hits = banned.filter(b => {
-        const words = String(b.item).toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        const words = wordsOf(b);
         return words.length > 0 && words.every(w => hay.includes(w));
       });
       if (hits.length === 0) return pass(`Nothing on this invoice matches the ${banned.length} cost item${banned.length === 1 ? '' : 's'} the contract forbids billing for. (This is a wording match — the review notes below take a closer look.)`);
@@ -169,7 +192,16 @@ const CHECKS = [
         ...fail(hits.map(b =>
           `The contract does not allow billing for "${b.item}"${b.basis ? ` (${b.basis})` : ''}, but wording matching it appears on this invoice — verify before paying.`
         ).join(' ')),
-        figures: { kind: 'deviation', rows: hits.map(b => ({ item: b.item, amount: null, rule: 'The contract does not allow billing for this', basis: b.basis || null })) },
+        figures: {
+          kind: 'deviation',
+          rows: hits.map(b => ({
+            item: lineFor(b)?.description || b.item,
+            amount: typeof lineFor(b)?.total === 'number' ? lineFor(b).total : null,
+            // A cost the agreement restricts says how; one it simply lists as unallowable says that.
+            rule: b.rule || 'The contract does not allow billing for this',
+            basis: b.clause ? null : (b.basis || null), clause: b.clause || null,
+          })),
+        },
       };
     }
   },
@@ -199,7 +231,7 @@ const CHECKS = [
   {
     id: 'PO2', group: 'contract', category: 'Purchase Order', critical: true,
     description: 'Does this invoice keep the total billed within what the PO or contract is worth?',
-    run: ({ invoice, billing }) => {
+    run: ({ invoice, billing, contractTerms }) => {
       if (!billing || !(billing.contractValue > 0)) {
         return skip('Skipped — the agreement does not state a value to measure the billing against.');
       }
@@ -217,7 +249,8 @@ const CHECKS = [
         figures: {
           kind: 'billing',
           rows: [
-            { item: 'Agreement value', amount: billing.contractValue },
+            // The agreement's own statement of what it is worth, where its clauses were read.
+            { item: 'Agreement value', amount: billing.contractValue, clause: clausesOf(contractTerms)?.contractSum || null },
             { item: `Billed before this invoice${billing.priorCount ? ` (${billing.priorCount} reviewed in Coaster)` : ''}`, amount: billing.priorBilled || 0 },
             { item: 'This invoice', amount: invoice.total },
             { item: 'Over the agreement by', amount: -remaining, emphasis: true },

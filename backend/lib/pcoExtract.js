@@ -105,6 +105,11 @@ function pcoTool(hasReference, hasContract = false) {
           amount: { type: 'number', description: 'The amount on that line.' },
           rule: { type: 'string', description: 'What the contract says, in one short plain-English sentence.' },
           section: { type: 'string', description: 'The section or clause it comes from, if the terms name one.' },
+          quote: {
+            type: 'string',
+            description: 'The contract wording behind it, copied exactly from a "quote" in the terms\' '
+              + 'clauses. Omit when no quote there says it — never write one of your own.',
+          },
         },
         required: ['item', 'rule'],
       },
