@@ -4,6 +4,8 @@ const { runInvoiceChecks } = require('../lib/invoiceChecks');
 const { buildInvoiceReport } = require('../lib/invoiceReport');
 const { renderInvoiceReportPdf } = require('../lib/invoiceReportPdf');
 const { collectMarks } = require('../lib/invoiceMarkup');
+const { combineAgreements } = require('../lib/agreementSet');
+const { citeLabel } = require('../lib/contractClauses');
 
 // An invoice checked against the architect's or the contractor's agreement cites where in it each
 // finding comes from, and its PDF carries the invoice marked up. No API call is made: the clauses
@@ -107,6 +109,36 @@ async function invoicePdf() {
     const r = buildInvoiceReport({ data: { invoice: { ...invoice, total: 13000 }, contractTerms: null }, results: math, observations: {} });
     assert.strictEqual(r.contract, null);
     assert.ok(collectMarks(r).some(m => m.title === 'The total does not add up'));
+  });
+
+  await check('a contract and a PO are checked together, each finding citing its own document', () => {
+    const contract = { id: 5, label: 'Owner-Contractor Agreement', docType: 'contract', terms: {
+      taxExempt: true, originalContractSum: 2500000, commitment: null, unallowableItems: [],
+      clauses: { tax: clauses.tax, contractSum: { quote: 'The Contract Sum is $2,500,000.', page: 3, amount: 2500000 },
+        costRules: [{ item: 'Equipment rental', rule: 'Needs written approval first', section: '7.3', page: 9,
+          quote: 'Equipment rental is reimbursable only with the Owner\'s prior written approval.' }] },
+    } };
+    const po = { id: 4, label: 'PO 253016-004', docType: 'purchase-order', terms: {
+      taxExempt: null, originalContractSum: 20000, commitment: '253016-004', unallowableItems: [],
+      clauses: { contractSum: { section: 'Line 1', page: 1, quote: 'Purchase order amount: $20,000.00', amount: 20000 } },
+    } };
+    const { terms: both, valueFrom } = combineAgreements([contract, po]);
+    assert.strictEqual(valueFrom.id, 4, "the PO's amount is the one billing is measured against");
+    assert.strictEqual(both.taxExempt, true, "a PO silent on tax does not undo the contract's exemption");
+    const inv = {
+      vendor: 'Lone Star Electric', invoiceNumber: 'INV-2001', poNumber: 'PO 253016-004', total: 9000, taxAmount: 400,
+      lineItems: [{ description: 'Scissor lift equipment rental', total: 1600 }, { description: 'Labor', total: 7000 }],
+    };
+    const r = runInvoiceChecks({ invoice: inv, contractTerms: both, billing: { contractValue: 20000, priorBilled: 15000, priorCount: 2 }, duplicates: [] });
+    assert.strictEqual(r.find(x => x.id === 'PO1').status, 'PASS', "the invoice cites the PO's number");
+    assert.strictEqual(citeLabel(rows(r, 'T1')[0].clause), 'Owner-Contractor Agreement · Article 11.5 Taxes, page 6');
+    assert.strictEqual(rows(r, 'C1')[0].clause.source, 'Owner-Contractor Agreement');
+    assert.strictEqual(citeLabel(rows(r, 'PO2')[0].clause), 'PO 253016-004 · Line 1, page 1');
+  });
+
+  await check('one agreement alone is cited without naming it', () => {
+    const { terms: one } = combineAgreements([{ id: 1, label: 'Agreement', docType: 'contract', terms }]);
+    assert.strictEqual(citeLabel(rows(runInvoiceChecks({ invoice, contractTerms: one, duplicates: [] }), 'T1')[0].clause), 'Article 11.5 Taxes, page 6');
   });
 
   console.log(`\n${failed === 0 ? 'All' : ''} ${passed} check${passed === 1 ? '' : 's'} passed`

@@ -11,6 +11,7 @@ const { GOVERNING_SQL } = require('../lib/docTypes');
 const { ensureTermsWithClauses } = require('../lib/contractTerms');
 const { extractContractTerms } = require('../lib/contractExtract');
 const { readContractClauses, clauseFor } = require('../lib/contractClauses');
+const { combineAgreements } = require('../lib/agreementSet');
 const storage = require('../lib/storage');
 const jobs = require('../lib/jobs');
 
@@ -38,6 +39,17 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024, files: 100 },
 });
 
+// Ids arrive as a JSON array from the form; a bare comma-separated string is tolerated so a
+// hand-made request is not silently ignored.
+function parseIdList(raw) {
+  if (raw == null || raw === '') return [];
+  let ids = raw;
+  if (typeof ids === 'string') {
+    try { ids = JSON.parse(ids); } catch { ids = ids.split(','); }
+  }
+  return (Array.isArray(ids) ? ids : [ids]).map(Number).filter(n => Number.isInteger(n) && n > 0);
+}
+
 // What the PM chose to check the invoice against: the architect's agreement, the contractor's, or
 // neither ("math checks"). `checks` is a JSON list holding at most one of 'architect' and
 // 'contractor'; an empty list is the math alone. Null when the request does not say — one from before
@@ -54,61 +66,61 @@ function agreementRequested(body) {
 // deterministic checks in code. The agreement's stored terms feed the tax, unallowable-item,
 // PO and billing checks — the contract PDF itself is never re-sent once read. The uploaded set
 // is one primary invoice plus any backup receipts/invoices.
-router.post('/', upload.fields([{ name: 'invoices', maxCount: 100 }, { name: 'contract_file', maxCount: 1 }]), async (req, res) => {
+router.post('/', upload.fields([
+  { name: 'invoices', maxCount: 100 }, { name: 'contract_files', maxCount: 20 }, { name: 'contract_file', maxCount: 1 },
+]), async (req, res) => {
   try {
     const files = req.files?.invoices || [];
     if (files.length === 0) return res.status(400).json({ error: 'At least one invoice PDF is required' });
     const nonPdf = files.find(f => f.mimetype !== 'application/pdf');
     if (nonPdf) return res.status(400).json({ error: `Every file must be a PDF (${nonPdf.originalname} is not)` });
-    const contractFile = req.files?.contract_file?.[0] || null;
-    if (contractFile && contractFile.mimetype !== 'application/pdf') {
-      return res.status(400).json({ error: `${contractFile.originalname} is not a PDF — only PDFs can be read.` });
-    }
+    // Agreements uploaded for this review alone — a contract, a PO, or both.
+    const contractFiles = [...(req.files?.contract_files || []), ...(req.files?.contract_file || [])];
+    const notPdf = contractFiles.find(f => f.mimetype !== 'application/pdf');
+    if (notPdf) return res.status(400).json({ error: `${notPdf.originalname} is not a PDF — only PDFs can be read.` });
 
     const projectId = req.body.project_id ? Number(req.body.project_id) : null;
-    const contractId = req.body.contract_id ? Number(req.body.contract_id) : null;
     const agreement = agreementRequested(req.body);
+    // The filed agreements chosen: contract_ids, a list, or contract_id, the single one a request from
+    // before several could be chosen sends.
+    const chosenIds = [
+      ...(projectId ? parseIdList(req.body.contract_ids) : []),
+      ...(req.body.contract_id ? [Number(req.body.contract_id)] : []),
+    ].filter((id, i, all) => all.indexOf(id) === i);
 
-    // Which agreement this invoice is checked against. A project has several — the
-    // architect's, the general contractor's — so the reviewer picks, and an architect's
-    // invoice is never measured against the contractor's terms. Falls back to the project's
-    // primary contract when nothing is chosen, which is what a one-contract project wants.
+    // Which agreements this invoice is checked against. A project has several — the architect's, the
+    // general contractor's, a PO beside a contract — so the reviewer picks, and an architect's
+    // invoice is never measured against the contractor's terms. A request that names none falls back
+    // to the project's primary contract, which is what a one-contract project wants.
     //
     // A contract_id sent empty is the PM choosing no contract at all — "check the maths only" — and
     // is honoured as that. The fallback is only for a request that does not mention one.
-    let contractTerms = null;
-    let contractRow = null;
+    const SELECT = `SELECT id, label, file_name, terms, doc_type, terms_status, file_key, file_blob, party, party_role
+                    FROM project_contracts`;
+    let contractRows = [];
     const chosenNone = agreement === null
-      || (agreement === undefined && 'contract_id' in req.body && !req.body.contract_id)
-      || !!contractFile;
+      || (agreement === undefined && 'contract_id' in req.body && !req.body.contract_id && chosenIds.length === 0);
     if (projectId && !chosenNone) {
-      contractRow = contractId
-        ? db.prepare(`
-            SELECT id, label, file_name, terms, doc_type, terms_status, file_key, file_blob,
-                   party, party_role
-            FROM project_contracts
-            WHERE id = ? AND project_id = ? AND doc_type IN (${GOVERNING_SQL})
-          `).get(contractId, projectId)
-        : db.prepare(`
-            SELECT id, label, file_name, terms, doc_type, terms_status, file_key, file_blob,
-                   party, party_role
-            FROM project_contracts
-            WHERE project_id = ? AND doc_type IN (${GOVERNING_SQL})
-            ORDER BY is_primary DESC, created_at ASC LIMIT 1
-          `).get(projectId);
-
-      // A contract id that is not this project's is a mistake worth surfacing, not silently
-      // swapping for a different contract.
-      if (contractId && !contractRow) {
-        return res.status(400).json({ error: 'That contract is not on this project.' });
+      if (chosenIds.length) {
+        const find = db.prepare(`${SELECT} WHERE id = ? AND project_id = ? AND doc_type IN (${GOVERNING_SQL})`);
+        contractRows = chosenIds.map(id => find.get(id, projectId));
+        // An id that is not this project's is a mistake worth surfacing, not something to skip.
+        if (contractRows.some(r => !r)) return res.status(400).json({ error: 'That contract is not on this project.' });
+      } else if (contractFiles.length === 0) {
+        const primary = db.prepare(`${SELECT} WHERE project_id = ? AND doc_type IN (${GOVERNING_SQL})
+                                    ORDER BY is_primary DESC, created_at ASC LIMIT 1`).get(projectId);
+        if (primary) contractRows = [primary];
       }
     }
-    if (agreement && !contractRow && !contractFile) {
+    if (agreement && contractRows.length === 0 && contractFiles.length === 0) {
       return res.status(400).json({ error: `Choose the ${agreement}'s contract or PO, or upload it.` });
     }
-    const contractLabel = contractRow
-      ? (contractRow.label || contractRow.file_name)
-      : contractFile ? contractFile.originalname.replace(/\.pdf$/i, '') : null;
+    const chosen = contractRows.length > 0 || contractFiles.length > 0;
+    const labels = [
+      ...contractRows.map(r => r.label || r.file_name),
+      ...contractFiles.map(f => f.originalname.replace(/\.pdf$/i, '')),
+    ];
+    const contractLabel = labels.length ? labels.join(' + ') : null;
 
     // The reading does not happen on this request. Everything above is cheap and has already
     // answered where it needed to; what follows takes as long as the package is long, held the
@@ -119,18 +131,28 @@ router.post('/', upload.fields([{ name: 'invoices', maxCount: 100 }, { name: 'co
         // Read on first use rather than at upload, so filing a contract costs nothing and a
         // contract nobody invoices against is never read. Either way the terms come with where each
         // rule is written, so a finding can cite it. One uploaded for this review alone is read now
-        // and not kept — keeping it is what saving it to Shared Documents is for.
-        if (contractRow) contractTerms = await ensureTermsWithClauses(contractRow);
-        else if (contractFile) {
+        // and not kept — keeping it is what saving it to Shared Documents is for. All of them at once:
+        // each is independent of the others.
+        const readUploaded = async f => {
           const [{ usage, ...terms }, clauses] = await Promise.all([
-            extractContractTerms(contractFile.buffer),
-            readContractClauses(contractFile.buffer).then(r => r.clauses).catch(err => {
+            extractContractTerms(f.buffer),
+            readContractClauses(f.buffer).then(r => r.clauses).catch(err => {
               console.error('[contract clauses] uploaded contract failed:', err.message);
               return null;
             }),
           ]);
-          contractTerms = { ...terms, clauses };
-        }
+          return { ...terms, clauses };
+        };
+        const agreements = await Promise.all([
+          ...contractRows.map(async r => ({
+            id: r.id, label: r.label || r.file_name, docType: r.doc_type, terms: await ensureTermsWithClauses(r),
+          })),
+          ...contractFiles.map(async f => ({
+            id: null, label: f.originalname.replace(/\.pdf$/i, ''), docType: null, terms: await readUploaded(f),
+          })),
+        ]);
+        // Several agreements are checked as one set of terms; see lib/agreementSet.js.
+        const { terms: contractTerms, valueFrom } = combineAgreements(agreements);
 
         const { invoice, observations } = await analyzeInvoices({
           invoiceBuffers: files.map(f => f.buffer),
@@ -143,11 +165,12 @@ router.post('/', upload.fields([{ name: 'invoices', maxCount: 100 }, { name: 'co
             ? { ...c, clause: clauseFor(c, contractTerms) } : c));
         }
 
-        const chosen = !!(contractRow || contractFile);
         const data = {
           invoice, contractTerms,
           duplicates: earlierReviewsOf(req, projectId, invoice),
-          billing: chosen ? billedAgainst(req, contractRow?.id ?? null, contractTerms, invoice) : null,
+          // Billed so far is counted against the agreement whose value is used — the PO, where one
+          // states it.
+          billing: chosen && valueFrom ? billedAgainst(req, valueFrom.id, contractTerms, invoice) : null,
         };
         const results = runInvoiceChecks(data, {
           groups: ['math', 'backup', 'history', ...(chosen ? ['contract'] : [])],
@@ -167,9 +190,10 @@ router.post('/', upload.fields([{ name: 'invoices', maxCount: 100 }, { name: 'co
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           req.orgId, projectId,
-          contractRow?.id ?? null,
+          // The agreement the billing is counted against, so the next invoice adds to the same total.
+          (valueFrom?.id ?? contractRows[0]?.id) ?? null,
           contractLabel,
-          JSON.stringify({ agreement: agreement || null, contract: chosen }),
+          JSON.stringify({ agreement: agreement || null, contract: chosen, agreementIds: contractRows.map(r => r.id) }),
           invoice.vendor || null,
           invoice.invoiceNumber || null,
           invoice.invoiceDate || null,

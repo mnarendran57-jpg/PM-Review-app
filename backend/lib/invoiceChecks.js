@@ -211,19 +211,22 @@ const CHECKS = [
     id: 'PO1', group: 'contract', category: 'Purchase Order', critical: false,
     description: 'Does the PO number on the invoice match the agreement it is checked against?',
     run: ({ invoice, contractTerms }) => {
+      // Checked against several agreements, the invoice may cite any of their numbers.
+      const numbers = (contractTerms?.commitments?.length ? contractTerms.commitments : [contractTerms?.commitment]).filter(Boolean);
       const onInvoice = normalizeRef(invoice.poNumber);
-      const onAgreement = normalizeRef(contractTerms?.commitment);
-      if (!onInvoice || !onAgreement) {
+      const onAgreements = numbers.map(normalizeRef).filter(Boolean);
+      if (!onInvoice || onAgreements.length === 0) {
         return skip('Skipped — the invoice or the agreement does not print a PO or commitment number to compare.');
       }
-      if (onInvoice === onAgreement || onInvoice.endsWith(onAgreement) || onAgreement.endsWith(onInvoice)) {
+      if (onAgreements.some(a => onInvoice === a || onInvoice.endsWith(a) || a.endsWith(onInvoice))) {
         return pass(`Yes — the invoice cites ${invoice.poNumber}, the number on the agreement it is checked against.`);
       }
+      const named = numbers.join(' or ');
       return {
-        ...fail(`The invoice cites PO ${invoice.poNumber}, but the agreement it is being checked against is ${contractTerms.commitment}. Confirm it is billed against the right agreement before paying.`),
+        ...fail(`The invoice cites PO ${invoice.poNumber}, but the agreement it is being checked against is ${named}. Confirm it is billed against the right agreement before paying.`),
         figures: {
           kind: 'deviation',
-          rows: [{ item: `PO ${invoice.poNumber} on the invoice`, amount: null, rule: `The agreement chosen is ${contractTerms.commitment}`, basis: null }],
+          rows: [{ item: `PO ${invoice.poNumber} on the invoice`, amount: null, rule: `The agreement chosen is ${named}`, basis: null }],
         },
       };
     }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   ReceiptPercentIcon, SparklesIcon, ArrowDownTrayIcon, TrashIcon, ClockIcon, CheckIcon,
 } from '@heroicons/react/24/outline';
@@ -7,7 +7,7 @@ import { useProject } from '../context/ProjectContext';
 import PageHeader from '../components/PageHeader';
 import MultiFileDrop from '../components/MultiFileDrop';
 import DocList from '../components/DocList';
-import AddedDocuments, { useAddedDocuments, ONCE, CONTRACT_CATEGORIES } from '../components/AddedDocuments';
+import AddedDocuments, { useAddedDocuments, CONTRACT_CATEGORIES } from '../components/AddedDocuments';
 import {
   money, VerdictBanner, CountTiles, Section, CompareFinding, DeviationFinding, ListFinding,
   CoasterNotes, PassedLine,
@@ -130,9 +130,11 @@ export default function InvoiceReview() {
   const [check, setCheck] = useState('');
   // Every contract and PO on the project, and which one this invoice is being checked against.
   const [contracts, setContracts] = useState(null);
-  const [contractId, setContractId] = useState('');
-  const [contractFiled, setContractFiled] = useState([]);
-  const contractAdd = useAddedDocuments(routeProjectId, contractFiled, setContractFiled);
+  // As many as the invoice is billed under — a contract for its terms and a PO for its amount, say.
+  const [contractIds, setContractIds] = useState([]);
+  const contractAdd = useAddedDocuments(routeProjectId, contractIds.map(Number), ids => setContractIds(ids.map(String)));
+  // Which choice the suggestion below was last made for, so it is made once and an untick sticks.
+  const suggestedFor = useRef('');
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);   // { id, report }
@@ -155,30 +157,29 @@ export default function InvoiceReview() {
   useEffect(() => { loadContracts(); }, [routeProjectId, contractAdd.listVersion]);
 
   // The agreement suggested for the choice made: the architect's-looking one for the architect, the
-  // project default (or the first that is not the architect's) for the contractor. Only when nothing
-  // suitable is ticked already, so a PM's own pick is never moved.
+  // project default (or the first that is not the architect's) for the contractor. Made once per
+  // choice, so whatever the PM ticks or unticks after it stays as they left it.
   useEffect(() => {
-    if (!contracts || !['architect', 'contractor'].includes(check)) return;
-    setContractId(prev => {
-      if (prev && contracts.some(c => String(c.id) === String(prev))) return prev;
-      const pick = check === 'architect'
-        ? contracts.find(looksArchitect)
-        : (contracts.find(c => c.is_primary && !looksArchitect(c)) || contracts.find(c => !looksArchitect(c)));
-      return pick ? String(pick.id) : '';
-    });
+    if (!contracts || !['architect', 'contractor'].includes(check) || suggestedFor.current === check) return;
+    suggestedFor.current = check;
+    const pick = check === 'architect'
+      ? contracts.find(looksArchitect)
+      : (contracts.find(c => c.is_primary && !looksArchitect(c)) || contracts.find(c => !looksArchitect(c)));
+    setContractIds(pick ? [String(pick.id)] : []);
   }, [contracts, check]);
 
   const choose = key => {
-    // Switching whose agreement it is clears the one ticked for the other.
-    if (key !== check) setContractId('');
+    // Switching whose agreement it is clears the ones ticked for the other.
+    if (key !== check) { setContractIds([]); suggestedFor.current = ''; }
     setCheck(prev => (prev === key ? '' : key));
   };
+  const toggleContract = id => setContractIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
   const wantsAgreement = check === 'architect' || check === 'contractor';
-  const uploadedContract = contractAdd.added[0] || null;
+  const chosenCount = contractIds.length + contractAdd.added.length;
   const whose = check === 'architect' ? "architect's" : "contractor's";
   const missing = files.length === 0 ? 'Upload the vendor invoice PDF first.'
     : !check ? 'Choose what to check it against.'
-      : wantsAgreement && !contractId && !uploadedContract ? `Choose the ${whose} contract or PO, or upload it.`
+      : wantsAgreement && chosenCount === 0 ? `Choose the ${whose} contract or PO, or upload it.`
         : null;
 
   const handleAnalyze = async () => {
@@ -190,16 +191,10 @@ export default function InvoiceReview() {
       if (routeProjectId) fd.append('project_id', routeProjectId);
       fd.append('checks', JSON.stringify(wantsAgreement ? [check] : []));
       if (wantsAgreement) {
-        if (uploadedContract && uploadedContract.where !== ONCE) {
-          // Filed in Shared Documents first, then checked against like any filed agreement.
-          const ids = await contractAdd.fileShared();
-          const filed = ids[ids.length - 1];
-          fd.append('contract_id', filed ? String(filed) : '');
-        } else if (uploadedContract) {
-          fd.append('contract_file', uploadedContract.file);
-        } else {
-          fd.append('contract_id', contractId);
-        }
+        // Every one ticked, plus every one uploaded: those saved to Shared Documents are filed first
+        // and checked against like any filed agreement, the rest are read for this review alone.
+        fd.append('contract_ids', JSON.stringify(await contractAdd.fileShared()));
+        for (const once of contractAdd.onceFiles) fd.append('contract_files', once);
       } else {
         // Sent empty, so the server does not fall back to the project's default contract.
         fd.append('contract_id', '');
@@ -228,7 +223,10 @@ export default function InvoiceReview() {
     loadHistory();
   };
 
-  const reset = () => { setFiles([]); setCheck(''); contractAdd.setAdded([]); setResult(null); setError(''); };
+  const reset = () => {
+    setFiles([]); setCheck(''); setContractIds([]); suggestedFor.current = '';
+    contractAdd.setAdded([]); setResult(null); setError('');
+  };
   const active = result || viewing;
   const busy = analyzing || contractAdd.filing;
 
@@ -290,21 +288,23 @@ export default function InvoiceReview() {
 
             {wantsAgreement && (
               <div className="p-4 rounded-xl space-y-3" style={{ background: '#fbfdff', border: '1px solid #dbeafe' }}>
-                <p className="text-[12px] font-bold text-gray-900">The {whose} contract or PO</p>
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="text-[12px] font-bold text-gray-900">The {whose} contract or PO</p>
+                  {chosenCount > 0 && <span className="text-[11px] font-semibold" style={{ color: '#1d4ed8' }}>{chosenCount} chosen</span>}
+                </div>
+                <p className="text-[11px] text-gray-400 -mt-1.5">
+                  Choose as many as it is billed under — the contract for its terms, the PO for its amount.
+                </p>
                 {routeProjectId && contracts?.length !== 0 && (
-                  <div style={{ opacity: uploadedContract ? 0.5 : 1 }}>
+                  <div>
                     <p className="text-[11px] text-gray-400 mb-1.5">From the project's Shared Documents:</p>
-                    <DocList docs={contracts} selectedIds={contractId ? [contractId] : []} type="radio"
-                      onToggle={id => setContractId(id)} />
+                    <DocList docs={contracts} selectedIds={contractIds} onToggle={toggleContract} />
                   </div>
                 )}
-                <AddedDocuments items={contractAdd.added} onChange={contractAdd.setAdded} single
-                  noun="invoice" label={contracts?.length ? 'Or upload one' : 'Upload it'}
-                  hint={`the ${whose} agreement or purchase order this invoice is billed under`}
+                <AddedDocuments items={contractAdd.added} onChange={contractAdd.setAdded}
+                  noun="invoice" label={contracts?.length ? 'And upload more' : 'Upload them'}
+                  hint={`the ${whose} contract, purchase order, or both`}
                   categories={routeProjectId ? CONTRACT_CATEGORIES : []} disabled={busy} />
-                {uploadedContract && contracts?.length > 0 && (
-                  <p className="text-[11px]" style={{ color: '#1d4ed8' }}>The uploaded one is used instead of the one ticked above.</p>
-                )}
               </div>
             )}
 

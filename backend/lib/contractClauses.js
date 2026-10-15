@@ -235,12 +235,14 @@ function forbiddenCosts(terms) {
 // word like "notes" taken from the shape of the terms it was given.
 const sectionLike = v => (v && /\d/.test(String(v)) ? String(v) : null);
 
-// "Section 7.4 Markup on Changes, page 12" — however much of that the contract printed.
+// "Section 7.4 Markup on Changes, page 12" — however much of that the contract printed — led by the
+// document it is in when the finding was checked against more than one ("PO 253016-004 · Section 4.2").
 function citeLabel(clause) {
   if (!clause) return null;
   const where = [clause.section, clause.heading].filter(Boolean).join(' ');
   const parts = [where, clause.page ? `page ${clause.page}` : null].filter(Boolean);
-  return parts.length ? parts.join(', ') : null;
+  const at = parts.length ? parts.join(', ') : null;
+  return [clause.source, at].filter(Boolean).join(' · ') || null;
 }
 
 // The contract clause behind one of Coaster's own flags. Coaster is asked to copy the wording from
@@ -255,8 +257,8 @@ function clauseFor(concern, terms) {
   const all = [c.tax, c.markups, c.allowances, c.contractSum, c.reimbursables, c.rates, ...(c.costRules || [])].filter(Boolean);
   const found = all.find(cl => squash(cl.quote).includes(quote) || quote.includes(squash(cl.quote)));
   if (!found) return null;
-  const { section, heading, page, quote: q } = found;
-  return { section, heading, page, quote: q };
+  const { section, heading, page, quote: q, source } = found;
+  return { section, heading, page, quote: q, ...(source ? { source } : {}) };
 }
 
 module.exports = { readContractClauses, citeLabel, clauseFor, forbiddenCosts, sectionLike, tidy, combine };

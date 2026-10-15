@@ -123,9 +123,11 @@ export function CompareFinding({ finding, before, shownLabel }) {
 
 // Where in the contract a finding comes from: the section and page, then its own words — so a
 // reviewer can turn to it, and hand it to the contractor, without hunting.
+// Led by the document it is in when the review was checked against more than one.
 export function citeLabel(clause) {
   const where = [clause.section, clause.heading].filter(Boolean).join(' ');
-  return [where, clause.page ? `page ${clause.page}` : null].filter(Boolean).join(', ');
+  const at = [where, clause.page ? `page ${clause.page}` : null].filter(Boolean).join(', ');
+  return [clause.source, at].filter(Boolean).join(' · ');
 }
 
 function ContractCite({ clause }) {
