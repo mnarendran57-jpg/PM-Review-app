@@ -141,6 +141,26 @@ async function invoicePdf() {
     assert.strictEqual(citeLabel(rows(runInvoiceChecks({ invoice, contractTerms: one, duplicates: [] }), 'T1')[0].clause), 'Article 11.5 Taxes, page 6');
   });
 
+  await check('a long document name wraps or is shortened, and nothing runs off the page', async () => {
+    const long = 'Science Hall HVAC Contract.pdf + HVAC Replacement Science Hall Spring Branch Independent School District Purchase Order 2026-0417';
+    const r = buildInvoiceReport({
+      data: { invoice, contractTerms: terms }, results, observations: {},
+      contractChosen: true, contractLabel: long, agreement: 'contractor',
+    });
+    const pdf = await renderInvoiceReportPdf({ report: r, sources: [
+      { name: `${long}.pdf`, buffer: await invoicePdf() }, { name: 'Receipts bundle.pdf', buffer: await invoicePdf() },
+    ] });
+    const { eachPage } = require('../lib/pdfTextLayer');
+    const over = await eachPage(pdf, async page => {
+      const width = page.view[2];
+      const c = await page.getTextContent();
+      return c.items.filter(i => i.str.trim() && i.transform[4] + i.width > width - 12).map(i => i.str);
+    });
+    assert.deepStrictEqual(over.flat(), [], `text past the right margin: ${JSON.stringify(over.flat())}`);
+    const text = (await eachPage(pdf, async page => (await page.getTextContent()).items.map(i => i.str).join(' '))).join(' ');
+    assert.ok(text.includes('Purchase Order 2026-0417'), 'the whole name is in the heading, wrapped');
+  });
+
   console.log(`\n${failed === 0 ? 'All' : ''} ${passed} check${passed === 1 ? '' : 's'} passed`
     + `${failed ? `, ${failed} FAILED` : '.'}`);
   process.exit(failed === 0 ? 0 : 1);

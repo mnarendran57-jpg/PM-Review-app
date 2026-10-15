@@ -1,6 +1,7 @@
 const { PDFDocument, StandardFonts, rgb, degrees, radians } = require('pdf-lib');
 const { eachPage } = require('./pdfTextLayer');
 const { toWinAnsi, wrapLine } = require('./pdfGen');
+const { fitText } = require('./reviewPdfKit');
 
 // A document someone sent in — a change order, an invoice — marked up with what its review found.
 //
@@ -312,11 +313,8 @@ async function drawMarkedPages(target, { sources, marks, heading, noun = 'docume
     page.drawRectangle({ x: 0, y: view.vh, width: view.vw + SIDEBAR, height: BAND, color: WHITE });
     page.drawLine({ start: { x: 0, y: view.vh }, end: { x: view.vw + SIDEBAR, y: view.vh }, thickness: 0.6, color: RULE });
 
-    page.drawText(toWinAnsi(heading), { x: 16, y: view.vh + BAND - 18, size: 11, font: bold, color: INK });
-    const of = docs.length > 1 ? (docs[where.src].name || `document ${where.src + 1}`) : `the ${noun}`;
-    page.drawText(toWinAnsi(`Page ${where.page + 1} of ${of}  ·  ${n + 1} of ${order.length} marked`),
-      { x: 16, y: view.vh + BAND - 32, size: 8, font, color: GREY });
-    // The key: what each colour means, for the colours this review uses.
+    // The key: what each colour means, for the colours this review uses. Drawn first, so the heading
+    // beside it knows how much room it has.
     let kx = view.vw + SIDEBAR - 16;
     for (const tone of ['indigo', 'amber', 'red'].filter(t => marks.some(m => m.tone === t))) {
       const label = TONES[tone].label;
@@ -327,6 +325,13 @@ async function drawMarkedPages(target, { sources, marks, heading, noun = 'docume
       page.drawCircle({ x: kx + 4, y: view.vh + BAND - 23.5, size: 4, color: TONES[tone].ink });
       kx -= 14;
     }
+    // The heading and the line under it name documents, whose names can be as long as their files'.
+    // Each keeps to one line, short of the key.
+    const room = kx - 16 - 12;
+    page.drawText(fitText(toWinAnsi(heading), bold, 11, room), { x: 16, y: view.vh + BAND - 18, size: 11, font: bold, color: INK });
+    const of = docs.length > 1 ? (docs[where.src].name || `document ${where.src + 1}`) : `the ${noun}`;
+    page.drawText(fitText(toWinAnsi(`Page ${where.page + 1} of ${of}  ·  ${n + 1} of ${order.length} marked`), font, 8, room),
+      { x: 16, y: view.vh + BAND - 32, size: 8, font, color: GREY });
 
     const list = byPage.get(pageIndex);
     // Marks that share a spot share one oval, drawn in the most serious of their colours, with their

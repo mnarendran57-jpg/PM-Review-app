@@ -24,6 +24,15 @@ const TONES = {
 };
 const PAD = 6;
 
+// A line that must stay on one line, shortened at a word with an ellipsis when it would not fit.
+function fitText(str, f, size, width) {
+  if (f.widthOfTextAtSize(str, size) <= width) return str;
+  let cut = str;
+  while (cut.length > 1 && f.widthOfTextAtSize(`${cut}...`, size) > width) cut = cut.slice(0, -1);
+  const atWord = cut.replace(/\s+\S*$/, '');
+  return `${atWord.length > cut.length / 2 ? atWord : cut}...`;
+}
+
 // `kind` is the report's name ("Change Order Review"), `name` what this one is about. Both appear in
 // the running head from the second page on.
 async function createReviewPdf({ kind, name }) {
@@ -39,7 +48,8 @@ async function createReviewPdf({ kind, name }) {
     y = PAGE_HEIGHT - 46;
     if (pdfDoc.getPageCount() > 1) {
       page.drawText(toWinAnsi(kind), { x: MARGIN, y: PAGE_HEIGHT - 34, size: 8, font, color: GREY });
-      const label = toWinAnsi(name).slice(0, 90);
+      // As much of the name as fits beside the report's kind, shortened with an ellipsis after that.
+      const label = fitText(toWinAnsi(name), font, 8, CONTENT_WIDTH - font.widthOfTextAtSize(toWinAnsi(kind), 8) - 24);
       page.drawText(label, { x: PAGE_WIDTH - MARGIN - font.widthOfTextAtSize(label, 8), y: PAGE_HEIGHT - 34, size: 8, font, color: GREY });
       y = PAGE_HEIGHT - 54;
     }
@@ -91,15 +101,23 @@ async function createReviewPdf({ kind, name }) {
 
   // A section heading with its count beside it. Enough room is kept for the heading and the first
   // lines under it, so a heading is never left alone at the foot of a page.
+  //
+  // A heading names the document a section was checked against, and a document's name can be as long
+  // as its file name — two of them joined, when an invoice is checked against a contract and its PO.
+  // So it wraps, with the count after its last line, rather than running off the page.
   const heading = (title, count, tone = 'grey') => {
-    ensure(80);
+    const label = count != null ? String(count) : null;
+    const badgeW = label ? bold.widthOfTextAtSize(label, 9) + 10 : 0;
+    const lines = wrapLine(toWinAnsi(title), bold, 11.5, CONTENT_WIDTH - (label ? badgeW + 8 : 0));
+    ensure(80 + (lines.length - 1) * 15);
     y -= 6;
-    page.drawText(toWinAnsi(title), { x: MARGIN, y, size: 11.5, font: bold, color: INK });
-    if (count != null) {
-      const label = String(count);
-      const w = bold.widthOfTextAtSize(label, 9) + 10;
-      const x = MARGIN + bold.widthOfTextAtSize(toWinAnsi(title), 11.5) + 8;
-      page.drawRectangle({ x, y: y - 3, width: w, height: 14, color: TONES[tone].fill });
+    lines.forEach((line, i) => {
+      if (i > 0) y -= 15;
+      page.drawText(line, { x: MARGIN, y, size: 11.5, font: bold, color: INK });
+    });
+    if (label) {
+      const x = MARGIN + bold.widthOfTextAtSize(lines[lines.length - 1], 11.5) + 8;
+      page.drawRectangle({ x, y: y - 3, width: badgeW, height: 14, color: TONES[tone].fill });
       page.drawText(label, { x: x + 5, y, size: 9, font: bold, color: TONES[tone].ink });
     }
     y -= 14;
@@ -112,17 +130,23 @@ async function createReviewPdf({ kind, name }) {
     if (checkedAgainst?.length) text(`Checked against ${checkedAgainst.join(', ')}.`, { size: 8.5, color: GREY, gapAfter: 10 });
   };
 
+  // The verdict on one line where it fits, and its second half on a line of its own where it does not.
   const verdictBanner = (v) => {
     const tone = TONES[v.tone];
-    ensure(40);
-    page.drawRectangle({ x: MARGIN, y: y - 22, width: CONTENT_WIDTH, height: 34, color: tone.fill });
-    page.drawRectangle({ x: MARGIN, y: y - 22, width: 4, height: 34, color: tone.ink });
-    page.drawText(toWinAnsi(v.headline), { x: MARGIN + 14, y: y - 4, size: 13, font: bold, color: tone.ink });
-    if (v.sub) {
-      const hx = MARGIN + 14 + bold.widthOfTextAtSize(toWinAnsi(v.headline), 13) + 6;
-      page.drawText(toWinAnsi(v.sub), { x: hx, y: y - 4, size: 10, font, color: tone.ink });
-    }
-    y -= 40;
+    const headline = toWinAnsi(v.headline);
+    const sub = v.sub ? toWinAnsi(v.sub) : null;
+    const room = CONTENT_WIDTH - 28;
+    const headW = bold.widthOfTextAtSize(headline, 13);
+    const together = !sub || headW + 6 + font.widthOfTextAtSize(sub, 10) <= room;
+    const subLines = sub && !together ? wrapLine(sub, font, 10, room) : [];
+    const height = 34 + subLines.length * 13;
+    ensure(height + 6);
+    page.drawRectangle({ x: MARGIN, y: y - height + 12, width: CONTENT_WIDTH, height, color: tone.fill });
+    page.drawRectangle({ x: MARGIN, y: y - height + 12, width: 4, height, color: tone.ink });
+    page.drawText(headline, { x: MARGIN + 14, y: y - 4, size: 13, font: bold, color: tone.ink });
+    if (sub && together) page.drawText(sub, { x: MARGIN + 14 + headW + 6, y: y - 4, size: 10, font, color: tone.ink });
+    subLines.forEach((line, i) => page.drawText(line, { x: MARGIN + 14, y: y - 18 - i * 13, size: 10, font, color: tone.ink }));
+    y -= height + 6;
   };
 
   // `toneOf(tile)` decides each tile's colour; a count of null is "not checked".
@@ -242,4 +266,4 @@ async function createReviewPdf({ kind, name }) {
   };
 }
 
-module.exports = { createReviewPdf, TONES };
+module.exports = { createReviewPdf, fitText, TONES };
