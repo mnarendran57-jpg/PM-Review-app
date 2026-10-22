@@ -12,6 +12,8 @@ import Login from './pages/Login';
 import InviteAccept from './pages/InviteAccept';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
+import Signup from './pages/Signup';
+import ConfirmEmail from './pages/ConfirmEmail';
 import { authApi, selectedOrg, selectedProgram } from './api';
 
 // The hierarchy is always Organization -> Program -> Project, so navigation mirrors it:
@@ -46,6 +48,8 @@ export default function App() {
       {/* Public for the same reason — someone locked out cannot sign in to get here. */}
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password/:token" element={<ResetPassword />} />
+      <Route path="/signup" element={<Signup />} />
+      <Route path="/confirm-email/:token" element={<ConfirmEmail />} />
       <Route
         path="/*"
         element={

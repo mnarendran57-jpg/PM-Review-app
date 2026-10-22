@@ -30,15 +30,17 @@ export function usePlanFeatures() {
   const orgId = selectedOrg.get()?.id ?? null;
   const [features, setFeatures] = useState(() => (orgId ? cached(orgId) : null));
   const [planName, setPlanName] = useState(null);
+  const [subscription, setSubscription] = useState(null);
 
   useEffect(() => {
     if (!orgId) { setFeatures(null); return; }
     let cancelled = false;
     adminApi.myPlan()
-      .then(({ features: list, planName: name }) => {
+      .then(({ features: list, planName: name, subscription: sub }) => {
         if (cancelled) return;
         setFeatures(list);
         setPlanName(name);
+        setSubscription(sub || null);
         remember(orgId, list);
       })
       .catch(() => { /* keep the cached answer; the server still enforces the real one */ });
@@ -48,6 +50,9 @@ export function usePlanFeatures() {
   return {
     features,
     planName,
+    // The free trial: { status: 'trial', daysLeft } while it runs, { status: 'trial-ended' } after,
+    // { status: null } for an organization from before sign-up. Null until known.
+    subscription,
     // Unknown plan renders everything: better to show a tool the server will refuse than to
     // hide one the customer is paying for.
     has: key => features == null || features.includes(key),

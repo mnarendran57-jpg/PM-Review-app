@@ -7,6 +7,7 @@ import { programsApi, authApi, selectedOrg, selectedProgram } from '../api';
 import Modal from '../components/Modal';
 import Breadcrumbs from '../components/Breadcrumbs';
 import GlobalSearch from '../components/GlobalSearch';
+import TrialBanner from '../components/TrialBanner';
 
 // Step two: the programs inside the chosen organization. An Org Admin sees every program;
 // everyone else sees only the ones holding a project they're actually on — so this list is
@@ -65,11 +66,11 @@ export default function ProgramSelect() {
   useEffect(() => {
     if (!org) { navigate('/organizations', { replace: true }); return; }
     load();
-    // Only admins may create programs, so the button is hidden otherwise. The server
+    // Admins and Contributors may create programs, so the button is hidden otherwise. The server
     // enforces this regardless.
     authApi.me().then(({ user: u, organizations }) => {
       const mine = (organizations || []).find(o => o.id === org.id);
-      setIsAdmin(u?.isPlatformAdmin || !!mine?.is_admin);
+      setIsAdmin(u?.isPlatformAdmin || !!mine?.is_admin || !!mine?.can_create);
       setOrgCount((organizations || []).length);
     }).catch(() => {});
   }, []);
@@ -108,8 +109,9 @@ export default function ProgramSelect() {
         <Breadcrumbs className="mb-4 -ml-1.5 animate-fade-up" />
 
         {/* Raised, so the results list opens over the cards below rather than underneath them. */}
-        <div className="mb-8 animate-fade-up relative" style={{ zIndex: 30 }}>
+        <div className="mb-8 animate-fade-up relative space-y-3" style={{ zIndex: 30 }}>
           <GlobalSearch wide />
+          <TrialBanner />
         </div>
 
         <div className="flex items-end justify-between mb-6 animate-fade-up">

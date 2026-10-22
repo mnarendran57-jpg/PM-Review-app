@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database');
 const access = require('../lib/access');
-const { requireOrg, requireOrgAdmin } = require('../middleware/auth');
+const { requireOrg, requireOrgAdmin, requireOrgWork } = require('../middleware/auth');
 
 // Programs group projects inside one Organization. Which programs a user sees follows the
 // access model: an Org Admin sees them all, everyone else sees only the programs holding a
@@ -18,7 +18,7 @@ router.get('/:id', requireOrg, (req, res) => {
   res.json(visible);
 });
 
-router.post('/', requireOrgAdmin, (req, res) => {
+router.post('/', requireOrgWork, (req, res) => {
   const name = String(req.body.name || '').trim();
   if (!name) return res.status(400).json({ error: 'Program name is required' });
 
@@ -32,7 +32,7 @@ router.post('/', requireOrgAdmin, (req, res) => {
   res.json({ id: result.lastInsertRowid, existed: false });
 });
 
-router.put('/:id', requireOrgAdmin, (req, res) => {
+router.put('/:id', requireOrgWork, (req, res) => {
   const row = db.prepare(`SELECT id FROM programs WHERE id=? AND org_id=?`).get(req.params.id, req.orgId);
   if (!row) return res.status(404).json({ error: 'Not found' });
   const name = String(req.body.name || '').trim();
@@ -49,7 +49,7 @@ router.put('/:id', requireOrgAdmin, (req, res) => {
 
 // Refused while projects remain — cascading them away would silently destroy their whole
 // review history. An organization also always keeps at least one program.
-router.delete('/:id', requireOrgAdmin, (req, res) => {
+router.delete('/:id', requireOrgWork, (req, res) => {
   const row = db.prepare(`SELECT id FROM programs WHERE id=? AND org_id=?`).get(req.params.id, req.orgId);
   if (!row) return res.status(404).json({ error: 'Not found' });
 

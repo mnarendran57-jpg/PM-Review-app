@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   UserGroupIcon, PlusIcon, PencilIcon, TrashIcon,
   BuildingOffice2Icon, CheckCircleIcon, EnvelopeIcon, XMarkIcon, RectangleGroupIcon,
+  UserPlusIcon, ShieldCheckIcon,
 } from '@heroicons/react/24/outline';
 import { adminApi, authApi, selectedOrg } from '../api';
 import PageHeader from '../components/PageHeader';
@@ -9,15 +10,18 @@ import Modal from '../components/Modal';
 import { useConfirm } from '../components/ConfirmDialog';
 import OrgSwitcher from '../components/OrgSwitcher';
 
-const ROLE_LABEL = { Admin: 'Administrator', Member: 'Member' };
+const ROLE_LABEL = { Admin: 'Administrator', Contributor: 'Contributor', Member: 'Member' };
 const ROLE_HELP = {
   Admin: 'Sees every program and project in this organization, and manages its people.',
+  Contributor: 'Sees every program and project, and can create them — but does not manage people.',
   Member: 'Sees only the projects they are added to individually.',
 };
 
 function RoleBadge({ role }) {
   const style = role === 'Admin'
     ? { background: 'rgba(37,99,235,0.1)', color: '#1d4ed8' }
+    : role === 'Contributor'
+      ? { background: 'rgba(5,150,105,0.1)', color: '#047857' }
     : role === 'admin'
       ? { background: 'rgba(37,99,235,0.1)', color: '#1d4ed8' }
       : { background: '#f1f5f9', color: '#64748b' };
@@ -38,7 +42,7 @@ function PersonModal({ person, onClose, onSaved, orgId, fixedRole }) {
   const editing = !!person;
   const [name, setName] = useState(person?.name || '');
   const [email, setEmail] = useState(person?.email || '');
-  const [role, setRole] = useState(fixedRole || (person?.role === 'Admin' ? 'Admin' : 'Member'));
+  const [role, setRole] = useState(fixedRole || (ROLE_LABEL[person?.role] ? person.role : 'Member'));
   const [status, setStatus] = useState(person?.status || 'Active');
   const [password, setPassword] = useState('');
   const [saving, setSaving] = useState(false);
@@ -102,6 +106,7 @@ function PersonModal({ person, onClose, onSaved, orgId, fixedRole }) {
           <label className="label">Role</label>
           <select className="input" value={role} onChange={e => setRole(e.target.value)}>
             <option value="Member">Member</option>
+            <option value="Contributor">Contributor</option>
             <option value="Admin">Administrator</option>
           </select>
           <p className="text-[11px] text-gray-400 mt-1">{ROLE_HELP[role]}</p>
@@ -451,6 +456,7 @@ function InviteModal({ onClose, onSent, orgId, fixedRole }) {
           <label className="label">Role</label>
           <select className="input" value={role} onChange={e => setRole(e.target.value)}>
             <option value="Member">Member</option>
+            <option value="Contributor">Contributor</option>
             <option value="Admin">Administrator</option>
           </select>
           <p className="text-[11px] text-gray-400 mt-1">{ROLE_HELP[role]}</p>
@@ -658,8 +664,28 @@ function OwnerTeam() {
   const [error, setError] = useState('');
   const [confirm, confirmDialog] = useConfirm();
 
-  const load = () => adminApi.listOrganizations().then(setOrgs).catch(() => setOrgs([]));
+  // People waiting to join a company. Coaster answers them while the company has no Administrator
+  // of its own — which is every company that signed itself up, until Coaster appoints one.
+  const [joinRequests, setJoinRequests] = useState(null);
+  const load = () => {
+    adminApi.listOrganizations().then(setOrgs).catch(() => setOrgs([]));
+    adminApi.listAllJoinRequests().then(setJoinRequests).catch(() => setJoinRequests([]));
+  };
   useEffect(() => { load(); }, []);
+
+  const decideJoin = async (request, approve) => {
+    if (!approve) {
+      const ok = await confirm({
+        title: 'Decline request',
+        message: `Decline ${request.name || request.email}'s request to join ${request.org_name}? They'll be told by email.`,
+        confirmLabel: 'Decline',
+      });
+      if (!ok) return;
+    }
+    setError('');
+    try { await adminApi.decideJoinRequest(request.id, approve, request.org_id); load(); }
+    catch (e) { setError(e?.response?.data?.error || 'Could not answer this request.'); }
+  };
 
   const totalAdmins = (orgs || []).reduce((a, o) => a + (o.admins?.length || 0), 0);
   const totalPeople = (orgs || []).reduce((a, o) => a + (o.members?.length || 0), 0);
@@ -697,6 +723,7 @@ function OwnerTeam() {
 
       <div className="grid grid-cols-5 gap-6 items-start">
         <div className="col-span-3 space-y-3">
+          <JoinRequests requests={joinRequests} onDecide={decideJoin} acrossCompanies />
           {orgs == null && <div className="card px-5 py-8 text-center text-sm text-gray-400">Loading…</div>}
           {orgs?.length === 0 && (
             <div className="card px-5 py-8 text-center text-sm text-gray-400">
@@ -754,9 +781,106 @@ function OwnerTeam() {
 // An organization's own administrator. Their people, and nothing else — no other customer exists
 // as far as this page is concerned, and the server enforces the same boundary on every write.
 // ---------------------------------------------------------------------------------------------
+// People from this company's email domain who signed up and are waiting to be let in. Approving
+// adds them as a Member — they then see only the projects they are given, as for anyone.
+// `acrossCompanies`: Coaster's own list, which names each person's company.
+function JoinRequests({ requests, onDecide, acrossCompanies = false }) {
+  if (!requests?.length) return null;
+  return (
+    <div className="card overflow-hidden" style={{ border: '1px solid #bfdbfe' }}>
+      <div className="px-5 py-4 flex items-center gap-2" style={{ borderBottom: '1px solid #f3f4f6', background: '#eff6ff' }}>
+        <UserPlusIcon className="w-4 h-4" style={{ color: '#2563eb' }} />
+        <h2 className="text-sm font-semibold text-gray-900">Asking to join</h2>
+        <span className="px-2 py-0.5 rounded-full text-xs font-semibold" style={{ background: '#dbeafe', color: '#1d4ed8' }}>
+          {requests.length}
+        </span>
+      </div>
+      <p className="px-5 pt-3 text-[11px] text-gray-500">
+        {acrossCompanies
+          ? "They signed up with a company's email address. Companies with no administrator of their own are answered here; they can't see anything until approved."
+          : "They signed up with your company's email address. They can't see anything until you approve them."}
+      </p>
+      <div className="divide-y" style={{ borderColor: '#f3f4f6' }}>
+        {requests.map(r => (
+          <div key={r.id} className="px-5 py-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-900 truncate">{r.name || r.email}</p>
+              <p className="text-xs text-gray-400 truncate">
+                {acrossCompanies && <span className="font-medium text-gray-600">{r.org_name} · </span>}
+                {r.email} · asked {new Date(`${r.created_at.replace(' ', 'T')}Z`).toLocaleDateString()}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button className="btn-primary px-3 py-1 text-xs" onClick={() => onDecide(r, true)}>Approve</button>
+              <button className="btn-secondary px-3 py-1 text-xs" onClick={() => onDecide(r, false)}>Decline</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// The audit record, in words. Read-only: nothing in Coaster can change or remove an entry.
+const ACTION_WORDS = {
+  signup: 'Signed up',
+  signup_refused: 'Sign-up refused',
+  signup_existing_account: 'Tried to sign up again',
+  email_confirmed: 'Confirmed their email',
+  company_created: 'Created the company on Coaster',
+  join_requested: 'Asked to join',
+  join_approved: 'Approved a request to join',
+  join_declined: 'Declined a request to join',
+  login: 'Signed in',
+  login_failed: 'Failed sign-in',
+  password_reset_requested: 'Asked to reset their password',
+  password_reset: 'Reset their password',
+};
+
+function ActivityLog({ entries }) {
+  const [showAll, setShowAll] = useState(false);
+  if (!entries?.length) return null;
+  const shown = showAll ? entries : entries.slice(0, 12);
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-5 py-4 flex items-center gap-2" style={{ borderBottom: '1px solid #f3f4f6', background: '#fafbfc' }}>
+        <ShieldCheckIcon className="w-4 h-4 text-gray-400" />
+        <h2 className="text-sm font-semibold text-gray-900">Account activity</h2>
+        <span className="text-[11px] text-gray-400 ml-auto">A permanent record — entries can't be edited or removed</span>
+      </div>
+      <div className="divide-y" style={{ borderColor: '#f3f4f6' }}>
+        {shown.map(e => (
+          <div key={e.id} className="px-5 py-2.5 flex items-baseline justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[13px] text-gray-800 truncate">
+                <span className="font-medium" style={{ color: e.action === 'login_failed' || e.action === 'signup_refused' ? '#b91c1c' : undefined }}>
+                  {ACTION_WORDS[e.action] || e.action}
+                </span>
+                {' — '}{e.user_name || e.email || 'unknown'}
+                {e.detail?.person ? ` (${e.detail.person})` : ''}
+              </p>
+              {e.detail?.reason && <p className="text-[11px] text-gray-400 truncate">{e.detail.reason}</p>}
+            </div>
+            <p className="text-[11px] text-gray-400 flex-shrink-0 tabular-nums">
+              {new Date(`${e.at.replace(' ', 'T')}Z`).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+            </p>
+          </div>
+        ))}
+      </div>
+      {entries.length > 12 && (
+        <button className="w-full py-2 text-xs text-blue-600 hover:bg-gray-50" onClick={() => setShowAll(v => !v)}>
+          {showAll ? 'Show fewer' : `Show all ${entries.length}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function OrgTeam({ me }) {
   const [people, setPeople] = useState(null);
   const [invites, setInvites] = useState(null);
+  const [joinRequests, setJoinRequests] = useState(null);
+  const [activity, setActivity] = useState(null);
   const [editing, setEditing] = useState(undefined);
   const [accessFor, setAccessFor] = useState(null);
   const [inviting, setInviting] = useState(false);
@@ -766,8 +890,24 @@ function OrgTeam({ me }) {
   const load = () => {
     adminApi.listMembers().then(setPeople).catch(() => setPeople([]));
     adminApi.listInvitations().then(setInvites).catch(() => setInvites([]));
+    adminApi.listJoinRequests().then(setJoinRequests).catch(() => setJoinRequests([]));
+    adminApi.auditLog().then(setActivity).catch(() => setActivity([]));
   };
   useEffect(() => { load(); }, []);
+
+  const decideJoin = async (request, approve) => {
+    if (!approve) {
+      const ok = await confirm({
+        title: 'Decline request',
+        message: `Decline ${request.name || request.email}'s request to join? They'll be told by email.`,
+        confirmLabel: 'Decline',
+      });
+      if (!ok) return;
+    }
+    setError('');
+    try { await adminApi.decideJoinRequest(request.id, approve); load(); }
+    catch (e) { setError(e?.response?.data?.error || 'Could not answer this request.'); }
+  };
 
   const revokeInvite = async (inv) => {
     const ok = await confirm({
@@ -932,6 +1072,8 @@ function OrgTeam({ me }) {
             </div>
           </div>
 
+          <JoinRequests requests={joinRequests} onDecide={decideJoin} />
+
           {invites?.length > 0 && (
             <div className="card overflow-hidden">
               <div className="px-5 py-4 flex items-center gap-2" style={{ borderBottom: '1px solid #f3f4f6', background: '#fafbfc' }}>
@@ -964,6 +1106,8 @@ function OrgTeam({ me }) {
               </div>
             </div>
           )}
+
+          <ActivityLog entries={activity} />
         </div>
 
         <div className="col-span-2 space-y-4">

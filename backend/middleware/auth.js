@@ -37,6 +37,7 @@ function requireAuth(req, res, next) {
     if (Number.isFinite(orgId) && access.isInOrg(user, orgId)) {
       req.orgId = orgId;
       req.isOrgAdmin = access.isOrgAdmin(user, orgId);
+      req.worksAcrossOrg = req.isOrgAdmin || access.worksAcrossOrg(user, orgId);
     }
   }
   next();
@@ -61,6 +62,18 @@ function requireOrgAdmin(req, res, next) {
   next();
 }
 
+// Creating and changing the organization's programs, projects and templates — the work, not the
+// people. An Admin may, and so may a Contributor (see lib/access.js).
+function requireOrgWork(req, res, next) {
+  if (!req.orgId) {
+    return res.status(400).json({ error: 'No organization selected — choose one and try again.' });
+  }
+  if (!req.worksAcrossOrg) {
+    return res.status(403).json({ error: 'You do not have permission to do that' });
+  }
+  next();
+}
+
 // Vendor-only areas (creating customer organizations).
 function requirePlatformAdmin(req, res, next) {
   if (!access.isPlatformAdmin(req.user)) {
@@ -76,5 +89,5 @@ function programInOrg(programId, orgId) {
 }
 
 module.exports = {
-  requireAuth, requireOrg, requireOrgAdmin, requirePlatformAdmin, programInOrg,
+  requireAuth, requireOrg, requireOrgAdmin, requireOrgWork, requirePlatformAdmin, programInOrg,
 };

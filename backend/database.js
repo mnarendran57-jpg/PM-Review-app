@@ -935,6 +935,92 @@ if (!columnsOf('organizations').includes('plan_features')) {
   db.exec(`ALTER TABLE organizations ADD COLUMN plan_features TEXT`);
 }
 
+// --- Public sign-up (October 2026) ------------------------------------------------------------
+//
+// Until now every account was made by an administrator. Opening Coaster to the public adds: an
+// email address that must be confirmed before the account works, companies recognised by their
+// email domain, a free trial per company, and a record of who did what with an account.
+//
+// Every column here is added with no value on existing rows, and every rule reads a missing value
+// as "this predates sign-up": existing users are not asked to confirm anything, and existing
+// organizations have no trial clock and lose nothing.
+
+// When the person proved they own the address. NULL on an account made before sign-up existed —
+// an administrator vouched for those — and on one signed up but not yet confirmed, which is the
+// only kind whose status is 'Unverified'.
+if (!columnsOf('users').includes('email_verified_at')) {
+  db.exec(`ALTER TABLE users ADD COLUMN email_verified_at TEXT`);
+}
+
+// The company's email domain ("olivier-inc.com"), which is how a later sign-up from the same
+// company finds it. Set only on organizations created by sign-up; one per domain.
+if (!columnsOf('organizations').includes('email_domain')) {
+  db.exec(`ALTER TABLE organizations ADD COLUMN email_domain TEXT`);
+}
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_email_domain ON organizations(email_domain) WHERE email_domain IS NOT NULL`);
+
+// 'trial', 'active' or 'ended'. NULL on an organization made before sign-up, which is never
+// stopped for want of a subscription. trial_ends_at is when a 'trial' stops being one.
+if (!columnsOf('organizations').includes('subscription_status')) {
+  db.exec(`ALTER TABLE organizations ADD COLUMN subscription_status TEXT`);
+}
+if (!columnsOf('organizations').includes('trial_ends_at')) {
+  db.exec(`ALTER TABLE organizations ADD COLUMN trial_ends_at TEXT`);
+}
+
+db.exec(`
+  -- The emailed link that confirms an address. Only a hash of the token is kept, so a copy of the
+  -- database is not a stack of working links.
+  CREATE TABLE IF NOT EXISTS email_verifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_email_verifications_user ON email_verifications(user_id);
+
+  -- Someone from a company that is already on Coaster, asking its admin to be let in.
+  CREATE TABLE IF NOT EXISTS join_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    decided_by INTEGER REFERENCES users(id),
+    decided_at TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_join_requests_org ON join_requests(org_id, status);
+
+  -- Every domain that has ever had a free trial. Kept apart from organizations so deleting a
+  -- company and signing it up again does not buy a second trial.
+  CREATE TABLE IF NOT EXISTS trial_domains (
+    domain TEXT PRIMARY KEY,
+    first_trial_at TEXT DEFAULT (datetime('now'))
+  );
+
+  -- Who did what with an account: sign-ups, confirmations, sign-ins and failed ones, approvals,
+  -- password resets. Written once and never changed — the triggers below refuse an edit or a
+  -- delete outright, so the record cannot be quietly tidied by anyone, this application included.
+  CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL DEFAULT (datetime('now')),
+    org_id INTEGER,
+    user_id INTEGER,
+    email TEXT,
+    action TEXT NOT NULL,
+    detail TEXT,
+    ip TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_audit_log_org ON audit_log(org_id, at);
+  CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user_id, at);
+  CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log
+    BEGIN SELECT RAISE(ABORT, 'audit records cannot be changed'); END;
+  CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log
+    BEGIN SELECT RAISE(ABORT, 'audit records cannot be deleted'); END;
+`);
+
 // A project has more than one agreement — the architect's, the general contractor's, often an
 // engineer's — and an invoice must be checked against the right one. Shared Documents also
 // holds files that are not agreements at all (schedule, estimate), so each row records what

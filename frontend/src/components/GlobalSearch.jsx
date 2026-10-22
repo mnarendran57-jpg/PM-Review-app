@@ -90,7 +90,7 @@ export default function GlobalSearch({ everyOrganization = false, wide = false }
       : [current];
     const inEach = await Promise.all(orgs.map(async (org) => {
       const id = everyOrganization ? org.id : undefined;
-      const tag = { id: org.id, name: org.name, is_admin: !!org.is_admin };
+      const tag = { id: org.id, name: org.name, is_admin: !!org.is_admin, can_create: !!org.can_create };
       const [progs, projs] = await Promise.all([
         programsApi.list(id).catch(() => []),
         projectsApi.list(undefined, id).catch(() => []),

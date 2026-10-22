@@ -91,9 +91,26 @@ const orgHasFeature = (orgId, featureKey) => featuresForOrg(orgId).includes(feat
 
 // Gate for a tool's router. Answers 403 rather than 404: the customer is entitled to know the
 // tool exists and that their plan is what is in the way — that message is the upgrade prompt.
+//
+// It is also where a finished free trial stops new work. A company whose trial has ended can still
+// open every tool and read everything it made — its reviews, its logs, its reports are its own —
+// but cannot start anything new until it subscribes. Reading is GET; everything that starts work
+// or changes something is not, so the line falls exactly there. An organization from before
+// sign-up has no trial and is never stopped (lib/companies.js).
 function requireFeature(featureKey) {
   return (req, res, next) => {
     if (!req.orgId) return next();               // requireOrg reports the missing organization
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      const subscription = require('./companies').subscriptionOfOrg(req.orgId);
+      if (!subscription.active) {
+        return res.status(402).json({
+          error: subscription.status === 'trial-ended'
+            ? "Your free trial has ended. Everything you've done is still here to view — subscribe to start new reviews."
+            : "Your Coaster subscription is not active. Everything you've done is still here to view — subscribe to start new work.",
+          subscriptionRequired: true,
+        });
+      }
+    }
     if (orgHasFeature(req.orgId, featureKey)) return next();
     const feature = FEATURES.find(f => f.key === featureKey);
     return res.status(403).json({

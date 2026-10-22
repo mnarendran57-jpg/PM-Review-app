@@ -40,7 +40,7 @@ export default function Login() {
         </div>
 
         <h1 className="text-xl font-extrabold text-gray-900 mb-1 tracking-tight">Sign in</h1>
-        <p className="text-sm text-gray-400 mb-6">Use the email and password set up for you.</p>
+        <p className="text-sm text-gray-400 mb-6">Use your work email and password.</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -80,6 +80,12 @@ export default function Login() {
             Forgot your password?
           </Link>
         </form>
+        <div className="mt-6 pt-5 text-center" style={{ borderTop: '1px solid #eef1f4' }}>
+          <p className="text-xs text-gray-500">
+            New to Coaster? <Link to="/signup" className="font-semibold text-blue-600 hover:underline">Start a free trial</Link>
+          </p>
+          <p className="text-[11px] text-gray-400 mt-1.5">Just signed up? Use the link we emailed you to choose your password.</p>
+        </div>
       </div>
     </div>
   );

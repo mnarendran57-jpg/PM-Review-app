@@ -6,11 +6,32 @@ const crypto = require('crypto');
 const db = require('../database');
 const access = require('../lib/access');
 const email = require('../lib/email');
+const audit = require('../lib/audit');
+const { workEmailProblem, passwordProblem, normalise, domainOf } = require('../lib/workEmail');
+const { createAttemptLimit, minutesFrom } = require('../lib/attemptLimit');
+const { isHuman } = require('../lib/humanCheck');
+const { siteAddress } = require('../lib/siteAddress');
+const companies = require('../lib/companies');
 
 const RESET_MINUTES = 60;
 // A reset link can take over an account, so a flood of them is worth stopping even though
 // each one only reaches the real inbox.
 const RESET_MAX_PER_HOUR = 5;
+
+// How long an emailed confirmation link works.
+const CONFIRM_HOURS = 48;
+
+// The limits on the doors anyone can knock on. See lib/attemptLimit.js.
+//   sign-ups   ten an hour from one address — an office of people signing up together still fits
+//   resends    three an hour to one email, so Coaster cannot be used to flood someone's inbox
+//   sign-ins   five wrong passwords for one account in fifteen minutes, then a pause; and fifty
+//              from one address, which is someone trying many accounts rather than forgetting one
+const signupsByIp = createAttemptLimit({ max: 10, windowMs: 60 * 60 * 1000 });
+const resendsByEmail = createAttemptLimit({ max: 3, windowMs: 60 * 60 * 1000 });
+const failedByEmail = createAttemptLimit({ max: 5, windowMs: 15 * 60 * 1000 });
+const failedByIp = createAttemptLimit({ max: 50, windowMs: 15 * 60 * 1000 });
+
+const sha256 = t => crypto.createHash('sha256').update(String(t)).digest('hex');
 
 // One account is one person. Deliberately not tied to an organization: the same
 // consultant often works for several customers and must not need a second login. Which
@@ -50,11 +71,28 @@ router.post('/login', async (req, res) => {
   const password = req.body.password;
   if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
 
+  // Too many wrong passwords for this account, or from this address: a pause, said plainly. The
+  // same pause whether or not the account exists, so it reveals nothing about who has one.
+  const ip = audit.ipOf(req);
+  const paused = [failedByEmail.blocked(email), failedByIp.blocked(ip)].find(b => b.blocked);
+  if (paused) {
+    return res.status(429).json({
+      error: `Too many unsuccessful sign-in attempts. Try again in ${minutesFrom(paused.retryAfterMs)} minutes, or reset your password.`,
+    });
+  }
+
   const user = db.prepare(`SELECT * FROM users WHERE lower(email) = ?`).get(email);
   // Same message whether the address is unknown or the password is wrong — telling them
   // apart would let anyone probe which people have accounts.
   const ok = user && user.status === 'Active' && await bcrypt.compare(password, user.password_hash || '');
-  if (!ok) return res.status(401).json({ error: 'Incorrect email or password' });
+  if (!ok) {
+    failedByEmail.hit(email);
+    failedByIp.hit(ip);
+    audit.record({ action: 'login_failed', req, userId: user?.id ?? null, email });
+    return res.status(401).json({ error: 'Incorrect email or password' });
+  }
+  failedByEmail.reset(email);
+  audit.record({ action: 'login', req, userId: user.id, email: user.email });
 
   // The organizations they can reach come back with the login so the app can go straight
   // to the picker (or skip it when there is only one).
@@ -70,7 +108,12 @@ router.post('/login', async (req, res) => {
 router.get('/me', (req, res) => {
   const user = userFromToken(req);
   if (!user) return res.status(401).json({ error: 'Login required' });
-  res.json({ user: publicUser(user), organizations: access.orgsForUser(user) });
+  res.json({
+    user: publicUser(user),
+    organizations: access.orgsForUser(user),
+    // A person who signed up and is waiting for their company's admin to let them in.
+    pendingJoin: companies.pendingJoinFor(user.id),
+  });
 });
 
 // A person's own details. Everything here belongs to the ACCOUNT rather than to an
@@ -199,11 +242,17 @@ router.post('/forgot-password', async (req, res) => {
         INSERT INTO password_resets (user_id, token, expires_at, requested_ip) VALUES (?, ?, ?, ?)
       `).run(user.id, token, expires, req.ip || null);
 
-      const base = (process.env.APP_BASE_URL || req.headers.origin || '').replace(/\/$/, '');
-      await email.sendPasswordReset({
-        to: user.email, name: user.name, minutes: RESET_MINUTES,
-        link: `${base}/reset-password/${token}`,
-      });
+      // The site's own address, never the one the request claims — see lib/siteAddress.js.
+      const base = siteAddress(req);
+      if (base) {
+        await email.sendPasswordReset({
+          to: user.email, name: user.name, minutes: RESET_MINUTES,
+          link: `${base}/reset-password/${token}`,
+        });
+      } else {
+        console.error('[forgot password] APP_BASE_URL is not set, so no reset link was sent.');
+      }
+      audit.record({ action: 'password_reset_requested', req, userId: user.id, email: user.email });
     }
   }
 
@@ -228,6 +277,7 @@ router.post('/reset-password/:token', (req, res) => {
 
   db.prepare(`UPDATE users SET password_hash = ?, sessions_valid_from = datetime('now') WHERE id = ?`)
     .run(bcrypt.hashSync(password, 10), reset.user_id);
+  audit.record({ action: 'password_reset', req, userId: reset.user_id, email: reset.email });
   // Single use, and any other outstanding link for this account dies with it.
   db.prepare(`UPDATE password_resets SET used_at = datetime('now') WHERE user_id = ? AND used_at IS NULL`)
     .run(reset.user_id);
@@ -238,6 +288,191 @@ router.post('/reset-password/:token', (req, res) => {
     token: issueToken(user),
     user: publicUser(user),
     organizations: access.orgsForUser(user),
+  });
+});
+
+// --- Signing up -------------------------------------------------------------------------
+//
+// Anyone may sign up, with a work email. The steps:
+//   1. POST /signup — name, work email, company. The address is checked (lib/workEmail.js), the
+//      person is checked for being a person (lib/humanCheck.js), and a confirmation link is emailed.
+//      No password yet, and nothing can be signed into.
+//   2. The link opens the confirmation page, which shows whose account it is (GET), and asks them
+//      to choose a password (POST). Only then is the account real: confirmed, active, placed in
+//      their company (lib/companies.js), and signed straight in.
+//
+// The password is chosen at step 2, not step 1, on purpose. Chosen at sign-up, a stranger could
+// sign up with someone else's address and a password of the stranger's choosing — and if the real
+// owner clicked the confirmation email, they would switch on an account the stranger can sign in
+// to. Chosen on the confirmation page, it is set by whoever holds the inbox, and nobody else.
+//
+// Every answer to step 1 is the same "check your email", whether the address was new, already
+// confirmed, or waiting for confirmation — so the form cannot be used to find out who has an
+// account. The owner of an existing account is told by email instead.
+
+function issueConfirmation(userId) {
+  // A new link replaces any earlier one, so a forwarded old email stops working.
+  db.prepare(`UPDATE email_verifications SET used_at = datetime('now') WHERE user_id = ? AND used_at IS NULL`).run(userId);
+  const token = crypto.randomBytes(32).toString('hex');
+  const expires = new Date(Date.now() + CONFIRM_HOURS * 60 * 60 * 1000).toISOString();
+  db.prepare(`INSERT INTO email_verifications (user_id, token_hash, expires_at) VALUES (?, ?, ?)`)
+    .run(userId, sha256(token), expires);
+  return token;
+}
+
+// Whether a confirmation link can actually reach the person signing up. On a real server that
+// needs an email service and the site's own address (APP_BASE_URL). On a developer's machine —
+// reached at localhost, with no email service — the link is printed to the server's log instead,
+// so sign-up can be tried there. Anything else cannot deliver, and sign-up says it is not open
+// rather than tell someone to check an inbox nothing will arrive in.
+const isLocal = req => /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(String(req.headers.origin || ''));
+const canDeliver = req => (email.isConfigured() ? !!siteAddress(req) : isLocal(req) && !process.env.APP_BASE_URL);
+
+async function deliverConfirmation(req, user, token) {
+  const base = siteAddress(req);
+  if (!canDeliver(req) || !base) return;
+  const link = `${base}/confirm-email/${token}`;
+  if (!email.isConfigured()) {
+    console.log(`[sign-up] email is not set up; confirmation link for ${user.email}: ${link}`);
+    return;
+  }
+  await email.sendEmailConfirmation({ to: user.email, name: user.name, link, hours: CONFIRM_HOURS });
+}
+
+router.get('/signup-open', (req, res) => {
+  res.json({ open: canDeliver(req) });
+});
+
+router.post('/signup', async (req, res) => {
+  const ip = audit.ipOf(req);
+  const limit = signupsByIp.hit(ip);
+  if (!limit.allowed) {
+    return res.status(429).json({ error: `Too many sign-ups from here. Try again in ${minutesFrom(limit.retryAfterMs)} minutes.` });
+  }
+
+  const name = String(req.body.name || '').trim().slice(0, 120);
+  const company = String(req.body.company || '').trim().slice(0, 160);
+  const address = normalise(req.body.email);
+  if (!name) return res.status(400).json({ error: 'Enter your name.' });
+  if (!company) return res.status(400).json({ error: 'Enter your company name.' });
+
+  if (!(await isHuman(req.body.human_token, ip))) {
+    return res.status(400).json({ error: 'We could not confirm you are a person. Refresh the page and try again.' });
+  }
+
+  const problem = await workEmailProblem(address);
+  if (problem) {
+    audit.record({ action: 'signup_refused', req, email: address, detail: { reason: problem } });
+    return res.status(400).json({ error: problem });
+  }
+
+  if (!canDeliver(req)) {
+    return res.status(503).json({ error: 'Sign-up is not open yet. Contact Coaster to get an account.' });
+  }
+
+  const existing = db.prepare(`SELECT * FROM users WHERE lower(email) = ?`).get(address);
+  if (existing && existing.status === 'Unverified') {
+    // Waiting for confirmation: send the link again (within the resend limit). The details first
+    // given are kept — a second sign-up cannot rename someone else's pending account.
+    if (resendsByEmail.hit(address).allowed) await deliverConfirmation(req, existing, issueConfirmation(existing.id));
+  } else if (existing) {
+    // Already has an account. Tell its owner, by email, and nobody else.
+    const base = siteAddress(req);
+    if (base && resendsByEmail.hit(address).allowed && email.isConfigured()) {
+      await email.sendAlreadyRegistered({ to: existing.email, loginLink: `${base}/login`, resetLink: `${base}/forgot-password` });
+    }
+    audit.record({ action: 'signup_existing_account', req, userId: existing.id, email: address });
+  } else {
+    const userId = Number(db.prepare(`
+      INSERT INTO users (email, password_hash, name, company, role, status) VALUES (?, '', ?, ?, 'member', 'Unverified')
+    `).run(address, name, company).lastInsertRowid);
+    resendsByEmail.hit(address);
+    await deliverConfirmation(req, { email: address, name }, issueConfirmation(userId));
+    audit.record({ action: 'signup', req, userId, email: address, detail: { company, domain: domainOf(address) } });
+  }
+
+  res.json({ sent: true, email: address });
+});
+
+// "I didn't get the email." The same answer whatever the address, for the same reason as above.
+router.post('/resend-confirmation', async (req, res) => {
+  const address = normalise(req.body.email);
+  const user = address ? db.prepare(`SELECT * FROM users WHERE lower(email) = ?`).get(address) : null;
+  if (user && user.status === 'Unverified' && resendsByEmail.hit(address).allowed) {
+    await deliverConfirmation(req, user, issueConfirmation(user.id));
+  }
+  res.json({ sent: true });
+});
+
+function loadConfirmation(token) {
+  const row = db.prepare(`
+    SELECT v.*, u.email, u.name, u.company, u.status
+    FROM email_verifications v JOIN users u ON u.id = v.user_id
+    WHERE v.token_hash = ?
+  `).get(sha256(token));
+  if (!row) return { error: 'This confirmation link is not valid. Sign up again to get a new one.' };
+  if (row.used_at) return { error: 'This confirmation link has already been used. Sign in instead.', used: true };
+  if (new Date(row.expires_at) < new Date()) return { error: 'This confirmation link has expired. Sign up again to get a new one.' };
+  if (row.status !== 'Unverified') return { error: 'This account is already confirmed. Sign in instead.', used: true };
+  return { confirmation: row };
+}
+
+// What the confirmation page shows before they choose a password. Reading it changes nothing —
+// the programs some companies run over incoming mail open every link to check it, and that must
+// not confirm anyone's account.
+router.get('/confirm-email/:token', (req, res) => {
+  const { confirmation, error, used } = loadConfirmation(req.params.token);
+  if (error) return res.status(400).json({ error, used: !!used });
+  const domain = domainOf(confirmation.email);
+  const org = companies.orgForDomain(domain);
+  res.json({
+    email: confirmation.email, name: confirmation.name, company: confirmation.company,
+    // Whether they will be starting their company on Coaster, or asking to join it.
+    companyExists: !!org, existingCompanyName: org?.name || null,
+  });
+});
+
+router.post('/confirm-email/:token', (req, res) => {
+  const { confirmation, error } = loadConfirmation(req.params.token);
+  if (error) return res.status(400).json({ error });
+  const problem = passwordProblem(req.body.password, { email: confirmation.email, company: confirmation.company });
+  if (problem) return res.status(400).json({ error: problem });
+
+  db.prepare(`
+    UPDATE users SET password_hash = ?, status = 'Active', email_verified_at = datetime('now'),
+      sessions_valid_from = datetime('now') WHERE id = ?
+  `).run(bcrypt.hashSync(String(req.body.password), 10), confirmation.user_id);
+  db.prepare(`UPDATE email_verifications SET used_at = datetime('now') WHERE user_id = ? AND used_at IS NULL`)
+    .run(confirmation.user_id);
+
+  const user = db.prepare(`SELECT * FROM users WHERE id = ?`).get(confirmation.user_id);
+  const placed = companies.placeConfirmedUser(user, { companyName: confirmation.company });
+  audit.record({ action: 'email_confirmed', req, userId: user.id, email: user.email, orgId: placed.org.id });
+  if (placed.outcome === 'created') {
+    audit.record({
+      action: 'company_created', req, userId: user.id, email: user.email, orgId: placed.org.id,
+      detail: { name: placed.org.name, domain: placed.org.email_domain, trial: placed.trialGiven ? `${companies.TRIAL_DAYS} days` : 'none — this domain has had one' },
+    });
+  }
+  if (placed.outcome === 'pending') {
+    audit.record({ action: 'join_requested', req, userId: user.id, email: user.email, orgId: placed.org.id });
+    const base = siteAddress(req);
+    const { people, forCoaster } = companies.approversOf(placed.org.id);
+    for (const approver of people) {
+      email.sendJoinRequest({
+        to: approver.email, adminName: approver.name, requesterName: user.name, requesterEmail: user.email,
+        orgName: placed.org.name, link: base ? `${base}/team` : null, forCoaster,
+      }).catch(() => {});
+    }
+  }
+
+  // Signed straight in: they have just proved they hold the inbox, and chosen the password.
+  res.json({
+    token: issueToken(user),
+    user: publicUser(user),
+    organizations: access.orgsForUser(user),
+    outcome: placed.outcome,
+    pendingJoin: companies.pendingJoinFor(user.id),
   });
 });
 

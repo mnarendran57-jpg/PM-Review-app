@@ -6,18 +6,23 @@ const db = require('../database');
 const access = require('../lib/access');
 const email = require('../lib/email');
 const plans = require('../lib/plans');
+const audit = require('../lib/audit');
+const companies = require('../lib/companies');
+const { siteAddress } = require('../lib/siteAddress');
 const { requireOrg, requireOrgAdmin, requirePlatformAdmin } = require('../middleware/auth');
 
 // Two levels of administration:
-//  - platform admin (the vendor) creates customer Organizations and their first Admin.
-//    There is deliberately no public signup.
+//  - platform admin (the vendor) creates customer Organizations and their first Admin — or a
+//    company signs itself up, and its first person becomes its Admin (routes/auth.js, /signup).
 //  - Org Admin manages the people inside their own organization.
 //
 // Because a user account is not owned by any organization, "adding someone" means either
 // creating the account (if this is the first time anyone has invited that email) and then
 // attaching a membership, or simply attaching a membership to the account that exists.
 
-const ORG_ROLES = ['Admin', 'Member'];
+// Contributor: sees and builds everything in the organization, manages none of its people. What a
+// company's first person is made when it signs itself up (lib/companies.js).
+const ORG_ROLES = ['Admin', 'Contributor', 'Member'];
 
 // --- Organizations (vendor only) ------------------------------------------------------
 
@@ -142,7 +147,79 @@ router.get('/my-plan', requireOrg, (req, res) => {
     plan: org?.plan || null,
     planName: org?.plan ? (plans.planByKey(org.plan)?.name || org.plan) : 'All features',
     features: plans.featuresForOrg(req.orgId),
+    // The free trial, for the banner: { status: 'trial', daysLeft } while it runs, 'trial-ended'
+    // after. Null status for an organization from before sign-up.
+    subscription: companies.subscriptionOfOrg(req.orgId),
   });
+});
+
+// --- People asking to join ------------------------------------------------------------
+//
+// Someone who signs up with this company's email domain, after the company is already on Coaster,
+// waits here until an admin lets them in — the company's own Admin once Coaster has appointed one,
+// and Coaster until then. See lib/companies.js.
+
+// Every request waiting, across every company — for Coaster, which answers them for companies with
+// no Admin of their own yet.
+router.get('/all-join-requests', requirePlatformAdmin, (req, res) => {
+  res.json(db.prepare(`
+    SELECT j.id, j.created_at, j.org_id, o.name AS org_name, u.id AS user_id, u.name, u.email, u.company,
+      EXISTS (SELECT 1 FROM org_members m JOIN users a ON a.id = m.user_id
+              WHERE m.org_id = j.org_id AND m.role = 'Admin' AND a.status = 'Active') AS org_has_admin
+    FROM join_requests j
+    JOIN users u ON u.id = j.user_id
+    JOIN organizations o ON o.id = j.org_id
+    WHERE j.status = 'pending'
+    ORDER BY j.id ASC
+  `).all());
+});
+
+router.get('/join-requests', requireOrgAdmin, (req, res) => {
+  res.json(db.prepare(`
+    SELECT j.id, j.created_at, u.id AS user_id, u.name, u.email, u.company
+    FROM join_requests j JOIN users u ON u.id = j.user_id
+    WHERE j.org_id = ? AND j.status = 'pending'
+    ORDER BY j.id ASC
+  `).all(req.orgId));
+});
+
+// Approve as a Member (the admin then gives them projects, or makes them an Admin, as for anyone),
+// or decline. Either way the person is told by email.
+router.post('/join-requests/:id/:decision', requireOrgAdmin, async (req, res) => {
+  const { decision } = req.params;
+  if (!['approve', 'decline'].includes(decision)) return res.status(404).json({ error: 'Not found' });
+  const request = db.prepare(`
+    SELECT j.*, u.email, u.name FROM join_requests j JOIN users u ON u.id = j.user_id
+    WHERE j.id = ? AND j.org_id = ? AND j.status = 'pending'
+  `).get(req.params.id, req.orgId);
+  if (!request) return res.status(404).json({ error: 'That request has already been answered, or does not exist.' });
+
+  const approved = decision === 'approve';
+  db.prepare(`UPDATE join_requests SET status = ?, decided_by = ?, decided_at = datetime('now') WHERE id = ?`)
+    .run(approved ? 'approved' : 'declined', req.user.id, request.id);
+  if (approved) {
+    db.prepare(`INSERT OR IGNORE INTO org_members (org_id, user_id, role) VALUES (?, ?, 'Member')`).run(req.orgId, request.user_id);
+  }
+  audit.record({
+    action: approved ? 'join_approved' : 'join_declined', req, orgId: req.orgId,
+    userId: req.user.id, email: req.user.email, detail: { person: request.email },
+  });
+
+  const org = db.prepare(`SELECT name FROM organizations WHERE id=?`).get(req.orgId);
+  const base = siteAddress(req);
+  await email.sendJoinDecision({
+    to: request.email, name: request.name, orgName: org?.name || 'the organization', approved,
+    link: base ? `${base}/login` : null,
+  });
+  res.json({ ok: true, approved });
+});
+
+// --- The audit record -----------------------------------------------------------------
+//
+// Sign-ups, sign-ins, failed sign-ins, approvals and password resets for this organization and its
+// people, newest first. Read-only: nothing anywhere can change or remove an entry (see lib/audit.js).
+router.get('/audit', requireOrgAdmin, (req, res) => {
+  res.json(audit.forOrg(req.orgId, { limit: Math.min(Number(req.query.limit) || 200, 1000) }));
 });
 
 // --- People in the active organization ------------------------------------------------

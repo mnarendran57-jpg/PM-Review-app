@@ -22,7 +22,7 @@ export default function OrgSwitcher({ adminOnly = false }) {
     const org = orgs.find(o => String(o.id) === String(id));
     if (!org || org.id === current?.id) return;
     // Selecting also clears the chosen program, which belongs to the old organization.
-    selectedOrg.set({ id: org.id, name: org.name, is_admin: !!org.is_admin });
+    selectedOrg.set({ id: org.id, name: org.name, is_admin: !!org.is_admin, can_create: !!org.can_create });
     // Reload rather than refetch: the selected organization is read from storage wherever
     // it is needed, including the sidebar, which is outside this page's render. Refreshing
     // only the page's own data left the sidebar naming the previous organization.

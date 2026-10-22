@@ -3,7 +3,7 @@ const router = express.Router();
 const { diskUpload } = require('../lib/uploads');
 const db = require('../database');
 const storage = require('../lib/storage');
-const { requireOrg, requireOrgAdmin } = require('../middleware/auth');
+const { requireOrg, requireOrgAdmin, requireOrgWork } = require('../middleware/auth');
 const { friendlyAiError } = require('../lib/aiErrors');
 const { proposePlaceholders, applyPlaceholders } = require('../lib/memoCover');
 const { COVER_KINDS, coverKindFor } = require('../lib/coverTemplates');
@@ -24,7 +24,7 @@ const { COVER_KINDS, coverKindFor } = require('../lib/coverTemplates');
 router.use(requireOrg);
 // Feeding a company's standard template is an administrative act: it changes what every project in
 // the organization produces, not just the caller's own work.
-router.use(requireOrgAdmin);
+router.use(requireOrgWork);
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 

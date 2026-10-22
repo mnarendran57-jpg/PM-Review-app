@@ -1,6 +1,7 @@
 import Sidebar from './Sidebar';
 import Breadcrumbs from './Breadcrumbs';
 import GlobalSearch from './GlobalSearch';
+import TrialBanner from './TrialBanner';
 
 export default function Layout({ children }) {
   return (
@@ -14,6 +15,7 @@ export default function Layout({ children }) {
             organization and program pages — so it is in one place from the first page onwards
             rather than moving to a corner once a project is open. */}
         <div className="px-8 pt-5 -mb-3 space-y-3 relative" style={{ zIndex: 20 }}>
+          <TrialBanner />
           <Breadcrumbs />
           <GlobalSearch wide />
         </div>

@@ -16,6 +16,8 @@ export default function OrgSelect() {
   const [orgs, setOrgs] = useState(null);
   const [user, setUser] = useState(authApi.user());
   const [error, setError] = useState('');
+  // A request to join a company that its administrator has not answered yet.
+  const [pendingJoin, setPendingJoin] = useState(null);
 
   // Skipping straight past a single organization is only right on a fresh sign-in. If one
   // is already selected the user came here deliberately to switch, and auto-selecting
@@ -25,8 +27,9 @@ export default function OrgSelect() {
 
   useEffect(() => {
     authApi.me()
-      .then(({ user: u, organizations }) => {
+      .then(({ user: u, organizations, pendingJoin: waiting }) => {
         setUser(u);
+        setPendingJoin(waiting || null);
         setOrgs(organizations || []);
         if (!alreadyChosen && (organizations || []).length === 1) choose(organizations[0]);
       })
@@ -39,7 +42,7 @@ export default function OrgSelect() {
   const choose = org => {
     // is_admin is kept alongside so the app can hide administrative controls without
     // another round trip; the server re-checks it on every write regardless.
-    selectedOrg.set({ id: org.id, name: org.name, is_admin: !!org.is_admin });
+    selectedOrg.set({ id: org.id, name: org.name, is_admin: !!org.is_admin, can_create: !!org.can_create });
     navigate('/programs');
   };
 
@@ -53,7 +56,7 @@ export default function OrgSelect() {
     if (!selectedOrg.get()) {
       const target = (orgs || []).find(o => o.is_admin) || (orgs || [])[0];
       if (!target) return;
-      selectedOrg.set({ id: target.id, name: target.name, is_admin: !!target.is_admin });
+      selectedOrg.set({ id: target.id, name: target.name, is_admin: !!target.is_admin, can_create: !!target.can_create });
     }
     navigate(path);
   };
@@ -121,10 +124,22 @@ export default function OrgSelect() {
             <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-3" style={{ background: 'rgba(37,99,235,0.08)' }}>
               <BuildingOffice2Icon className="w-7 h-7" style={{ color: '#2563eb' }} />
             </div>
-            <p className="text-lg font-bold text-gray-900">No organizations yet</p>
-            <p className="text-sm text-gray-500 mt-1">
-              You haven't been added to one. Ask an administrator to add you, or contact support.
-            </p>
+            {pendingJoin ? (
+              <>
+                <p className="text-lg font-bold text-gray-900">Waiting for {pendingJoin.org_name} to let you in</p>
+                <p className="text-sm text-gray-500 mt-1 max-w-md mx-auto">
+                  Your company is already on Coaster. Its administrator has been asked to approve you, and
+                  you'll get an email as soon as they do.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-lg font-bold text-gray-900">No organizations yet</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  You haven't been added to one. Ask an administrator to add you, or contact support.
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-3 gap-6">

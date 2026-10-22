@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database');
 const access = require('../lib/access');
-const { requireOrg, requireOrgAdmin, programInOrg } = require('../middleware/auth');
+const { requireOrg, requireOrgAdmin, requireOrgWork, programInOrg } = require('../middleware/auth');
 const storage = require('../lib/storage');
 const removal = require('../lib/projectRemoval');
 
@@ -82,7 +82,7 @@ const deliveryMethod = (v) => {
 
 // Creating a project is an organization-admin action: it decides what work exists, and
 // members are then added to it individually.
-router.post('/', requireOrgAdmin, (req, res) => {
+router.post('/', requireOrgWork, (req, res) => {
   const {
     project_name, project_number, client_name, project_type, project_type_other,
     contract_value, start_date, projected_end_date, status,
@@ -189,7 +189,7 @@ router.put('/:id', (req, res) => {
 
 // Hiding a finished or mistaken project, reversibly. This is the one almost everybody wants:
 // nothing is destroyed, nothing is orphaned, and it can be undone by the same people who did it.
-router.patch('/:id/archive', requireOrgAdmin, (req, res) => {
+router.patch('/:id/archive', requireOrgWork, (req, res) => {
   const project = access.projectForUser(req.user, req.params.id);
   if (!project || project.org_id !== req.orgId) return res.status(404).json({ error: 'Not found' });
 
@@ -202,7 +202,7 @@ router.patch('/:id/archive', requireOrgAdmin, (req, res) => {
 //
 // Read-only, and the delete below refuses to run without the caller having been shown it — the two
 // are the same dialog, and a confirmation that does not say what it destroys is not a confirmation.
-router.get('/:id/deletion-preview', requireOrgAdmin, (req, res) => {
+router.get('/:id/deletion-preview', requireOrgWork, (req, res) => {
   const project = access.projectForUser(req.user, req.params.id);
   if (!project || project.org_id !== req.orgId) return res.status(404).json({ error: 'Not found' });
   res.json({ projectName: project.project_name, ...removal.deletionPreview(project.id) });
@@ -219,7 +219,7 @@ router.get('/:id/deletion-preview', requireOrgAdmin, (req, res) => {
 //   3. The stored files are collected BEFORE the rows go. A cascade removes the row that names a
 //      file and leaves the file in the bucket for ever; the previous version of this endpoint did
 //      exactly that, silently, on every delete.
-router.delete('/:id', requireOrgAdmin, async (req, res) => {
+router.delete('/:id', requireOrgWork, async (req, res) => {
   const project = access.projectForUser(req.user, req.params.id);
   if (!project || project.org_id !== req.orgId) return res.status(404).json({ error: 'Not found' });
 

@@ -570,10 +570,10 @@ function TemplatesTab() {
 
 export default function Settings() {
   const [tab, setTab] = useState('personal');
-  // Feeding the company's standard templates is an administrative act — it changes what every
-  // project in the organization produces. The backend enforces this; hiding the tab only saves a
-  // member from a button that would answer 403.
-  const isAdmin = !!selectedOrg.get()?.is_admin;
+  // Feeding the company's standard templates changes what every project in the organization
+  // produces, so it belongs to an Admin or a Contributor. The backend enforces this; hiding the tab
+  // only saves a member from a button that would answer 403.
+  const isAdmin = !!(selectedOrg.get()?.can_create ?? selectedOrg.get()?.is_admin);
   const tabs = TABS.filter(t => !t.adminOnly || isAdmin);
 
   return (

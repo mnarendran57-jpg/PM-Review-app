@@ -111,6 +111,17 @@ export const authApi = {
   getReset: token => api.get(`/auth/reset-password/${token}`).then(r => r.data),
   resetPassword: (token, password) =>
     api.post(`/auth/reset-password/${token}`, { password }).then(r => r.data),
+  // Public sign-up. The account has no password until the emailed link is used — see
+  // backend/routes/auth.js for why the password is chosen there and not here.
+  signupOpen: () => api.get('/auth/signup-open').then(r => r.data),
+  signup: data => api.post('/auth/signup', data).then(r => r.data),
+  resendConfirmation: email => api.post('/auth/resend-confirmation', { email }).then(r => r.data),
+  getConfirmation: token => api.get(`/auth/confirm-email/${token}`).then(r => r.data),
+  confirmEmail: (token, password) => api.post(`/auth/confirm-email/${token}`, { password }).then(r => {
+    localStorage.setItem(TOKEN_KEY, r.data.token);
+    localStorage.setItem(USER_KEY, JSON.stringify(r.data.user));
+    return r.data;
+  }),
   logout: () => {
     [TOKEN_KEY, USER_KEY, ORG_KEY, PROGRAM_KEY].forEach(k => localStorage.removeItem(k));
   },
@@ -200,6 +211,14 @@ export const adminApi = {
   listPlans: () => api.get('/admin/plans').then(r => r.data),
   setOrgPlan: (orgId, data) => api.put(`/admin/organizations/${orgId}/plan`, data).then(r => r.data),
   myPlan: () => api.get('/admin/my-plan').then(r => r.data),
+  // People who signed up with the company's email domain and are waiting to be let in.
+  listJoinRequests: () => api.get('/admin/join-requests').then(r => r.data),
+  decideJoinRequest: (id, approve, orgId) =>
+    api.post(`/admin/join-requests/${id}/${approve ? 'approve' : 'decline'}`, {}, inOrg(orgId)).then(r => r.data),
+  // Coaster only: every request waiting, across every company.
+  listAllJoinRequests: () => api.get('/admin/all-join-requests').then(r => r.data),
+  // The audit record: sign-ups, sign-ins, approvals, password resets. Read-only.
+  auditLog: () => api.get('/admin/audit').then(r => r.data),
   // Vendor-only: customer organizations.
   listOrganizations: () => api.get('/admin/organizations').then(r => r.data),
   createOrganization: data => api.post('/admin/organizations', data).then(r => r.data),

@@ -28,7 +28,8 @@ function loadInvite(token) {
 router.get('/:token', (req, res) => {
   const { invite, error } = loadInvite(req.params.token);
   if (error) return res.status(400).json({ error });
-  const existing = db.prepare(`SELECT id FROM users WHERE lower(email)=?`).get(invite.email);
+  // An unconfirmed sign-up has no password yet, so it is asked for one like a new account.
+  const existing = db.prepare(`SELECT id FROM users WHERE lower(email)=? AND status <> 'Unverified'`).get(invite.email);
   res.json({
     email: invite.email,
     role: invite.role,
@@ -43,7 +44,11 @@ router.post('/:token/accept', async (req, res) => {
   const { invite, error } = loadInvite(req.params.token);
   if (error) return res.status(400).json({ error });
 
-  const existing = db.prepare(`SELECT * FROM users WHERE lower(email)=?`).get(invite.email);
+  const found = db.prepare(`SELECT * FROM users WHERE lower(email)=?`).get(invite.email);
+  // Someone who signed up and never confirmed has no password and no account to protect yet. The
+  // invitation link proves they hold the inbox just as the confirmation link would, so it finishes
+  // what sign-up started: they choose a password here, below.
+  const existing = found && found.status === 'Unverified' ? null : found;
 
   // Someone already has this email — most likely a consultant already working with another
   // organization. Joining must NOT set a new password: whoever holds the link would
@@ -59,9 +64,19 @@ router.post('/:token/accept', async (req, res) => {
   const password = String(req.body.password || '');
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
-  const userId = db.prepare(`
-    INSERT INTO users (email, password_hash, name, role, status) VALUES (?, ?, ?, 'user', 'Active')
-  `).run(invite.email, bcrypt.hashSync(password, 10), (req.body.name || '').trim() || null).lastInsertRowid;
+  const userId = found
+    ? (db.prepare(`
+        UPDATE users SET password_hash = ?, name = COALESCE(?, name), status = 'Active',
+          email_verified_at = datetime('now'), sessions_valid_from = datetime('now') WHERE id = ?
+      `).run(bcrypt.hashSync(password, 10), (req.body.name || '').trim() || null, found.id), found.id)
+    // Using the emailed link proves they hold the inbox, so the address counts as confirmed.
+    : db.prepare(`
+        INSERT INTO users (email, password_hash, name, role, status, email_verified_at)
+        VALUES (?, ?, ?, 'user', 'Active', datetime('now'))
+      `).run(invite.email, bcrypt.hashSync(password, 10), (req.body.name || '').trim() || null).lastInsertRowid;
+  if (found) {
+    db.prepare(`UPDATE email_verifications SET used_at = datetime('now') WHERE user_id = ? AND used_at IS NULL`).run(found.id);
+  }
 
   db.prepare(`INSERT OR IGNORE INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)`)
     .run(invite.org_id, userId, invite.role);

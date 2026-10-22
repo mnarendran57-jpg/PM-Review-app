@@ -344,9 +344,10 @@ export default function Home() {
 
   const org = selectedOrg.get();
   const program = selectedProgram.get();
-  // Archiving and deleting are org-admin actions, matching what the server will allow. Showing the
-  // menu to somebody the API would refuse is just a way of promising something and then failing.
-  const canManage = !!org?.is_admin;
+  // Creating, archiving and deleting projects belong to an Admin or a Contributor, matching what the
+  // server will allow. Showing the menu to somebody the API would refuse is just a way of promising
+  // something and then failing. A selection saved before Contributors existed has no can_create.
+  const canManage = !!(org?.can_create ?? org?.is_admin);
 
   // Only this program's projects, and only the ones this user may see — the server applies
   // the access rules, so an ordinary member gets just the projects they're a member of.

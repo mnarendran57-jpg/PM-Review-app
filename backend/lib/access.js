@@ -2,11 +2,19 @@ const db = require('../database');
 
 // Answers "what can this user see?" for the Organization -> Program -> Project model.
 //
-// Three grants, and only three:
-//   - Org Admin      : blanket access to every Program and Project in that Organization.
-//   - Program Member : every Project in that Program, including ones added later.
-//   - Project Member : access to that one Project, wherever it sits.
-// Only an Org Admin can hand out the latter two; nobody grants themselves anything.
+// The grants:
+//   - Org Admin       : every Program and Project in that Organization, and its people — who is in
+//                       it, their roles, who may join.
+//   - Org Contributor : every Program and Project, and creating and changing them — but none of the
+//                       people. What a company's first person gets when it signs itself up: they can
+//                       get to work at once, while who manages the company's people is decided by
+//                       Coaster, which appoints an Admin later (October 2026).
+//   - Program Member  : every Project in that Program, including ones added later.
+//   - Project Member  : access to that one Project, wherever it sits.
+// Only an Org Admin can hand out the last two; nobody grants themselves anything.
+//
+// So there are two questions, kept apart: worksAcrossOrg — may they see and build everything in
+// the organization? — and isOrgAdmin — may they manage its people?
 //
 // A platform admin (the vendor) is treated as an admin everywhere so support and
 // onboarding work without inventing a membership row for every customer.
@@ -30,11 +38,12 @@ function orgsForUser(user) {
   // is_admin travels with each row so the app can hide administrative controls without a
   // second round trip. The server still re-checks on every write.
   if (isPlatformAdmin(user)) {
-    return db.prepare(`SELECT *, 1 AS is_admin FROM organizations ORDER BY name ASC`).all();
+    return db.prepare(`SELECT *, 1 AS is_admin, 1 AS can_create FROM organizations ORDER BY name ASC`).all();
   }
   return db.prepare(`
     SELECT DISTINCT o.*,
-      EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = o.id AND m.user_id = ? AND m.role='Admin') AS is_admin
+      EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = o.id AND m.user_id = ? AND m.role='Admin') AS is_admin,
+      EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = o.id AND m.user_id = ? AND m.role IN ('Admin','Contributor')) AS can_create
     FROM organizations o
     WHERE EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = o.id AND m.user_id = ?)
        OR EXISTS (
@@ -48,7 +57,7 @@ function orgsForUser(user) {
             WHERE gm.user_id = ? AND g.org_id = o.id
           )
     ORDER BY o.name ASC
-  `).all(user.id, user.id, user.id, user.id);
+  `).all(user.id, user.id, user.id, user.id, user.id);
 }
 
 // A platform admin counts as an admin of any organization that exists — but the existence
@@ -60,6 +69,15 @@ function isOrgAdmin(user, orgId) {
   if (isPlatformAdmin(user)) return orgExists(orgId);
   return !!db.prepare(`
     SELECT 1 FROM org_members WHERE org_id=? AND user_id=? AND role='Admin'
+  `).get(orgId, user.id);
+}
+
+// Everything in the organization, to see and to build: an Admin, or a Contributor. Managing its
+// people is isOrgAdmin's question, not this one.
+function worksAcrossOrg(user, orgId) {
+  if (isOrgAdmin(user, orgId)) return true;
+  return !!db.prepare(`
+    SELECT 1 FROM org_members WHERE org_id=? AND user_id=? AND role='Contributor'
   `).get(orgId, user.id);
 }
 
@@ -82,7 +100,7 @@ function isInOrg(user, orgId) {
 // Admins see every Program in the organization; everyone else sees only those containing
 // a project they are actually on.
 function programsForUser(user, orgId) {
-  if (isOrgAdmin(user, orgId)) {
+  if (worksAcrossOrg(user, orgId)) {
     return db.prepare(`
       SELECT p.*, (SELECT COUNT(*) FROM projects pr WHERE pr.program_id = p.id) AS project_count
       FROM programs p WHERE p.org_id = ? ORDER BY p.name ASC
@@ -112,7 +130,7 @@ function programsForUser(user, orgId) {
 
 // Same rule one level down.
 function projectsForUser(user, orgId, programId = null, { includeArchived = false } = {}) {
-  const admin = isOrgAdmin(user, orgId);
+  const admin = worksAcrossOrg(user, orgId);
   const params = [orgId];
   let sql = `SELECT p.* FROM projects p WHERE p.org_id = ?`;
   if (programId) { sql += ` AND p.program_id = ?`; params.push(programId); }
@@ -133,7 +151,7 @@ function projectsForUser(user, orgId, programId = null, { includeArchived = fals
 function projectForUser(user, projectId) {
   const project = db.prepare(`SELECT * FROM projects WHERE id=?`).get(projectId);
   if (!project) return null;
-  if (isOrgAdmin(user, project.org_id)) return project;
+  if (worksAcrossOrg(user, project.org_id)) return project;
   const member = db.prepare(
     `SELECT 1 WHERE ? IN (${VISIBLE_PROJECT_IDS})`
   ).get(project.id, user.id, user.id);
@@ -155,6 +173,7 @@ function rolesOnProject(user, projectId) {
     roles.unshift('Program Member');
   }
   if (project && isOrgAdmin(user, project.org_id)) roles.unshift('Admin');
+  else if (project && worksAcrossOrg(user, project.org_id)) roles.unshift('Contributor');
   return roles;
 }
 
@@ -168,7 +187,7 @@ function rolesOnProject(user, projectId) {
 // they are a member of. Rows with no project are administrative, so members never see them.
 function visibilityClause(user, orgId, { alias = '', projectColumn = 'project_id' } = {}) {
   const p = alias ? `${alias}.` : '';
-  if (isOrgAdmin(user, orgId)) {
+  if (worksAcrossOrg(user, orgId)) {
     return { sql: `${p}org_id = ?`, params: [orgId] };
   }
   if (!projectColumn) {
@@ -188,7 +207,7 @@ function recordVisible(user, row, { projectColumn = 'project_id' } = {}) {
   // Rows predating organizations belong to nobody; only the vendor can reach them.
   if (row.org_id == null) return isPlatformAdmin(user);
   if (!isInOrg(user, row.org_id)) return false;
-  if (isOrgAdmin(user, row.org_id)) return true;
+  if (worksAcrossOrg(user, row.org_id)) return true;
   const projectId = projectColumn ? row[projectColumn] : null;
   if (!projectId) return false;
   return !!db.prepare(
@@ -207,7 +226,7 @@ function tokenStillValid(user, claims) {
 }
 
 module.exports = {
-  isPlatformAdmin, orgsForUser, isOrgAdmin, isInOrg,
+  isPlatformAdmin, orgsForUser, isOrgAdmin, worksAcrossOrg, isInOrg,
   programsForUser, projectsForUser, projectForUser, rolesOnProject,
   visibilityClause, recordVisible, tokenStillValid,
 };

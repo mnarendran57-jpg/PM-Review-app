@@ -150,4 +150,86 @@ const escapeHtml = s => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-module.exports = { isConfigured, send, sendInvitation, sendPasswordReset, sendContactMessage };
+// The look shared by the sign-up emails: a heading, a line or two, one button, and the link
+// written out for a mail program that does not show buttons. Every value that came from a person
+// — a name, a company — is escaped, because a sign-up form is open to anyone.
+function simpleEmail({ heading, paragraphs, button, link, footnote }) {
+  const html = `
+    <div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:520px">
+      <h2 style="margin:0 0 12px">${escapeHtml(heading)}</h2>
+      ${paragraphs.map(p => `<p style="color:#374151;line-height:1.6">${escapeHtml(p)}</p>`).join('')}
+      ${link ? `<p style="margin:24px 0">
+        <a href="${link}" style="background:#2563eb;color:#fff;padding:12px 20px;border-radius:10px;
+           text-decoration:none;font-weight:600;display:inline-block">${escapeHtml(button)}</a>
+      </p>` : ''}
+      <p style="color:#6b7280;font-size:13px;line-height:1.6">
+        ${footnote ? `${escapeHtml(footnote)}<br><br>` : ''}
+        ${link ? `If the button doesn't work, paste this into your browser:<br>
+        <span style="color:#2563eb;word-break:break-all">${link}</span>` : ''}
+      </p>
+    </div>`;
+  const text = [heading, '', ...paragraphs, '', ...(link ? [`${button}: ${link}`, ''] : []), footnote || '']
+    .join('\n').trim();
+  return { html, text };
+}
+
+function sendEmailConfirmation({ to, name, link, hours }) {
+  const { html, text } = simpleEmail({
+    heading: 'Confirm your email to start using Coaster',
+    paragraphs: [`${name ? `Hi ${name}, t` : 'T'}hanks for signing up. Confirm this is your email address and you'll go straight into Coaster.`],
+    button: 'Confirm my email',
+    link,
+    footnote: `This link is valid for ${hours} hours and can only be used once. If you didn't sign up for Coaster, ignore this email — no account is created until the link is used.`,
+  });
+  return send({ to, subject: 'Confirm your email for Coaster', html, text });
+}
+
+// Someone tried to sign up with an address that already has an account. Sent to that address, so
+// the person who owns it learns of the attempt, and the sign-up page itself gives nothing away.
+function sendAlreadyRegistered({ to, loginLink, resetLink }) {
+  const { html, text } = simpleEmail({
+    heading: 'You already have a Coaster account',
+    paragraphs: [
+      'Someone — probably you — tried to sign up for Coaster with this email address, which already has an account.',
+      `Sign in at ${loginLink}. If you've forgotten your password, you can choose a new one.`,
+    ],
+    button: 'Choose a new password',
+    link: resetLink,
+    footnote: "If this wasn't you, you can ignore this email. Nothing about your account has changed.",
+  });
+  return send({ to, subject: 'You already have a Coaster account', html, text });
+}
+
+// `forCoaster`: sent to Coaster's own admins, who answer for a company that has no Admin yet.
+function sendJoinRequest({ to, adminName, requesterName, requesterEmail, orgName, link, forCoaster = false }) {
+  const { html, text } = simpleEmail({
+    heading: `${requesterName || requesterEmail} wants to join ${orgName}`,
+    paragraphs: forCoaster ? [
+      `${requesterName || 'Someone'} (${requesterEmail}) signed up for Coaster and asked to join ${orgName}, which has no administrator of its own yet.`,
+      "They can't see any of the company's projects until they're approved. Approve or decline from the Team page.",
+    ] : [
+      `${adminName ? `Hi ${adminName}, ` : ''}${requesterName || 'Someone'} (${requesterEmail}) signed up for Coaster with your company's email domain and asked to join ${orgName}.`,
+      "They can't see any of your projects until you approve them. Approve or decline from your Team page.",
+    ],
+    button: 'Review the request',
+    link,
+  });
+  return send({ to, subject: `${requesterName || requesterEmail} wants to join ${orgName} on Coaster`, html, text });
+}
+
+function sendJoinDecision({ to, name, orgName, approved, link }) {
+  const { html, text } = simpleEmail({
+    heading: approved ? `You've been added to ${orgName}` : `Your request to join ${orgName} was declined`,
+    paragraphs: [approved
+      ? `${name ? `Hi ${name}, ` : ''}an administrator at ${orgName} approved your request. You can sign in and start working now.`
+      : `${name ? `Hi ${name}, ` : ''}an administrator at ${orgName} declined your request to join. If you think this is a mistake, contact them directly.`],
+    button: approved ? 'Open Coaster' : null,
+    link: approved ? link : null,
+  });
+  return send({ to, subject: approved ? `You're in — ${orgName} on Coaster` : `Your request to join ${orgName}`, html, text });
+}
+
+module.exports = {
+  isConfigured, send, sendInvitation, sendPasswordReset, sendContactMessage,
+  sendEmailConfirmation, sendAlreadyRegistered, sendJoinRequest, sendJoinDecision, escapeHtml,
+};
