@@ -1,60 +1,47 @@
 const db = require('../database');
 const { domainOf } = require('./workEmail');
 
-// Companies are recognised by their email domain.
+// The free trial is for one person, with their work email.
 //
-// The first person from "olivier-inc.com" to confirm their email creates the Olivier Inc.
-// organization, and the company's free trial starts. They are made a Contributor, not an Admin:
-// they can start work at once — programs, projects, every review — but managing the company's
-// people is not something signing up first entitles anyone to. Coaster decides who a company's
-// Admin is, and appoints them once the company is using Coaster (October 2026).
+// Each person who signs up gets a workspace of their own, named for the company they gave, with a
+// free trial on it. Two people from the same firm get two separate workspaces — sharing one between
+// colleagues is not part of the trial (Naren, 22 October 2026). The work email is what qualifies
+// someone for a trial at all: personal and throwaway addresses are refused at sign-up
+// (lib/workEmail.js).
 //
-// Anyone from that domain afterwards does not get a second organization: they ask to join this one,
-// and are let in by its Admin — or by Coaster, while it has none. That is what stops a stranger who
-// happens to know a company's name from walking into its projects: a person, not the email address
-// alone, decides who is inside.
+// The person is made a Contributor of their workspace, not its Admin: they can do everything with
+// the work — programs, projects, every review — but there are no people in it to manage, and who
+// manages a customer's people is Coaster's to decide when a trial becomes a subscription.
 //
-// A domain gets one free trial, ever. trial_domains remembers every domain that has had one, apart
-// from the organizations table, so deleting a company and signing it up again does not start the
-// clock over.
+// One free trial per email address, ever. trial_accounts remembers every address that has had one,
+// apart from the organizations table, so deleting a workspace and signing up again does not start
+// the clock over.
+//
+// (Grouping colleagues into one company by email domain was built first, and its join requests are
+// still in the schema and the Team page. Nothing creates one now.)
 
 const TRIAL_DAYS = Math.max(1, Number(process.env.TRIAL_DAYS) || 14);
 
-const orgForDomain = domain => (domain
-  ? db.prepare(`SELECT * FROM organizations WHERE email_domain = ?`).get(domain)
-  : null);
+// Starts a person's trial: their own workspace, with every tool, the clock running unless this
+// address has had a trial before. Returns { org, trialGiven }. Calling it again for someone who
+// already has a workspace returns that one rather than making a second.
+function startTrial(user, { companyName } = {}) {
+  const own = db.prepare(`
+    SELECT o.* FROM organizations o JOIN org_members m ON m.org_id = o.id
+    WHERE m.user_id = ? AND o.subscription_status IS NOT NULL ORDER BY o.id LIMIT 1
+  `).get(user.id);
+  if (own) return { org: own, trialGiven: false };
 
-// What happens to a person the moment their address is confirmed. Returns one of
-//   { outcome: 'created', org }   — first from their company: organization made, they are its admin
-//   { outcome: 'pending', org }   — their company is here already: a request to join is waiting
-//   { outcome: 'member', org }    — already inside (confirmed twice, or invited earlier)
-function placeConfirmedUser(user, { companyName } = {}) {
-  const domain = domainOf(user.email);
-  const existing = orgForDomain(domain);
-
-  if (existing) {
-    const member = db.prepare(`SELECT 1 FROM org_members WHERE org_id=? AND user_id=?`).get(existing.id, user.id);
-    if (member) return { outcome: 'member', org: existing };
-    const open = db.prepare(`SELECT id FROM join_requests WHERE org_id=? AND user_id=? AND status='pending'`).get(existing.id, user.id);
-    if (!open) {
-      db.prepare(`INSERT INTO join_requests (org_id, user_id) VALUES (?, ?)`).run(existing.id, user.id);
-    }
-    return { outcome: 'pending', org: existing };
-  }
-
-  // A company's first person. The organization gets every tool during its trial — the trial is for
-  // finding out what Coaster does — and the trial clock starts unless this domain has had one.
-  const hadTrial = !!db.prepare(`SELECT 1 FROM trial_domains WHERE domain=?`).get(domain);
-  const name = String(companyName || '').trim() || domain;
+  const email = String(user.email).toLowerCase();
+  const hadTrial = !!db.prepare(`SELECT 1 FROM trial_accounts WHERE email=?`).get(email);
+  const name = String(companyName || '').trim() || domainOf(email);
   const trialEnds = new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const create = db.prepare(`
-    INSERT INTO organizations (name, email_domain, plan, subscription_status, trial_ends_at)
-    VALUES (?, ?, 'pro', ?, ?)
-  `);
-  const orgId = Number(create.run(name, domain, hadTrial ? 'ended' : 'trial', hadTrial ? null : trialEnds).lastInsertRowid);
-  if (!hadTrial) db.prepare(`INSERT OR IGNORE INTO trial_domains (domain) VALUES (?)`).run(domain);
+  const orgId = Number(db.prepare(`
+    INSERT INTO organizations (name, plan, subscription_status, trial_ends_at) VALUES (?, 'pro', ?, ?)
+  `).run(name, hadTrial ? 'ended' : 'trial', hadTrial ? null : trialEnds).lastInsertRowid);
+  if (!hadTrial) db.prepare(`INSERT OR IGNORE INTO trial_accounts (email) VALUES (?)`).run(email);
   db.prepare(`INSERT OR IGNORE INTO org_members (org_id, user_id, role) VALUES (?, ?, 'Contributor')`).run(orgId, user.id);
-  return { outcome: 'created', org: db.prepare(`SELECT * FROM organizations WHERE id=?`).get(orgId), trialGiven: !hadTrial };
+  return { org: db.prepare(`SELECT * FROM organizations WHERE id=?`).get(orgId), trialGiven: !hadTrial };
 }
 
 // Where an organization stands, for the banner in the app and the gate on the tools. An
@@ -101,5 +88,5 @@ function approversOf(orgId) {
 }
 
 module.exports = {
-  TRIAL_DAYS, orgForDomain, placeConfirmedUser, subscriptionOf, subscriptionOfOrg, pendingJoinFor, approversOf,
+  TRIAL_DAYS, startTrial, subscriptionOf, subscriptionOfOrg, pendingJoinFor, approversOf,
 };

@@ -667,9 +667,25 @@ function OwnerTeam() {
   // People waiting to join a company. Coaster answers them while the company has no Administrator
   // of its own — which is every company that signed itself up, until Coaster appoints one.
   const [joinRequests, setJoinRequests] = useState(null);
+  const [trialRequests, setTrialRequests] = useState(null);
   const load = () => {
     adminApi.listOrganizations().then(setOrgs).catch(() => setOrgs([]));
     adminApi.listAllJoinRequests().then(setJoinRequests).catch(() => setJoinRequests([]));
+    adminApi.listTrialRequests().then(setTrialRequests).catch(() => setTrialRequests([]));
+  };
+
+  const decideTrial = async (request, approve) => {
+    if (!approve) {
+      const ok = await confirm({
+        title: 'Decline free trial',
+        message: `Decline ${request.name || request.email}'s free trial? They won't be able to sign in.`,
+        confirmLabel: 'Decline',
+      });
+      if (!ok) return;
+    }
+    setError('');
+    try { await adminApi.decideTrialRequest(request.user_id, approve); load(); }
+    catch (e) { setError(e?.response?.data?.error || 'Could not answer this request.'); }
   };
   useEffect(() => { load(); }, []);
 
@@ -723,6 +739,7 @@ function OwnerTeam() {
 
       <div className="grid grid-cols-5 gap-6 items-start">
         <div className="col-span-3 space-y-3">
+          <TrialRequests requests={trialRequests} onDecide={decideTrial} />
           <JoinRequests requests={joinRequests} onDecide={decideJoin} acrossCompanies />
           {orgs == null && <div className="card px-5 py-8 text-center text-sm text-gray-400">Loading…</div>}
           {orgs?.length === 0 && (
@@ -821,6 +838,42 @@ function JoinRequests({ requests, onDecide, acrossCompanies = false }) {
   );
 }
 
+// Free trials whose work email Coaster approves by hand — until an email service is connected, this
+// is how a sign-up becomes an account. Approving starts their trial; they sign in with the password
+// they chose when they signed up.
+function TrialRequests({ requests, onDecide }) {
+  if (!requests?.length) return null;
+  return (
+    <div className="card overflow-hidden" style={{ border: '1px solid #a7f3d0' }}>
+      <div className="px-5 py-4 flex items-center gap-2" style={{ borderBottom: '1px solid #f3f4f6', background: '#ecfdf5' }}>
+        <UserPlusIcon className="w-4 h-4" style={{ color: '#047857' }} />
+        <h2 className="text-sm font-semibold text-gray-900">Free trial requests</h2>
+        <span className="px-2 py-0.5 rounded-full text-xs font-semibold" style={{ background: '#d1fae5', color: '#047857' }}>
+          {requests.length}
+        </span>
+      </div>
+      <p className="px-5 pt-3 text-[11px] text-gray-500">
+        Each passed the work-email check — a real company's address, not a personal or throwaway one. Approving
+        starts their free trial; they can't sign in until you do.
+      </p>
+      <div className="divide-y" style={{ borderColor: '#f3f4f6' }}>
+        {requests.map(r => (
+          <div key={r.user_id} className="px-5 py-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-900 truncate">{r.name || r.email}{r.company ? ` · ${r.company}` : ''}</p>
+              <p className="text-xs text-gray-400 truncate">{r.email} · asked {new Date(`${r.created_at.replace(' ', 'T')}Z`).toLocaleDateString()}</p>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button className="btn-primary px-3 py-1 text-xs" onClick={() => onDecide(r, true)}>Approve</button>
+              <button className="btn-secondary px-3 py-1 text-xs" onClick={() => onDecide(r, false)}>Decline</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // The audit record, in words. Read-only: nothing in Coaster can change or remove an entry.
 const ACTION_WORDS = {
   signup: 'Signed up',
@@ -828,6 +881,9 @@ const ACTION_WORDS = {
   signup_existing_account: 'Tried to sign up again',
   email_confirmed: 'Confirmed their email',
   company_created: 'Created the company on Coaster',
+  trial_started: 'Started a free trial',
+  trial_approved: 'Approved a free trial',
+  trial_declined: 'Declined a free trial',
   join_requested: 'Asked to join',
   join_approved: 'Approved a request to join',
   join_declined: 'Declined a request to join',

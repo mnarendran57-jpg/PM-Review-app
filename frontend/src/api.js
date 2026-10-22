@@ -215,6 +215,10 @@ export const adminApi = {
   listJoinRequests: () => api.get('/admin/join-requests').then(r => r.data),
   decideJoinRequest: (id, approve, orgId) =>
     api.post(`/admin/join-requests/${id}/${approve ? 'approve' : 'decline'}`, {}, inOrg(orgId)).then(r => r.data),
+  // Coaster only: free trials waiting for their work email to be approved by hand.
+  listTrialRequests: () => api.get('/admin/trial-requests').then(r => r.data),
+  decideTrialRequest: (userId, approve) =>
+    api.post(`/admin/trial-requests/${userId}/${approve ? 'approve' : 'decline'}`).then(r => r.data),
   // Coaster only: every request waiting, across every company.
   listAllJoinRequests: () => api.get('/admin/all-join-requests').then(r => r.data),
   // The audit record: sign-ups, sign-ins, approvals, password resets. Read-only.

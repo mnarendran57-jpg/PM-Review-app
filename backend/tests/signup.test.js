@@ -82,22 +82,22 @@ const LOCAL = { Origin: 'http://localhost:3000' };
     assert.strictEqual(await workEmailProblem('pat@brightline-mep.com', { resolve: async () => true }), null);
   });
 
-  let adminToken;
+  let patToken;
   let orgId;
   await check('signing up makes an account that cannot be used until confirmed', async () => {
     const r = await signup('pat@brightline-mep.com');
-    assert.deepStrictEqual([r.status, r.body.sent], [200, true]);
+    assert.deepStrictEqual([r.status, r.body.sent, r.body.mode], [200, true, 'email']);
     const user = db.prepare(`SELECT * FROM users WHERE email='pat@brightline-mep.com'`).get();
     assert.strictEqual(user.status, 'Unverified');
     const login = await call('POST', '/auth/login', { body: { email: 'pat@brightline-mep.com', password: STRONG } });
     assert.strictEqual(login.status, 401);
   });
 
-  await check('opening the link changes nothing; choosing a password confirms, and starts the company', async () => {
+  await check('opening the link changes nothing; choosing a password confirms, and starts their own trial', async () => {
     const token = lastLink('pat@brightline-mep.com');
     assert.ok(token, 'no link was printed');
     const look = await call('GET', `/auth/confirm-email/${token}`);
-    assert.deepStrictEqual([look.body.email, look.body.companyExists], ['pat@brightline-mep.com', false]);
+    assert.deepStrictEqual([look.body.email, look.body.company, look.body.trialDays], ['pat@brightline-mep.com', 'Brightline MEP', 14]);
     assert.strictEqual(db.prepare(`SELECT status FROM users WHERE email='pat@brightline-mep.com'`).get().status, 'Unverified');
 
     assert.strictEqual((await call('POST', `/auth/confirm-email/${token}`, { body: { password: 'short' } })).status, 400);
@@ -105,16 +105,15 @@ const LOCAL = { Origin: 'http://localhost:3000' };
 
     const done = await call('POST', `/auth/confirm-email/${token}`, { body: { password: STRONG } });
     assert.strictEqual(done.status, 200, JSON.stringify(done.body));
-    assert.strictEqual(done.body.outcome, 'created');
-    adminToken = done.body.token;
-    const org = db.prepare(`SELECT * FROM organizations WHERE email_domain='brightline-mep.com'`).get();
-    orgId = org.id;
-    assert.deepStrictEqual([org.name, org.subscription_status], ['Brightline MEP', 'trial']);
+    patToken = done.body.token;
+    assert.strictEqual(done.body.organizations.length, 1);
+    orgId = done.body.organizations[0].id;
+    const org = db.prepare(`SELECT * FROM organizations WHERE id=?`).get(orgId);
+    assert.deepStrictEqual([org.name, org.subscription_status, org.email_domain], ['Brightline MEP', 'trial', null]);
     const days = (Date.parse(org.trial_ends_at) - Date.now()) / 86400000;
     assert.ok(days > 13.9 && days <= 14, `trial of ${days} days`);
-    // Not an Admin: signing up first does not make anyone the manager of their company's people.
-    const role = db.prepare(`SELECT role FROM org_members WHERE org_id=?`).get(orgId).role;
-    assert.strictEqual(role, 'Contributor');
+    // Not an Admin: there are no people in a trial workspace to manage.
+    assert.strictEqual(db.prepare(`SELECT role FROM org_members WHERE org_id=?`).get(orgId).role, 'Contributor');
     assert.strictEqual((await call('POST', `/auth/confirm-email/${token}`, { body: { password: STRONG } })).status, 400, 'the link works once');
   });
 
@@ -124,92 +123,116 @@ const LOCAL = { Origin: 'http://localhost:3000' };
     assert.strictEqual(db.prepare(`SELECT name FROM users WHERE email='pat@brightline-mep.com'`).get().name, 'Pat Lee');
   });
 
-  let samToken;
-  await check('the next person from the company asks to join, and sees nothing until approved', async () => {
+  await check('a colleague from the same company gets a trial of their own, not a seat in the first one', async () => {
     await signup('sam@brightline-mep.com', { name: 'Sam Ortiz' });
     // A second sign-up for the same unconfirmed address cannot rename it.
     await signup('sam@brightline-mep.com', { name: 'Intruder' });
     assert.strictEqual(db.prepare(`SELECT name FROM users WHERE email='sam@brightline-mep.com'`).get().name, 'Sam Ortiz');
-    const token = lastLink('sam@brightline-mep.com');
-    const look = await call('GET', `/auth/confirm-email/${token}`);
-    assert.deepStrictEqual([look.body.companyExists, look.body.existingCompanyName], [true, 'Brightline MEP']);
-    const done = await call('POST', `/auth/confirm-email/${token}`, { body: { password: STRONG } });
-    assert.strictEqual(done.body.outcome, 'pending');
-    assert.deepStrictEqual(done.body.organizations, []);
-    samToken = done.body.token;
-    const me = await call('GET', '/auth/me', { token: samToken });
-    assert.strictEqual(me.body.pendingJoin.org_name, 'Brightline MEP');
-    assert.strictEqual(db.prepare(`SELECT COUNT(*) AS c FROM organizations WHERE email_domain='brightline-mep.com'`).get().c, 1);
+    const done = await call('POST', `/auth/confirm-email/${lastLink('sam@brightline-mep.com')}`, { body: { password: STRONG } });
+    assert.strictEqual(done.body.organizations.length, 1);
+    assert.notStrictEqual(done.body.organizations[0].id, orgId, 'put in the first person\'s workspace');
+    const pats = await call('GET', '/programs', { token: done.body.token, org: orgId });
+    assert.notStrictEqual(pats.status, 200, 'can reach the first person\'s workspace');
   });
 
-  await check('the first person can set up programs, but not manage people', async () => {
-    const program = await call('POST', '/programs', { token: adminToken, org: orgId, body: { name: 'Campus Renovation' } });
+  await check('they can set up programs, but not manage people', async () => {
+    const program = await call('POST', '/programs', { token: patToken, org: orgId, body: { name: 'Campus Renovation' } });
     assert.strictEqual(program.status, 200, JSON.stringify(program.body));
-    const list = await call('GET', '/programs', { token: adminToken, org: orgId });
-    assert.deepStrictEqual(list.body.map(p => p.name), ['Campus Renovation']);
-    assert.strictEqual((await call('GET', '/admin/members', { token: adminToken, org: orgId })).status, 403);
-    assert.strictEqual((await call('GET', '/admin/join-requests', { token: adminToken, org: orgId })).status, 403);
-    const me = await call('GET', '/auth/me', { token: adminToken });
+    assert.strictEqual((await call('GET', '/admin/members', { token: patToken, org: orgId })).status, 403);
+    const me = await call('GET', '/auth/me', { token: patToken });
     const mine = me.body.organizations.find(o => o.id === orgId);
     assert.deepStrictEqual([!!mine.is_admin, !!mine.can_create], [false, true]);
   });
 
+  // --- Approved by Coaster: no email service, and not a developer's machine -----------------------
+  const LIVE = { Origin: 'https://coasterai.com' };
+  const signupLive = (email, extra = {}) => call('POST', '/auth/signup', {
+    body: { name: 'Ana Ruiz', email, company: 'Northgate Builders', ...extra },
+    headers: { ...LIVE, 'CF-Connecting-IP': `198.18.0.${(n++ % 250) + 1}` },
+  });
   let coasterToken;
-  await check('with no company admin yet, Coaster approves, and they are in as a member', async () => {
+
+  await check('without an email service, sign-up is open, and Coaster approves the work email', async () => {
+    const open = await call('GET', '/auth/signup-open', { headers: LIVE });
+    assert.deepStrictEqual([open.body.open, open.body.mode], [true, 'approval']);
+    assert.match((await signupLive('ana@northgate-builders.com')).body.error, /12 characters/, 'a password is needed');
+    assert.strictEqual((await signupLive('ana@gmail.com', { password: STRONG })).status, 400, 'still a work email');
+    const r = await signupLive('ana@northgate-builders.com', { password: STRONG });
+    assert.deepStrictEqual([r.status, r.body.mode], [200, 'approval']);
+    assert.strictEqual(db.prepare(`SELECT status FROM users WHERE email='ana@northgate-builders.com'`).get().status, 'Pending');
+  });
+
+  await check('waiting: signing in says so, but only to someone with the right password', async () => {
+    const right = await call('POST', '/auth/login', { body: { email: 'ana@northgate-builders.com', password: STRONG } });
+    assert.strictEqual(right.status, 403);
+    assert.match(right.body.error, /being reviewed/);
+    const wrong = await call('POST', '/auth/login', { body: { email: 'ana@northgate-builders.com', password: 'not-the-password' } });
+    assert.deepStrictEqual([wrong.status, wrong.body.error], [401, 'Incorrect email or password']);
+  });
+
+  await check('Coaster sees the request and approves it; then they sign in to their own trial', async () => {
     const bcrypt = require('bcryptjs');
     db.prepare(`INSERT INTO users (email, password_hash, name, role, status) VALUES ('owner@coaster.app', ?, 'Coaster', 'superadmin', 'Active')`)
       .run(bcrypt.hashSync(STRONG, 4));
     coasterToken = (await call('POST', '/auth/login', { body: { email: 'owner@coaster.app', password: STRONG } })).body.token;
-    const all = await call('GET', '/admin/all-join-requests', { token: coasterToken });
-    assert.deepStrictEqual(all.body.map(r => [r.email, r.org_name, !!r.org_has_admin]), [['sam@brightline-mep.com', 'Brightline MEP', false]]);
-    const nonCoaster = await call('GET', '/admin/all-join-requests', { token: samToken });
-    assert.strictEqual(nonCoaster.status, 403, 'only Coaster sees every company');
-    const ok = await call('POST', `/admin/join-requests/${all.body[0].id}/approve`, { token: coasterToken, org: orgId });
+    const list = await call('GET', '/admin/trial-requests', { token: coasterToken });
+    assert.deepStrictEqual(list.body.map(r => [r.email, r.company]), [['ana@northgate-builders.com', 'Northgate Builders']]);
+    assert.strictEqual((await call('GET', '/admin/trial-requests', { token: patToken })).status, 403, 'only Coaster');
+    const ok = await call('POST', `/admin/trial-requests/${list.body[0].user_id}/approve`, { token: coasterToken });
     assert.strictEqual(ok.status, 200);
-    const me = await call('GET', '/auth/me', { token: samToken });
-    assert.deepStrictEqual([me.body.organizations.map(o => o.id), me.body.pendingJoin], [[orgId], null]);
-    const role = db.prepare(`SELECT m.role FROM org_members m JOIN users u ON u.id=m.user_id WHERE u.email='sam@brightline-mep.com'`).get().role;
-    assert.strictEqual(role, 'Member');
+    const login = await call('POST', '/auth/login', { body: { email: 'ana@northgate-builders.com', password: STRONG } });
+    assert.strictEqual(login.status, 200, JSON.stringify(login.body));
+    const ws = login.body.organizations[0];
+    assert.deepStrictEqual([ws.name, ws.subscription_status, !!ws.can_create], ['Northgate Builders', 'trial', true]);
   });
 
-  await check('once Coaster appoints an admin, that admin answers requests for the company', async () => {
-    const pat = db.prepare(`SELECT id FROM users WHERE email='pat@brightline-mep.com'`).get().id;
-    const made = await call('PUT', `/admin/members/${pat}`, { token: coasterToken, org: orgId, body: { role: 'Admin' } });
-    assert.strictEqual(made.status, 200, JSON.stringify(made.body));
-    assert.strictEqual((await call('GET', '/admin/join-requests', { token: adminToken, org: orgId })).status, 200);
-    const { approversOf } = require('../lib/companies');
-    const who = approversOf(orgId);
-    assert.deepStrictEqual([who.forCoaster, who.people.map(p => p.email)], [false, ['pat@brightline-mep.com']]);
+  await check('a declined request cannot sign in, and is told so', async () => {
+    await signupLive('raj@northgate-builders.com', { name: 'Raj', password: STRONG });
+    const id = db.prepare(`SELECT id FROM users WHERE email='raj@northgate-builders.com'`).get().id;
+    assert.strictEqual((await call('POST', `/admin/trial-requests/${id}/decline`, { token: coasterToken })).status, 200);
+    const login = await call('POST', '/auth/login', { body: { email: 'raj@northgate-builders.com', password: STRONG } });
+    assert.strictEqual(login.status, 403);
+    assert.match(login.body.error, /wasn't approved/);
+    assert.strictEqual(db.prepare(`SELECT COUNT(*) AS c FROM org_members WHERE user_id=?`).get(id).c, 0);
+  });
+
+  await check('signing up again over an existing account leaves it exactly as it was', async () => {
+    const before = db.prepare(`SELECT password_hash, name, status FROM users WHERE email='ana@northgate-builders.com'`).get();
+    const r = await signupLive('ana@northgate-builders.com', { name: 'Someone Else', password: 'a different long password' });
+    assert.deepStrictEqual([r.status, r.body.mode], [200, 'approval']);
+    assert.deepStrictEqual(db.prepare(`SELECT password_hash, name, status FROM users WHERE email='ana@northgate-builders.com'`).get(), before);
   });
 
   await check('the trial shows how long is left; once ended, new work stops and viewing does not', async () => {
-    const plan = await call('GET', '/admin/my-plan', { token: adminToken, org: orgId });
+    const plan = await call('GET', '/admin/my-plan', { token: patToken, org: orgId });
     assert.deepStrictEqual([plan.body.subscription.status, plan.body.subscription.daysLeft], ['trial', 14]);
     db.prepare(`UPDATE organizations SET trial_ends_at=? WHERE id=?`).run(new Date(Date.now() - 1000).toISOString(), orgId);
-    const ended = await call('GET', '/admin/my-plan', { token: adminToken, org: orgId });
+    const ended = await call('GET', '/admin/my-plan', { token: patToken, org: orgId });
     assert.strictEqual(ended.body.subscription.status, 'trial-ended');
-    const start = await call('POST', '/invoice-review', { token: adminToken, org: orgId, body: {} });
+    const start = await call('POST', '/invoice-review', { token: patToken, org: orgId, body: {} });
     assert.strictEqual(start.status, 402);
     assert.match(start.body.error, /free trial has ended/);
-    const view = await call('GET', '/invoice-review', { token: adminToken, org: orgId });
+    const view = await call('GET', '/invoice-review', { token: patToken, org: orgId });
     assert.strictEqual(view.status, 200);
   });
 
   await check('a company from before sign-up has no trial and is never stopped', async () => {
     const legacy = Number(db.prepare(`INSERT INTO organizations (name) VALUES ('Olivier Inc.')`).run().lastInsertRowid);
     db.prepare(`INSERT INTO org_members (org_id, user_id, role) VALUES (?, (SELECT id FROM users WHERE email='pat@brightline-mep.com'), 'Admin')`).run(legacy);
-    const start = await call('POST', '/invoice-review', { token: adminToken, org: legacy, body: {} });
+    const start = await call('POST', '/invoice-review', { token: patToken, org: legacy, body: {} });
     assert.notStrictEqual(start.status, 402);
-    const plan = await call('GET', '/admin/my-plan', { token: adminToken, org: legacy });
+    const plan = await call('GET', '/admin/my-plan', { token: patToken, org: legacy });
     assert.strictEqual(plan.body.subscription.status, null);
   });
 
-  await check('a company deleted and signed up again does not get a second trial', async () => {
-    db.prepare(`DELETE FROM organizations WHERE id=?`).run(orgId);
-    await signup('lee@brightline-mep.com', { name: 'Lee Park' });
-    await call('POST', `/auth/confirm-email/${lastLink('lee@brightline-mep.com')}`, { body: { password: STRONG } });
-    const org = db.prepare(`SELECT * FROM organizations WHERE email_domain='brightline-mep.com'`).get();
-    assert.strictEqual(org.subscription_status, 'ended');
+  await check('one free trial per email address, even after the account and workspace are deleted', async () => {
+    const sam = db.prepare(`SELECT id FROM users WHERE email='sam@brightline-mep.com'`).get().id;
+    const samOrg = db.prepare(`SELECT org_id FROM org_members WHERE user_id=?`).get(sam).org_id;
+    db.prepare(`DELETE FROM organizations WHERE id=?`).run(samOrg);
+    db.prepare(`DELETE FROM users WHERE id=?`).run(sam);
+    await signup('sam@brightline-mep.com', { name: 'Sam Ortiz' });
+    const done = await call('POST', `/auth/confirm-email/${lastLink('sam@brightline-mep.com')}`, { body: { password: STRONG } });
+    assert.strictEqual(done.body.organizations[0].subscription_status, 'ended');
   });
 
   await check('five wrong passwords pause sign-in for that account', async () => {
@@ -242,14 +265,10 @@ const LOCAL = { Origin: 'http://localhost:3000' };
 
   await check('a reset or confirmation link is never built from a forged address', async () => {
     printed.length = 0;
-    const r = await call('POST', '/auth/signup', { body: { name: 'Eve', email: 'eve@forged-origin.com', company: 'Forged' }, headers: { Origin: 'https://evil.example' } });
+    await call('POST', '/auth/signup', { body: { name: 'Eve', email: 'eve@forged-origin.com', company: 'Forged', password: STRONG }, headers: { Origin: 'https://evil.example' } });
+    await call('POST', '/auth/forgot-password', { body: { email: 'pat@brightline-mep.com' }, headers: { Origin: 'https://evil.example' } });
     assert.ok(!printed.some(l => l.includes('evil.example')), 'a link to the forged address was made');
     assert.strictEqual(printed.length, 0);
-    // Not a developer's machine and no email service: sign-up says it is closed, rather than send
-    // someone to an inbox nothing will arrive in.
-    assert.strictEqual(r.status, 503);
-    const open = await call('GET', '/auth/signup-open', { headers: { Origin: 'https://coasterai.com' } });
-    assert.strictEqual(open.body.open, false);
   });
 
   await check('an invitation finishes an unconfirmed sign-up', async () => {
@@ -269,7 +288,7 @@ const LOCAL = { Origin: 'http://localhost:3000' };
 
   await check('everything is in the audit record, which cannot be changed or deleted', async () => {
     const actions = db.prepare(`SELECT DISTINCT action FROM audit_log`).all().map(r => r.action);
-    for (const a of ['signup', 'signup_refused', 'email_confirmed', 'company_created', 'join_requested', 'join_approved', 'login_failed']) {
+    for (const a of ['signup', 'signup_refused', 'email_confirmed', 'trial_started', 'trial_approved', 'trial_declined', 'login_failed']) {
       assert.ok(actions.includes(a), `${a} was not recorded`);
     }
     assert.throws(() => db.prepare(`UPDATE audit_log SET action='x'`).run(), /cannot be changed/);

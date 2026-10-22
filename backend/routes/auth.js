@@ -82,6 +82,18 @@ router.post('/login', async (req, res) => {
   }
 
   const user = db.prepare(`SELECT * FROM users WHERE lower(email) = ?`).get(email);
+
+  // A free trial waiting for Coaster's approval, or one that was declined. Said only once the
+  // password is right, so it tells nobody but the person who signed up that the request exists.
+  if (user && ['Pending', 'Declined'].includes(user.status) && await bcrypt.compare(password, user.password_hash || '')) {
+    return res.status(403).json({
+      error: user.status === 'Pending'
+        ? "Your free trial request is being reviewed. You'll be able to sign in as soon as it's approved — usually within one business day."
+        : "Your free trial request wasn't approved. If you think that's a mistake, contact us.",
+      pendingApproval: user.status === 'Pending',
+    });
+  }
+
   // Same message whether the address is unknown or the password is wrong — telling them
   // apart would let anyone probe which people have accounts.
   const ok = user && user.status === 'Active' && await bcrypt.compare(password, user.password_hash || '');
@@ -293,15 +305,21 @@ router.post('/reset-password/:token', (req, res) => {
 
 // --- Signing up -------------------------------------------------------------------------
 //
-// Anyone may sign up, with a work email. The steps:
-//   1. POST /signup — name, work email, company. The address is checked (lib/workEmail.js), the
-//      person is checked for being a person (lib/humanCheck.js), and a confirmation link is emailed.
-//      No password yet, and nothing can be signed into.
-//   2. The link opens the confirmation page, which shows whose account it is (GET), and asks them
-//      to choose a password (POST). Only then is the account real: confirmed, active, placed in
-//      their company (lib/companies.js), and signed straight in.
+// Anyone may sign up for a free trial of their own, with a work email (lib/companies.js). The
+// address is checked first (lib/workEmail.js), and the person is checked for being a person
+// (lib/humanCheck.js). Then the work email is approved in one of two ways — see approvalMode below.
 //
-// The password is chosen at step 2, not step 1, on purpose. Chosen at sign-up, a stranger could
+// By email, the steps are:
+//   1. POST /signup — name, work email, company. A confirmation link is emailed. No password yet,
+//      and nothing can be signed into.
+//   2. The link opens the confirmation page, which shows whose account it is (GET), and asks them
+//      to choose a password (POST). Only then is the account real: confirmed, active, given its
+//      trial workspace, and signed straight in.
+//
+// By Coaster, the password is chosen at sign-up and the account waits, status 'Pending', until it
+// is approved on the Team page (routes/admin.js, trial-requests).
+//
+// By email, the password is chosen at step 2, not step 1, on purpose. Chosen at sign-up, a stranger could
 // sign up with someone else's address and a password of the stranger's choosing — and if the real
 // owner clicked the confirmation email, they would switch on an account the stranger can sign in
 // to. Chosen on the confirmation page, it is set by whoever holds the inbox, and nobody else.
@@ -339,8 +357,17 @@ async function deliverConfirmation(req, user, token) {
   await email.sendEmailConfirmation({ to: user.email, name: user.name, link, hours: CONFIRM_HOURS });
 }
 
+// How a work email is approved on this installation:
+//   'email'    — a confirmation link is emailed, and the password is chosen on the page it opens.
+//                Proves the person owns the address. Used whenever an email service is connected.
+//   'approval' — the person chooses a password at sign-up, and Coaster approves the request by
+//                hand on the Team page. The address has passed the work-email checks, so it is a
+//                real company's — but nothing has proved this person owns it. Used until an email
+//                service is connected, so the free trial is open from day one (October 2026).
+const approvalMode = req => (canDeliver(req) ? 'email' : 'approval');
+
 router.get('/signup-open', (req, res) => {
-  res.json({ open: canDeliver(req) });
+  res.json({ open: true, mode: approvalMode(req), trialDays: companies.TRIAL_DAYS });
 });
 
 router.post('/signup', async (req, res) => {
@@ -366,11 +393,26 @@ router.post('/signup', async (req, res) => {
     return res.status(400).json({ error: problem });
   }
 
-  if (!canDeliver(req)) {
-    return res.status(503).json({ error: 'Sign-up is not open yet. Contact Coaster to get an account.' });
+  const existing = db.prepare(`SELECT * FROM users WHERE lower(email) = ?`).get(address);
+
+  // Approved by Coaster rather than by email: the password is chosen now, and the account waits.
+  // The answer is the same whether or not the address already had an account, so the form cannot
+  // be used to find out who has one — and an existing account, of any kind, is left exactly as it is.
+  if (approvalMode(req) === 'approval') {
+    const weak = passwordProblem(req.body.password, { email: address, company });
+    if (weak) return res.status(400).json({ error: weak });
+    if (!existing) {
+      const userId = Number(db.prepare(`
+        INSERT INTO users (email, password_hash, name, company, role, status) VALUES (?, ?, ?, ?, 'member', 'Pending')
+      `).run(address, bcrypt.hashSync(String(req.body.password), 10), name, company).lastInsertRowid);
+      audit.record({ action: 'signup', req, userId, email: address, detail: { company, domain: domainOf(address), approval: 'by Coaster' } });
+      notifyCoasterOfTrialRequest(req, { name, email: address, company });
+    } else {
+      audit.record({ action: 'signup_existing_account', req, userId: existing.id, email: address });
+    }
+    return res.json({ sent: true, mode: 'approval', email: address });
   }
 
-  const existing = db.prepare(`SELECT * FROM users WHERE lower(email) = ?`).get(address);
   if (existing && existing.status === 'Unverified') {
     // Waiting for confirmation: send the link again (within the resend limit). The details first
     // given are kept — a second sign-up cannot rename someone else's pending account.
@@ -391,8 +433,23 @@ router.post('/signup', async (req, res) => {
     audit.record({ action: 'signup', req, userId, email: address, detail: { company, domain: domainOf(address) } });
   }
 
-  res.json({ sent: true, email: address });
+  res.json({ sent: true, mode: 'email', email: address });
 });
+
+// Tells Coaster's own admins a trial request is waiting, when there is a way to — in approval mode
+// there usually is not, which is why the Team page lists them too.
+function notifyCoasterOfTrialRequest(req, { name, email: address, company }) {
+  if (!email.isConfigured()) return;
+  const base = siteAddress(req);
+  for (const owner of db.prepare(`SELECT email, name FROM users WHERE role='superadmin' AND status='Active'`).all()) {
+    email.send({
+      to: owner.email,
+      subject: `Free trial request: ${name} at ${company}`,
+      text: `${name} (${address}) at ${company} asked for a Coaster free trial.\n\nApprove or decline it on the Team page${base ? `: ${base}/team` : '.'}`,
+      html: `<p>${email.escapeHtml(name)} (${email.escapeHtml(address)}) at ${email.escapeHtml(company)} asked for a Coaster free trial.</p><p>Approve or decline it on the Team page${base ? `: <a href="${base}/team">${base}/team</a>` : '.'}</p>`,
+    }).catch(() => {});
+  }
+}
 
 // "I didn't get the email." The same answer whatever the address, for the same reason as above.
 router.post('/resend-confirmation', async (req, res) => {
@@ -423,13 +480,7 @@ function loadConfirmation(token) {
 router.get('/confirm-email/:token', (req, res) => {
   const { confirmation, error, used } = loadConfirmation(req.params.token);
   if (error) return res.status(400).json({ error, used: !!used });
-  const domain = domainOf(confirmation.email);
-  const org = companies.orgForDomain(domain);
-  res.json({
-    email: confirmation.email, name: confirmation.name, company: confirmation.company,
-    // Whether they will be starting their company on Coaster, or asking to join it.
-    companyExists: !!org, existingCompanyName: org?.name || null,
-  });
+  res.json({ email: confirmation.email, name: confirmation.name, company: confirmation.company, trialDays: companies.TRIAL_DAYS });
 });
 
 router.post('/confirm-email/:token', (req, res) => {
@@ -446,33 +497,18 @@ router.post('/confirm-email/:token', (req, res) => {
     .run(confirmation.user_id);
 
   const user = db.prepare(`SELECT * FROM users WHERE id = ?`).get(confirmation.user_id);
-  const placed = companies.placeConfirmedUser(user, { companyName: confirmation.company });
-  audit.record({ action: 'email_confirmed', req, userId: user.id, email: user.email, orgId: placed.org.id });
-  if (placed.outcome === 'created') {
-    audit.record({
-      action: 'company_created', req, userId: user.id, email: user.email, orgId: placed.org.id,
-      detail: { name: placed.org.name, domain: placed.org.email_domain, trial: placed.trialGiven ? `${companies.TRIAL_DAYS} days` : 'none — this domain has had one' },
-    });
-  }
-  if (placed.outcome === 'pending') {
-    audit.record({ action: 'join_requested', req, userId: user.id, email: user.email, orgId: placed.org.id });
-    const base = siteAddress(req);
-    const { people, forCoaster } = companies.approversOf(placed.org.id);
-    for (const approver of people) {
-      email.sendJoinRequest({
-        to: approver.email, adminName: approver.name, requesterName: user.name, requesterEmail: user.email,
-        orgName: placed.org.name, link: base ? `${base}/team` : null, forCoaster,
-      }).catch(() => {});
-    }
-  }
+  const { org, trialGiven } = companies.startTrial(user, { companyName: confirmation.company });
+  audit.record({ action: 'email_confirmed', req, userId: user.id, email: user.email, orgId: org.id });
+  audit.record({
+    action: 'trial_started', req, userId: user.id, email: user.email, orgId: org.id,
+    detail: { workspace: org.name, trial: trialGiven ? `${companies.TRIAL_DAYS} days` : 'none — this address has had one' },
+  });
 
   // Signed straight in: they have just proved they hold the inbox, and chosen the password.
   res.json({
     token: issueToken(user),
     user: publicUser(user),
     organizations: access.orgsForUser(user),
-    outcome: placed.outcome,
-    pendingJoin: companies.pendingJoinFor(user.id),
   });
 });
 

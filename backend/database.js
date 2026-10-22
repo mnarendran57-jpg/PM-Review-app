@@ -1000,6 +1000,14 @@ db.exec(`
     first_trial_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- Every email address that has ever had a free trial — one each, ever. Kept apart from
+  -- organizations so deleting a workspace and signing up again does not buy a second trial.
+  -- (trial_domains above is from when a trial was per company; nothing writes to it now.)
+  CREATE TABLE IF NOT EXISTS trial_accounts (
+    email TEXT PRIMARY KEY,
+    first_trial_at TEXT DEFAULT (datetime('now'))
+  );
+
   -- Who did what with an account: sign-ups, confirmations, sign-ins and failed ones, approvals,
   -- password resets. Written once and never changed — the triggers below refuse an edit or a
   -- delete outright, so the record cannot be quietly tidied by anyone, this application included.

@@ -153,6 +153,48 @@ router.get('/my-plan', requireOrg, (req, res) => {
   });
 });
 
+// --- Free trial requests, approved by Coaster ---------------------------------------------
+//
+// Until an email service is connected, a work email is approved by hand: the person signs up with a
+// password and waits (status 'Pending') until Coaster approves them here. Approving starts their
+// trial workspace; declining keeps the account closed. See routes/auth.js, approvalMode.
+
+router.get('/trial-requests', requirePlatformAdmin, (req, res) => {
+  res.json(db.prepare(`
+    SELECT id AS user_id, name, email, company, created_at FROM users
+    WHERE status = 'Pending' ORDER BY id ASC
+  `).all());
+});
+
+router.post('/trial-requests/:userId/:decision', requirePlatformAdmin, async (req, res) => {
+  const { decision } = req.params;
+  if (!['approve', 'decline'].includes(decision)) return res.status(404).json({ error: 'Not found' });
+  const person = db.prepare(`SELECT * FROM users WHERE id = ? AND status = 'Pending'`).get(req.params.userId);
+  if (!person) return res.status(404).json({ error: 'That request has already been answered, or does not exist.' });
+
+  const approved = decision === 'approve';
+  db.prepare(`UPDATE users SET status = ? WHERE id = ?`).run(approved ? 'Active' : 'Declined', person.id);
+  let workspace = null;
+  if (approved) workspace = companies.startTrial({ ...person, status: 'Active' }, { companyName: person.company }).org;
+  audit.record({
+    action: approved ? 'trial_approved' : 'trial_declined', req, userId: req.user.id, email: req.user.email,
+    orgId: workspace?.id ?? null, detail: { person: person.email, company: person.company },
+  });
+  if (approved) {
+    audit.record({ action: 'trial_started', req, userId: person.id, email: person.email, orgId: workspace.id,
+      detail: { workspace: workspace.name } });
+  }
+
+  // Told by email when there is a way to; otherwise they find out by signing in.
+  if (email.isConfigured()) {
+    const base = siteAddress(req);
+    email.sendJoinDecision({
+      to: person.email, name: person.name, orgName: 'Coaster', approved, link: base ? `${base}/login` : null,
+    }).catch(() => {});
+  }
+  res.json({ ok: true, approved });
+});
+
 // --- People asking to join ------------------------------------------------------------
 //
 // Someone who signs up with this company's email domain, after the company is already on Coaster,

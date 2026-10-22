@@ -3,9 +3,13 @@ import { Link } from 'react-router-dom';
 import { EnvelopeIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
 import { authApi } from '../api';
 
-// Signing up a company. Name, work email and company — no password yet: that is chosen on the page
-// the emailed link opens, so only the person who holds the inbox ever sets it. The server decides
-// whether the address is a company's (backend/lib/workEmail.js); this page only shows its answer.
+// Signing up for a free trial of your own, with a work email. The server decides whether the address
+// is a company's (backend/lib/workEmail.js); this page only shows its answer. How the work email is
+// then approved depends on the server (backend/routes/auth.js, approvalMode):
+//   'email'    — a link is emailed, and the password is chosen on the page it opens, so only the
+//                person who holds the inbox ever sets it. No password on this form.
+//   'approval' — Coaster approves the request by hand, so the password is chosen here and the
+//                person signs in once it is approved.
 
 // Cloudflare Turnstile, the check that a person and not a script is signing up. Shown only when the
 // site key is configured; the server skips the check in the same circumstances.
@@ -43,26 +47,35 @@ function useTurnstile(containerRef, onToken, showing) {
 }
 
 export default function Signup() {
-  const [form, setForm] = useState({ name: '', email: '', company: '' });
+  const [form, setForm] = useState({ name: '', email: '', company: '', password: '' });
+  const [again, setAgain] = useState('');
   const [humanToken, setHumanToken] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [sentTo, setSentTo] = useState('');
   const [resent, setResent] = useState(false);
-  const [open, setOpen] = useState(true);
+  const [mode, setMode] = useState('email');
+  const [trialDays, setTrialDays] = useState(14);
   const humanBox = useRef(null);
   useTurnstile(humanBox, setHumanToken, !sentTo);
 
-  useEffect(() => { authApi.signupOpen().then(r => setOpen(r.open)).catch(() => {}); }, []);
+  useEffect(() => {
+    authApi.signupOpen().then(r => { setMode(r.mode || 'email'); if (r.trialDays) setTrialDays(r.trialDays); }).catch(() => {});
+  }, []);
+  const byCoaster = mode === 'approval';
 
   const set = key => e => setForm(f => ({ ...f, [key]: e.target.value }));
-  const ready = form.name.trim() && form.email.trim() && form.company.trim() && (!TURNSTILE_SITE_KEY || humanToken);
+  const ready = form.name.trim() && form.email.trim() && form.company.trim()
+    && (!byCoaster || (form.password && again))
+    && (!TURNSTILE_SITE_KEY || humanToken);
 
   const submit = async e => {
     e.preventDefault();
+    if (byCoaster && form.password !== again) { setError('The two passwords do not match.'); return; }
     setError(''); setBusy(true);
     try {
-      const r = await authApi.signup({ ...form, human_token: humanToken });
+      const r = await authApi.signup({ ...form, password: byCoaster ? form.password : undefined, human_token: humanToken });
+      if (r.mode) setMode(r.mode);
       setSentTo(r.email || form.email.trim().toLowerCase());
     } catch (err) {
       setError(err.response?.data?.error || err.friendlyMessage || 'Could not sign up. Try again.');
@@ -87,7 +100,20 @@ export default function Signup() {
           <p className="text-sm font-bold text-gray-900 leading-tight">Coaster</p>
         </div>
 
-        {sentTo ? (
+        {sentTo && byCoaster ? (
+          <div>
+            <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-4" style={{ background: 'rgba(5,150,105,0.1)' }}>
+              <CheckCircleIcon className="w-6 h-6" style={{ color: '#047857' }} />
+            </div>
+            <h1 className="text-xl font-extrabold text-gray-900 mb-2 tracking-tight">Thanks — we've got your request</h1>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              We're checking <span className="font-semibold text-gray-900">{sentTo}</span> is your work email. Once it's
+              approved — usually within one business day — sign in with the password you just chose and your {trialDays}-day free
+              trial starts.
+            </p>
+            <Link to="/login" className="btn-primary inline-flex mt-5">Go to sign in</Link>
+          </div>
+        ) : sentTo ? (
           <div>
             <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-4" style={{ background: 'rgba(37,99,235,0.08)' }}>
               <EnvelopeIcon className="w-6 h-6" style={{ color: '#2563eb' }} />
@@ -116,14 +142,9 @@ export default function Signup() {
         ) : (
           <>
             <h1 className="text-xl font-extrabold text-gray-900 mb-1 tracking-tight">Start your free trial</h1>
-            <p className="text-sm text-gray-400 mb-6">Sign up with your work email. Everyone from your company joins the same account.</p>
+            <p className="text-sm text-gray-400 mb-6">{trialDays} days of Coaster, free. Sign up with your work email.</p>
 
-            {!open ? (
-              <div className="p-3 rounded-xl text-sm" style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412' }}>
-                Sign-up isn't open yet. <Link to="/contact" className="underline">Contact us</Link> to get an account.
-              </div>
-            ) : (
-              <form onSubmit={submit} className="space-y-4">
+            <form onSubmit={submit} className="space-y-4">
                 <div>
                   <label className="label">Your name</label>
                   <input className="input" autoFocus autoComplete="name" value={form.name} onChange={set('name')} />
@@ -138,6 +159,19 @@ export default function Signup() {
                   <label className="label">Company</label>
                   <input className="input" autoComplete="organization" value={form.company} onChange={set('company')} />
                 </div>
+                {byCoaster && (
+                  <>
+                    <div>
+                      <label className="label">Password</label>
+                      <input type="password" className="input" autoComplete="new-password" value={form.password} onChange={set('password')} />
+                      <p className="text-[11px] text-gray-400 mt-1">At least 12 characters. A short phrase is easier to remember than a jumble.</p>
+                    </div>
+                    <div>
+                      <label className="label">Type it again</label>
+                      <input type="password" className="input" autoComplete="new-password" value={again} onChange={e => setAgain(e.target.value)} />
+                    </div>
+                  </>
+                )}
 
                 {TURNSTILE_SITE_KEY && <div ref={humanBox} />}
 
@@ -148,10 +182,9 @@ export default function Signup() {
                 )}
 
                 <button type="submit" className="btn-primary w-full justify-center" disabled={busy || !ready}>
-                  {busy ? 'Checking…' : 'Sign up'}
+                  {busy ? 'Checking…' : 'Start my free trial'}
                 </button>
               </form>
-            )}
             <p className="text-center text-xs text-gray-400 mt-5">
               Already have an account? <Link to="/login" className="text-blue-600 hover:underline">Sign in</Link>
             </p>

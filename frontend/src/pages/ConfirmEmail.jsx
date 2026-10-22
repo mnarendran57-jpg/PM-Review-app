@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { BuildingOffice2Icon, UserPlusIcon } from '@heroicons/react/24/outline';
+import { BuildingOffice2Icon } from '@heroicons/react/24/outline';
 import { authApi } from '../api';
 
 // Where the emailed confirmation link lands. Opening it changes nothing — the mail scanners some
@@ -67,19 +67,10 @@ export default function ConfirmEmail() {
             <p className="text-sm text-gray-500 mb-5">Choose a password for {info.email}.</p>
 
             <div className="flex items-start gap-3 p-3 rounded-xl mb-5" style={{ background: '#f8fafc', border: '1px solid #eef1f4' }}>
-              {info.companyExists
-                ? <UserPlusIcon className="w-5 h-5 flex-shrink-0 mt-0.5" style={{ color: '#2563eb' }} />
-                : <BuildingOffice2Icon className="w-5 h-5 flex-shrink-0 mt-0.5" style={{ color: '#2563eb' }} />}
+              <BuildingOffice2Icon className="w-5 h-5 flex-shrink-0 mt-0.5" style={{ color: '#2563eb' }} />
               <p className="text-[12px] text-gray-600 leading-relaxed">
-                {info.companyExists
-                  ? <>
-                      <span className="font-semibold text-gray-900">{info.existingCompanyName}</span> is already on Coaster.
-                      Once you've chosen a password, you'll be let in as soon as your request is approved.
-                    </>
-                  : <>
-                      You're the first from <span className="font-semibold text-gray-900">{info.company}</span> on Coaster.
-                      Your free trial starts now, and you can set up programs and projects straight away.
-                    </>}
+                Your {info.trialDays || 14}-day free trial starts as soon as you've chosen a password, in a workspace of your own for{' '}
+                <span className="font-semibold text-gray-900">{info.company}</span>. You can set up programs and projects straight away.
               </p>
             </div>
 
