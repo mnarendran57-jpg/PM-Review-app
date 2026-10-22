@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
+const { diskUpload } = require('../lib/uploads');
 const db = require('../database');
 const storage = require('../lib/storage');
 const access = require('../lib/access');
@@ -32,8 +32,7 @@ async function sweep() {
 
 const ATTACHMENT_MB = 20;
 const MAX_ATTACHMENTS = 5;
-const upload = multer({
-  storage: multer.memoryStorage(),
+const upload = diskUpload({
   limits: { fileSize: ATTACHMENT_MB * 1024 * 1024 },
 });
 const ATTACHABLE = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/webp']);

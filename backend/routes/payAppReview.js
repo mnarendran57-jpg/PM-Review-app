@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
+const { diskUpload } = require('../lib/uploads');
 const db = require('../database');
 const { analyzePayApps } = require('../lib/payAppExtract');
 const { runChecks } = require('../lib/payAppChecks');
@@ -34,8 +34,7 @@ function visibleProject(req, id) {
   return project && project.org_id === req.orgId ? project : null;
 }
 
-const upload = multer({
-  storage: multer.memoryStorage(),
+const upload = diskUpload({
   limits: { fileSize: 100 * 1024 * 1024 }
 });
 

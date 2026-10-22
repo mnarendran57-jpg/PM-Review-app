@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const db = require('../database');
 const { createLimiter } = require('./workLimit');
+const { holdFiles } = require('./uploads');
 
 // AI work that outlives the request that asked for it.
 //
@@ -49,11 +50,15 @@ const KEEP_HOURS = 6;
 // The limit on AI calls in lib/workLimit.js does not cover this. It counts calls on the network,
 // and the documents are in memory long before the first one is made.
 //
-// Four, because the ordinary case is one or two people and this should be invisible until the day
-// it matters. A waiting job still reads as running to the page that started it, which is true from
-// where the user sits: it has been accepted and it will be done. Set from the environment so it can
-// be changed without a deploy.
-const jobLimiter = createLimiter({ limit: Number(process.env.JOB_CONCURRENCY || 4), name: 'jobs' });
+// Two. It was four, and on the 2 GB instance four large documents read at once, beside a few more
+// uploaded and waiting, was enough to have the service replaced — "exceeded its memory limit",
+// October 2026. One review of a large document peaks near 470 MB and two near 580 MB (measured on
+// an 84 MB, 800-page file), so two leave room for everything else the service is doing. A waiting
+// job costs nothing now — its files wait on disk (lib/uploads.js) — and still reads as running to
+// the page that started it, which is true from where the user sits: it has been accepted and it will
+// be done. Set from the environment so it can be changed without a deploy; raise it with the
+// instance size.
+const jobLimiter = createLimiter({ limit: Number(process.env.JOB_CONCURRENCY || 2), name: 'jobs' });
 
 // Runs the work when a place is free, and gives the place back when it is done.
 //
@@ -161,8 +166,18 @@ function sweep() {
 // time, and when the service restarts — a deploy, or another request exhausting the instance —
 // the work dies with no record that it ever happened. A job survives the request, and a failure is
 // written down where the person who started it can be told.
+//
+// The request's uploaded files are kept on disk until the job is done, rather than deleted when the
+// response goes — the job is what reads them (see lib/uploads.js).
 function startFrom(req, kind, work) {
-  return start({ orgId: req.orgId, userId: req.user?.id, kind }, work);
+  const release = holdFiles(req);
+  return start({ orgId: req.orgId, userId: req.user?.id, kind }, async () => {
+    try {
+      return await work();
+    } finally {
+      release();
+    }
+  });
 }
 
 module.exports = { start, startFrom, get, view, sweep, RUNNING, DONE, FAILED, STALE_AFTER_MINUTES };

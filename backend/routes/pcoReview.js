@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
+const { diskUpload, spill, fromUpload } = require('../lib/uploads');
 const db = require('../database');
 const { analyzePco } = require('../lib/pcoExtract');
 const { runPcoChecks } = require('../lib/pcoChecks');
@@ -34,8 +34,7 @@ function visibleRow(req) {
   return access.recordVisible(req.user, row) ? row : null;
 }
 
-const upload = multer({
-  storage: multer.memoryStorage(),
+const upload = diskUpload({
   limits: { fileSize: 100 * 1024 * 1024, files: 12 },
 });
 
@@ -137,17 +136,17 @@ router.post('/', upload.fields([
       const doc = findDoc.get(id, projectId);
       if (!doc) continue;
       const buffer = await storage.readFile({ key: doc.file_key, blob: doc.file_blob });
-      if (buffer) sharedRefs.push({ name: doc.file_name, buffer });
+      if (buffer) sharedRefs.push(spill(req, { name: doc.file_name, buffer }));
     }
     // RFIs chosen from the project's RFI Log, each as its log entry plus the front of its files.
     const fromLog = [];
     for (const id of projectId ? parseIdList(req.body.rfi_ids) : []) {
       const ref = await rfiReference(id, projectId);
-      if (ref) fromLog.push(ref);
+      if (ref) fromLog.push(spill(req, ref));
     }
     const references = [
       ...fromLog,
-      ...uploadedRefs.map(f => ({ name: f.originalname, buffer: f.buffer })),
+      ...uploadedRefs.map(f => fromUpload(f, { name: f.originalname })),
       ...sharedRefs,
     ];
     if (requested?.reference && references.length === 0) {

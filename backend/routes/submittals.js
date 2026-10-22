@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
-const multer = require('multer');
+const { diskUpload, spill, fromUpload } = require('../lib/uploads');
 const db = require('../database');
 const access = require('../lib/access');
 const storage = require('../lib/storage');
@@ -24,8 +24,7 @@ const { isDesign, labelFor } = require('../lib/docTypes');
 router.use(requireOrg);
 router.use(requireFeature('submittal-log'));
 
-const upload = multer({
-  storage: multer.memoryStorage(),
+const upload = diskUpload({
   limits: { fileSize: 100 * 1024 * 1024, files: 1 },
 });
 
@@ -33,8 +32,7 @@ const upload = multer({
 // hand. That is two fields at once, and multer counts `files` across the WHOLE request rather
 // than per field — so the single-file limit above would reject the second upload with "Too many
 // files" no matter which field it arrived on.
-const uploadForAnalysis = multer({
-  storage: multer.memoryStorage(),
+const uploadForAnalysis = diskUpload({
   limits: { fileSize: 100 * 1024 * 1024, files: 16 },
 });
 
@@ -129,7 +127,7 @@ async function attachFile({ submittalId, revisionId, kind, file }) {
 // Handed over as a specification, because that is what a document attached to a submittal is for:
 // the thing the package is measured against. The section the submittal cites is found inside it
 // the same way it is found inside a filed project manual.
-async function loadReferenceBuffers(submittalId, ids) {
+async function loadReferenceBuffers(submittalId, ids, req = null) {
   const wanted = new Set(ids);
   const rows = db.prepare(
     `SELECT id, file_name, file_key, file_blob FROM submittal_files
@@ -138,7 +136,7 @@ async function loadReferenceBuffers(submittalId, ids) {
   const out = [];
   for (const row of rows) {
     const buffer = await storage.readFile({ key: row.file_key, blob: row.file_blob });
-    if (buffer) out.push({ label: row.file_name, doc_type: 'specifications', buffer });
+    if (buffer) out.push(spill(req, { label: row.file_name, doc_type: 'specifications', buffer }));
   }
   return out;
 }
@@ -219,7 +217,7 @@ function setDocuments(submittalId, projectId, rawIds) {
 
 // Pulls the bytes of the chosen Shared Documents. Scoped by project inside the query, so an id
 // from another project reads as missing rather than as a permission error.
-async function loadDocumentBuffers(projectId, ids) {
+async function loadDocumentBuffers(projectId, ids, req = null) {
   const find = db.prepare(
     `SELECT file_name, label, doc_type, file_key, file_blob
      FROM project_contracts WHERE id=? AND project_id=?`
@@ -230,7 +228,7 @@ async function loadDocumentBuffers(projectId, ids) {
     if (!doc) continue;
     const buffer = await storage.readFile({ key: doc.file_key, blob: doc.file_blob });
     if (buffer) {
-      out.push({ label: (doc.label || '').trim() || doc.file_name, doc_type: doc.doc_type, buffer });
+      out.push(spill(req, { label: (doc.label || '').trim() || doc.file_name, doc_type: doc.doc_type, buffer }));
     }
   }
   return out;
@@ -266,13 +264,13 @@ async function fileSpecification(projectId, file, createdBy) {
 // Only genuine specifications are taken. A drawing set or a contract would be read as though it
 // were the governing text, and a review measured against the wrong document is worse than one
 // that says it could not find the right one.
-async function specificationsFor(projectId) {
+async function specificationsFor(projectId, req = null) {
   const rows = db.prepare(`
     SELECT id FROM project_contracts
     WHERE project_id=? AND doc_type='specifications'
     ORDER BY created_at ASC
   `).all(projectId).map(r => r.id);
-  return loadDocumentBuffers(projectId, rows);
+  return loadDocumentBuffers(projectId, rows, req);
 }
 
 // Why this review cannot run, said so the PM can act on it.
@@ -394,7 +392,7 @@ const reviewForRevision = (revisionId) => {
 
 // The contractor's own package, for the revision being predicted. It is half of the
 // comparison: a review that read the specification and not the submittal has nothing to say.
-async function submittalFilesFor(submittalId, revisionId) {
+async function submittalFilesFor(submittalId, revisionId, req = null) {
   const rows = db.prepare(`
     SELECT file_name, file_key, file_blob FROM submittal_files
     WHERE submittal_id=? AND kind='submittal'${revisionId ? ' AND revision_id=?' : ''}
@@ -403,7 +401,7 @@ async function submittalFilesFor(submittalId, revisionId) {
   const out = [];
   for (const r of rows) {
     const buffer = await storage.readFile({ key: r.file_key, blob: r.file_blob });
-    if (buffer) out.push({ label: r.file_name, buffer });
+    if (buffer) out.push(spill(req, { label: r.file_name, buffer }));
   }
   return out;
 }
@@ -561,11 +559,11 @@ router.post('/preview-analysis', uploadForAnalysis.fields([
     // order, and a document the PM went and found for this package has the best claim on it.
     const documents = [
       ...[...(req.files?.reference_files || []), ...(req.files?.spec_files || [])]
-        .map(f => ({ label: f.originalname, doc_type: 'specifications', buffer: f.buffer })),
-      ...await loadDocumentBuffers(project.id, parseIdList(req.body.document_ids)),
+        .map(f => fromUpload(f, { label: f.originalname, doc_type: 'specifications' })),
+      ...await loadDocumentBuffers(project.id, parseIdList(req.body.document_ids), req),
     ];
     const submittalFiles = (req.files?.files || [])
-      .map(f => ({ label: f.originalname, buffer: f.buffer }));
+      .map(f => fromUpload(f, { label: f.originalname }));
 
     // Nothing to measure against, or nothing of the right kind. A contract ticked here would
     // otherwise be read as though it carried requirements, and the review would report their
@@ -980,31 +978,31 @@ router.post('/:id/analysis', uploadForAnalysis.fields([
     // What was chosen from this submittal's own documents goes first, for the same reason as in
     // the preview: the page budget is spent in order.
     const documents = [
-      ...await loadReferenceBuffers(submittal.id, referenceIds),
-      ...await loadDocumentBuffers(submittal.project_id, chosenIds),
+      ...await loadReferenceBuffers(submittal.id, referenceIds, req),
+      ...await loadDocumentBuffers(submittal.project_id, chosenIds, req),
     ];
 
     // The specification a PM has on their desk but has not filed yet. Read for this review only
     // and not added to the project, because filing documents is the Shared Documents page's job
     // and doing it as a side effect of a review would put copies there nobody chose to keep.
     for (const f of (req.files?.spec_files || [])) {
-      documents.push({ label: f.originalname, doc_type: 'specifications', buffer: f.buffer });
+      documents.push(fromUpload(f, { label: f.originalname, doc_type: 'specifications' }));
     }
 
     // Nothing chosen and nothing handed over: use what the project already holds. The section
     // inside it is found by number, so handing over a whole manual costs no more than handing
     // over the one section would.
     if (documents.length === 0) {
-      documents.push(...await specificationsFor(submittal.project_id));
+      documents.push(...await specificationsFor(submittal.project_id, req));
     }
 
     // The contractor's package: whatever was uploaded with this request, else what is already
     // stored against the open revision.
     const revisions = revisionsOf(submittal.id);
     const current = revisions[revisions.length - 1];
-    let submittalFiles = (req.files?.files || []).map(f => ({ label: f.originalname, buffer: f.buffer }));
-    if (!submittalFiles.length) submittalFiles = await submittalFilesFor(submittal.id, current?.id);
-    if (!submittalFiles.length) submittalFiles = await submittalFilesFor(submittal.id, null);
+    let submittalFiles = (req.files?.files || []).map(f => fromUpload(f, { label: f.originalname }));
+    if (!submittalFiles.length) submittalFiles = await submittalFilesFor(submittal.id, current?.id, req);
+    if (!submittalFiles.length) submittalFiles = await submittalFilesFor(submittal.id, null, req);
 
     const design = documents.filter(d => isDesign(d.doc_type));
 

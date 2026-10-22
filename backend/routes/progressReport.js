@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
+const { diskUpload } = require('../lib/uploads');
 const db = require('../database');
 const { analyzeProgress, renderMarkdown } = require('../lib/progressReport');
 const { renderProgressReportPdf } = require('../lib/progressReportPdf');
@@ -31,8 +31,7 @@ function visibleReport(req) {
   return access.recordVisible(req.user, row) ? row : null;
 }
 
-const upload = multer({
-  storage: multer.memoryStorage(),
+const upload = diskUpload({
   limits: { fileSize: 100 * 1024 * 1024, files: 100 },
 });
 

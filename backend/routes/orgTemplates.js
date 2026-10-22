@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
+const { diskUpload } = require('../lib/uploads');
 const db = require('../database');
 const storage = require('../lib/storage');
 const { requireOrg, requireOrgAdmin } = require('../middleware/auth');
@@ -28,8 +28,7 @@ router.use(requireOrgAdmin);
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-const upload = multer({
-  storage: multer.memoryStorage(),
+const upload = diskUpload({
   limits: { fileSize: 25 * 1024 * 1024, files: 1 },
 });
 

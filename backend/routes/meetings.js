@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
+const { diskUpload } = require('../lib/uploads');
 const db = require('../database');
 const access = require('../lib/access');
 const storage = require('../lib/storage');
@@ -17,8 +17,7 @@ const {
 router.use(requireOrg);
 router.use(requireFeature('meeting-actions'));
 
-const upload = multer({
-  storage: multer.memoryStorage(),
+const upload = diskUpload({
   limits: { fileSize: 50 * 1024 * 1024, files: 1 },
 });
 

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
+const { diskUpload } = require('../lib/uploads');
 const db = require('../database');
 const jobs = require('../lib/jobs');
 const storage = require('../lib/storage');
@@ -31,8 +31,7 @@ const { buildMarkedUpPacket } = require('../lib/cmarAnnotate');
 router.use(requireOrg);
 router.use(requireFeature('cmar-pay-app-audit'));
 
-const upload = multer({
-  storage: multer.memoryStorage(),
+const upload = diskUpload({
   limits: { fileSize: 100 * 1024 * 1024 },
 });
 
@@ -116,8 +115,7 @@ router.post('/', upload.single('packet_file'), async (req, res) => {
     }
   }
 
-  const jobId = jobs.start(
-    { orgId: req.orgId, userId: req.user.id, kind: 'cmar-audit' },
+  const jobId = jobs.startFrom(req, 'cmar-audit',
     () => audit({
       file,
       projectId,

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
+const { diskUpload } = require('../lib/uploads');
 const db = require('../database');
 const { requireOrg } = require('../middleware/auth');
 const { brandingFor, setLogo, clearLogo } = require('../lib/orgBranding');
@@ -13,8 +13,7 @@ const storage = require('../lib/storage');
 // endpoint cannot be added without it.
 router.use(requireOrg);
 
-const upload = multer({
-  storage: multer.memoryStorage(),
+const upload = diskUpload({
   limits: { fileSize: 5 * 1024 * 1024, files: 1 },
 });
 

@@ -1,11 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
+const { diskUpload } = require('../lib/uploads');
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('../database');
 
-const upload = multer({
-  storage: multer.memoryStorage(),
+const upload = diskUpload({
   limits: { fileSize: 100 * 1024 * 1024 }
 });
 

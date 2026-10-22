@@ -132,6 +132,17 @@ app.listen(PORT, '0.0.0.0', () => {
     console.error('Could not reset interrupted contract reads:', err.message);
   }
 
+  // Uploads wait on disk until the review that reads them is done (lib/uploads.js). Nothing can be
+  // using one at start-up, so any found now were left by the process before this one; after that,
+  // an hourly look for anything older than a review could still need.
+  try {
+    const uploads = require('./lib/uploads');
+    uploads.sweep({ all: true });
+    setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
+  } catch (err) {
+    console.error('Could not clear left-over uploads:', err.message);
+  }
+
   // A daily copy of the database to object storage — a second company holding it, and a retention
   // we choose. See lib/dbBackup.js. It checks hourly rather than sleeping for a day, because this
   // process restarts often and a day-long timer would rarely live to fire.

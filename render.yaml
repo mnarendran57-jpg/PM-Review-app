@@ -35,9 +35,17 @@ services:
     # this number, which is the reason for leaving 500 MB of the plan unclaimed rather than asking
     # for all of it.
     #
-    # The point is not that this makes the app use less. It is that exceeding the ceiling now fails
-    # ONE request with an out-of-memory error the logs will name, instead of restarting the service
-    # and taking every other request in flight with it. Raise this with the instance size, together.
+    # The point is not that this makes the app use less. It is that V8 now collects garbage well
+    # before Render's limit instead of letting it pile up. It does NOT make one oversized request
+    # fail on its own: a heap past this ceiling still ends the process, but the log then names it
+    # ("JavaScript heap out of memory") rather than leaving a bare restart. What keeps the total down
+    # is uploads waiting on disk rather than in memory (lib/uploads.js) and two jobs at a time
+    # (lib/jobs.js). Raise this with the instance size, together.
+    #
+    # THE LIVE SERVICE DOES NOT READ THIS FILE. It is "PM-Review-app", set up by hand in the Render
+    # dashboard, not from this Blueprint — its Start Command there was `npm start` until 22 October
+    # 2026, so this flag had never been applied. Anything changed here must be changed in the
+    # dashboard too.
     startCommand: node --max-old-space-size=1500 server.js
     healthCheckPath: /api/health
     autoDeploy: true

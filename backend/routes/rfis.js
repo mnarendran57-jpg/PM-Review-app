@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
-const multer = require('multer');
+const { diskUpload, spill, fromUpload } = require('../lib/uploads');
 const db = require('../database');
 const access = require('../lib/access');
 const storage = require('../lib/storage');
@@ -22,13 +22,11 @@ router.use(requireFeature('rfi-log'));
 
 // The RFI's own attachments and, optionally, a drawing set to file. That is two fields at once,
 // and multer counts `files` across the WHOLE request rather than per field.
-const uploadWithDocument = multer({
-  storage: multer.memoryStorage(),
+const uploadWithDocument = diskUpload({
   limits: { fileSize: 100 * 1024 * 1024, files: 16 },
 });
 
-const upload = multer({
-  storage: multer.memoryStorage(),
+const upload = diskUpload({
   limits: { fileSize: 100 * 1024 * 1024, files: 6 },
 });
 
@@ -201,7 +199,7 @@ const touch = rfiId => db.prepare(`UPDATE rfis SET updated_at=datetime('now') WH
 // They are read the way a Shared Document is — the sheets that bear on the question are found and
 // those are what is sent — because being attached to one RFI says where a document lives, not how
 // long it is.
-async function loadReferenceBuffers(rfiId, ids) {
+async function loadReferenceBuffers(rfiId, ids, req = null) {
   const wanted = new Set(ids);
   const rows = db.prepare(
     `SELECT id, file_name, file_key, file_blob FROM rfi_files WHERE rfi_id=? AND kind='reference' ORDER BY id`
@@ -209,7 +207,7 @@ async function loadReferenceBuffers(rfiId, ids) {
   const out = [];
   for (const row of rows) {
     const buffer = await storage.readFile({ key: row.file_key, blob: row.file_blob });
-    if (buffer) out.push({ label: row.file_name, doc_type: 'attachment', buffer });
+    if (buffer) out.push(spill(req, { label: row.file_name, doc_type: 'attachment', buffer }));
   }
   return out;
 }
@@ -279,7 +277,7 @@ async function fileDocument(projectId, file, createdBy) {
 
 // Pulls the bytes of the chosen Shared Documents. Scoped by project inside the query, so an
 // id from another project reads as missing rather than as a permission error.
-async function loadDocumentBuffers(projectId, ids) {
+async function loadDocumentBuffers(projectId, ids, req = null) {
   const find = db.prepare(
     `SELECT file_name, label, doc_type, file_key, file_blob
      FROM project_contracts WHERE id=? AND project_id=?`
@@ -290,7 +288,7 @@ async function loadDocumentBuffers(projectId, ids) {
     if (!doc) continue;
     const buffer = await storage.readFile({ key: doc.file_key, blob: doc.file_blob });
     if (buffer) {
-      out.push({ label: (doc.label || '').trim() || doc.file_name, doc_type: doc.doc_type, buffer });
+      out.push(spill(req, { label: (doc.label || '').trim() || doc.file_name, doc_type: doc.doc_type, buffer }));
     }
   }
   return out;
@@ -453,12 +451,10 @@ router.post('/preview-analysis', uploadWithDocument.fields([
     // What was attached for this RFI goes first. The page budget is shared and spent in order, and
     // a document the PM went and found for this question has the best claim on it.
     const documents = [
-      ...(req.files?.reference_files || []).map(f => ({
-        label: f.originalname, doc_type: 'attachment', buffer: f.buffer,
-      })),
-      ...await loadDocumentBuffers(project.id, parseIdList(req.body.document_ids)),
+      ...(req.files?.reference_files || []).map(f => fromUpload(f, { label: f.originalname, doc_type: 'attachment' })),
+      ...await loadDocumentBuffers(project.id, parseIdList(req.body.document_ids), req),
     ];
-    const extraFiles = (req.files?.files || []).map(f => ({ label: f.originalname, buffer: f.buffer }));
+    const extraFiles = (req.files?.files || []).map(f => fromUpload(f, { label: f.originalname }));
     if (documents.length === 0 && extraFiles.length === 0) {
       return res.status(400).json({
         error: 'Choose at least one of the project\'s shared documents for this RFI to be read against, or attach the RFI itself.',
@@ -821,15 +817,15 @@ router.post('/:id/analysis', uploadWithDocument.fields([
     // What was chosen from this RFI's own documents goes first. The page budget is shared and spent
     // in order, and a document somebody attached to this one question has the best claim on it.
     const documents = [
-      ...await loadReferenceBuffers(rfi.id, referenceIds),
-      ...await loadDocumentBuffers(rfi.project_id, chosenIds),
+      ...await loadReferenceBuffers(rfi.id, referenceIds, req),
+      ...await loadDocumentBuffers(rfi.project_id, chosenIds, req),
     ];
 
     // The RFI's own attachments travel with it: a marked-up sketch from the contractor is
     // often what the question is really about.
     const extraFiles = [];
     for (const file of req.files?.files || []) {
-      extraFiles.push({ label: file.originalname, buffer: file.buffer });
+      extraFiles.push(fromUpload(file, { label: file.originalname }));
     }
     if (extraFiles.length === 0) {
       const stored = db.prepare(
@@ -837,7 +833,7 @@ router.post('/:id/analysis', uploadWithDocument.fields([
       ).get(rfi.id);
       if (stored) {
         const buffer = await storage.readFile({ key: stored.file_key, blob: stored.file_blob });
-        if (buffer) extraFiles.push({ label: stored.file_name, buffer });
+        if (buffer) extraFiles.push(spill(req, { label: stored.file_name, buffer }));
       }
     }
 

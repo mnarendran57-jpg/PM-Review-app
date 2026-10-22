@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
+const { diskUpload } = require('../lib/uploads');
 const db = require('../database');
 const jobs = require('../lib/jobs');
 const storage = require('../lib/storage');
@@ -16,8 +16,7 @@ const { renderVeReportPdf } = require('../lib/veReportPdf');
 router.use(requireOrg);
 router.use(requireFeature('ve-analyzer'));
 
-const upload = multer({
-  storage: multer.memoryStorage(),
+const upload = diskUpload({
   limits: { fileSize: 100 * 1024 * 1024 },
 });
 
@@ -76,8 +75,7 @@ router.post('/', upload.single('estimate_file'), async (req, res) => {
   const orgId = req.orgId;
   const createdBy = req.body.created_by || req.user?.name || null;
 
-  const jobId = jobs.start(
-    { orgId, userId: req.user.id, kind: 've-analyze' },
+  const jobId = jobs.startFrom(req, 've-analyze',
     () => analyze({ file, projectId, projectName, orgId, createdBy }),
   );
   res.status(202).json({ jobId });

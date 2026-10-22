@@ -14,7 +14,7 @@
 
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
+const { diskUpload } = require('../lib/uploads');
 const db = require('../database');
 const { analyzePayApps, analyzeBackup } = require('../lib/payAppExtract');
 const { buildReportDoc, annotationsFor } = require('../lib/payAppReportDoc');
@@ -54,8 +54,7 @@ function visibleProject(req, id) {
   return project && project.org_id === req.orgId ? project : null;
 }
 
-const upload = multer({
-  storage: multer.memoryStorage(),
+const upload = diskUpload({
   limits: { fileSize: 100 * 1024 * 1024 }
 });
 
@@ -78,8 +77,7 @@ router.post('/extract', upload.fields([
   // Everything above is a check on the upload and answers immediately. Everything below is minutes
   // of reading, and it no longer happens while the browser holds a connection open — see
   // lib/jobs.js for why that mattered more than it sounds.
-  const jobId = jobs.start(
-    { orgId: req.orgId, userId: req.user.id, kind: 'pay-app-extract' },
+  const jobId = jobs.startFrom(req, 'pay-app-extract',
     () => extractPayApp({ currentFile, previousFile, backupFiles: req.files?.backup_files || [] }),
   );
   res.status(202).json({ jobId });
@@ -319,8 +317,7 @@ router.post('/', upload.fields([
   // first review on a project, which reads the governing contract — several passes on a long
   // agreement, against a per-minute rate limit. That is enough to lose the connection, so this
   // runs as a job like the extraction does.
-  const jobId = jobs.start(
-    { orgId: req.orgId, userId: req.user.id, kind: 'pay-app-review' },
+  const jobId = jobs.startFrom(req, 'pay-app-review',
     () => runPayAppReview(req, currentFile),
   );
   res.status(202).json({ jobId });
