@@ -6,6 +6,7 @@ const db = require('../database');
 const access = require('../lib/access');
 const storage = require('../lib/storage');
 const jobs = require('../lib/jobs');
+const { takesATurn } = jobs;
 const { requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../lib/plans');
 const { friendlyAiError } = require('../lib/aiErrors');
@@ -407,7 +408,7 @@ router.get('/:id', (req, res) => {
 
 // --- Entering an RFI ----------------------------------------------------------------------
 
-router.post('/extract', upload.single('file'), async (req, res) => {
+router.post('/extract', upload.single('file'), takesATurn('rfi read'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Upload the RFI PDF to read.' });
     if (req.file.mimetype !== 'application/pdf') {
@@ -436,7 +437,7 @@ router.post('/extract', upload.single('file'), async (req, res) => {
 router.post('/preview-analysis', uploadWithDocument.fields([
   { name: 'files', maxCount: 6 },
   { name: 'reference_files', maxCount: 10 },
-]), async (req, res) => {
+]), takesATurn('rfi preview'), async (req, res) => {
   try {
     const project = projectInScope(req, req.body.project_id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -692,7 +693,7 @@ router.patch('/:id/revisions/:revId', (req, res) => {
 });
 
 // Reads the A/E's written response so the form opens pre-filled. Saves nothing.
-router.post('/:id/revisions/:revId/extract-response', upload.single('file'), async (req, res) => {
+router.post('/:id/revisions/:revId/extract-response', upload.single('file'), takesATurn('rfi response read'), async (req, res) => {
   try {
     const { rfi, revision } = visibleRevision(req);
     if (!rfi || !revision) return res.status(404).json({ error: 'Not found' });
@@ -708,7 +709,7 @@ router.post('/:id/revisions/:revId/extract-response', upload.single('file'), asy
 });
 
 // Records the A/E's answer, which closes the round trip and moves the RFI out of "With A/E".
-router.post('/:id/revisions/:revId/response', upload.single('file'), async (req, res) => {
+router.post('/:id/revisions/:revId/response', upload.single('file'), takesATurn('rfi response'), async (req, res) => {
   try {
     const { rfi, revision } = visibleRevision(req);
     if (!rfi || !revision) return res.status(404).json({ error: 'Not found' });
@@ -880,7 +881,7 @@ router.post('/:id/analysis', uploadWithDocument.fields([
 
 // Runs the comparison on demand — after a failure when the response was recorded, or to redo
 // it once the prediction has been re-run against a better set of documents.
-router.post('/:id/revisions/:revId/review', async (req, res) => {
+router.post('/:id/revisions/:revId/review', takesATurn('rfi review'), async (req, res) => {
   try {
     const { rfi, revision } = visibleRevision(req);
     if (!rfi || !revision) return res.status(404).json({ error: 'Not found' });

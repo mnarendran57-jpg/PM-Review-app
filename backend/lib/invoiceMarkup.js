@@ -72,7 +72,8 @@ function collectMarks(report) {
   return marks;
 }
 
-// `sources`: the files uploaded, in order — the invoice, and any receipts sent with it.
+// `sources`: the files uploaded, in order — the invoice, and any receipts sent with it. All of their
+// pages follow the report, marked where a finding is.
 async function addMarkedPages(target, { sources, report }) {
   const h = report.header || {};
   return drawMarkedPages(target, {
@@ -80,6 +81,8 @@ async function addMarkedPages(target, { sources, report }) {
     marks: collectMarks(report),
     heading: `${h.invoiceNumber ? `Invoice ${h.invoiceNumber}` : h.vendor || 'Invoice'} — marked up`,
     noun: 'invoice',
+    // The invoice as it was sent, every page, after the report — not only the pages with a finding.
+    wholeDocument: true,
   });
 }
 

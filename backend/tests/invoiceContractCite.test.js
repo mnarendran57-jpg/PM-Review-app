@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { PDFDocument, StandardFonts } = require('pdf-lib');
+const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const { runInvoiceChecks } = require('../lib/invoiceChecks');
 const { buildInvoiceReport } = require('../lib/invoiceReport');
 const { renderInvoiceReportPdf } = require('../lib/invoiceReportPdf');
@@ -159,6 +159,42 @@ async function invoicePdf() {
     assert.deepStrictEqual(over.flat(), [], `text past the right margin: ${JSON.stringify(over.flat())}`);
     const text = (await eachPage(pdf, async page => (await page.getTextContent()).items.map(i => i.str).join(' '))).join(' ');
     assert.ok(text.includes('Purchase Order 2026-0417'), 'the whole name is in the heading, wrapped');
+  });
+
+  await check('the whole invoice follows the report — every page of every file, marked where it should be', async () => {
+    // A three-page invoice (findings on page 1 only) and a one-page receipt sent as its own file.
+    const doc = await PDFDocument.load(await invoicePdf());
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    for (const n of [2, 3]) doc.addPage([612, 792]).drawText(`Terms and conditions, page ${n}`, { x: 50, y: 740, size: 10, font });
+    const receipt = await PDFDocument.create();
+    receipt.addPage([400, 600]).drawText('Receipt - plotting $500.00', { x: 40, y: 540, size: 10, font: await receipt.embedFont(StandardFonts.Helvetica) });
+    const sources = [
+      { name: 'A-1042.pdf', buffer: Buffer.from(await doc.save()) },
+      { name: 'Receipt.pdf', buffer: Buffer.from(await receipt.save()) },
+    ];
+    const reportOnly = await PDFDocument.load(await renderInvoiceReportPdf({ report }));
+    const full = await PDFDocument.load(await renderInvoiceReportPdf({ report, sources }));
+    assert.strictEqual(full.getPageCount(), reportOnly.getPageCount() + 4, 'report pages + 3 invoice pages + 1 receipt');
+    const { eachPage } = require('../lib/pdfTextLayer');
+    const text = await eachPage(Buffer.from(await full.save()), async page => (await page.getTextContent()).items.map(i => i.str).join(' '));
+    const tail = text.slice(-4);
+    assert.match(tail[0], /Page 1 of A-1042\.pdf .* findings? marked/);
+    assert.match(tail[1], /Page 2 of A-1042\.pdf .* nothing marked/);
+    assert.match(tail[1], /Nothing marked on this page/);
+    assert.match(tail[2], /Terms and conditions, page 3/);
+    assert.match(tail[3], /Receipt - plotting/);
+  });
+
+  await check('a clean invoice, and a scanned one, are still attached in full', async () => {
+    const clean = { ...report, math: { issues: [] }, backup: null, duplicate: null, contract: null };
+    const one = await PDFDocument.load(await renderInvoiceReportPdf({ report: clean }));
+    const withInvoice = await PDFDocument.load(await renderInvoiceReportPdf({ report: clean, sources: [{ name: 'A.pdf', buffer: await invoicePdf() }] }));
+    assert.strictEqual(withInvoice.getPageCount(), one.getPageCount() + 1);
+    // A scan: an image of a page, no text to anchor marks to.
+    const scan = await PDFDocument.create();
+    for (let i = 0; i < 2; i++) scan.addPage([612, 792]).drawRectangle({ x: 40, y: 40, width: 530, height: 710, color: rgb(0.9, 0.9, 0.88) });
+    const scanned = await PDFDocument.load(await renderInvoiceReportPdf({ report, sources: [{ name: 'Scan.pdf', buffer: Buffer.from(await scan.save()) }] }));
+    assert.strictEqual(scanned.getPageCount(), (await PDFDocument.load(await renderInvoiceReportPdf({ report }))).getPageCount() + 2);
   });
 
   console.log(`\n${failed === 0 ? 'All' : ''} ${passed} check${passed === 1 ? '' : 's'} passed`

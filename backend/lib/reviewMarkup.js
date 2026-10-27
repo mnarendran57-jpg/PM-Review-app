@@ -260,9 +260,14 @@ function layoutNotes(notes, top, bottom, fonts, width) {
 // arrive as several files — and a mark is placed on the first page of any of them that shows it.
 // `heading` names the marked pages ("PCO 021 — marked up"); `noun` is what a source is called in the
 // line under it ("change order", "invoice"), used when there is only one.
-async function drawMarkedPages(target, { sources, marks, heading, noun = 'document' }) {
+//
+// `wholeDocument`: every page of every source, in order, not only the pages with a mark — so the
+// report carries the document itself, as it was sent, with the findings marked where they belong.
+// A page with nothing on it says so in its notes column. Even with no findings at all, or a scan
+// whose text cannot be read, the pages are all there.
+async function drawMarkedPages(target, { sources, marks, heading, noun = 'document', wholeDocument = false }) {
   const docs = (sources || []).filter(s => s && s.buffer);
-  if (!marks.length || !docs.length) return { marks: marks.length, placed: 0 };
+  if (!docs.length || (!marks.length && !wholeDocument)) return { marks: marks.length, placed: 0 };
 
   // Every page of every source, numbered through them all; `src` and `page` say where it came from.
   const pages = [];
@@ -271,6 +276,12 @@ async function drawMarkedPages(target, { sources, marks, heading, noun = 'docume
       for (const p of await textPositions(doc.buffer)) pages.push({ ...p, src: s, page: p.pageIndex, pageIndex: pages.length });
     } catch {
       // A source whose text cannot be read has nothing to anchor a mark to; the others still can.
+      // For the whole document its pages still belong in it, unmarked.
+      if (wholeDocument) {
+        const count = await PDFDocument.load(doc.buffer, { ignoreEncryption: true })
+          .then(d => d.getPageCount()).catch(() => 0);
+        for (let p = 0; p < count; p++) pages.push({ items: [], src: s, page: p, pageIndex: pages.length });
+      }
     }
   }
   if (!pages.length) return { marks: marks.length, placed: 0 };
@@ -284,7 +295,7 @@ async function drawMarkedPages(target, { sources, marks, heading, noun = 'docume
     byPage.get(at.pageIndex).push({ ...mark, at });
   }
   const placed = [...byPage.values()].reduce((n, list) => n + list.length, 0);
-  if (!placed) return { marks: marks.length, placed: 0 };
+  if (!placed && !wholeDocument) return { marks: marks.length, placed: 0 };
 
   const font = await target.embedFont(StandardFonts.Helvetica);
   const bold = await target.embedFont(StandardFonts.HelveticaBold);
@@ -294,14 +305,25 @@ async function drawMarkedPages(target, { sources, marks, heading, noun = 'docume
     if (!loaded.has(s)) loaded.set(s, await PDFDocument.load(docs[s].buffer, { ignoreEncryption: true }));
     return loaded.get(s);
   };
-  const order = [...byPage.keys()].sort((a, b) => a - b);
+  const order = wholeDocument ? pages.map(p => p.pageIndex) : [...byPage.keys()].sort((a, b) => a - b);
 
   for (const [n, pageIndex] of order.entries()) {
     const where = pages[pageIndex];
-    const src = (await sourceOf(where.src)).getPage(where.page);
+    const loadedDoc = await sourceOf(where.src).catch(() => null);
+    // A source pdf-lib cannot open (damaged, or protected in a way it will not copy) cannot be drawn.
+    if (!loadedDoc) continue;
+    const src = loadedDoc.getPage(where.page);
     const { x: ox, y: oy, width: w, height: h } = src.getMediaBox();
     const view = viewTransform(src.getRotation().angle, w, h);
-    const embedded = await target.embedPage(src);
+    // A page pdf-lib cannot copy — one with no content at all, say — is left out, rather than costing
+    // the reader every other page of the document.
+    let embedded;
+    try {
+      embedded = await target.embedPage(src);
+    } catch (err) {
+      console.warn(`[markup] page ${where.page + 1} could not be copied: ${err.message}`);
+      continue;
+    }
     const page = target.addPage([view.vw + SIDEBAR, view.vh + BAND]);
 
     // The page, as it was sent.
@@ -329,11 +351,20 @@ async function drawMarkedPages(target, { sources, marks, heading, noun = 'docume
     // Each keeps to one line, short of the key.
     const room = kx - 16 - 12;
     page.drawText(fitText(toWinAnsi(heading), bold, 11, room), { x: 16, y: view.vh + BAND - 18, size: 11, font: bold, color: INK });
+    const list = byPage.get(pageIndex) || [];
     const of = docs.length > 1 ? (docs[where.src].name || `document ${where.src + 1}`) : `the ${noun}`;
-    page.drawText(fitText(toWinAnsi(`Page ${where.page + 1} of ${of}  ·  ${n + 1} of ${order.length} marked`), font, 8, room),
+    const count = wholeDocument
+      ? (list.length ? `${list.length} finding${list.length === 1 ? '' : 's'} marked` : 'nothing marked')
+      : `${n + 1} of ${order.length} marked`;
+    page.drawText(fitText(toWinAnsi(`Page ${where.page + 1} of ${of}  ·  ${count}`), font, 8, room),
       { x: 16, y: view.vh + BAND - 32, size: 8, font, color: GREY });
 
-    const list = byPage.get(pageIndex);
+    // A page of the whole document with no finding on it says so, so a blank column does not read as
+    // a page Coaster skipped.
+    if (!list.length) {
+      page.drawText('Nothing marked on this page.', { x: view.vw + 12, y: view.vh - 22, size: 8, font: italic, color: GREY });
+    }
+
     // Marks that share a spot share one oval, drawn in the most serious of their colours, with their
     // badges in a row just past its right end — where the line to the notes leaves from, and where a
     // page usually has white space. Above the oval, a badge sat on the row above.

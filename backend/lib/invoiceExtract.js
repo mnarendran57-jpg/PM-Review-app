@@ -175,8 +175,12 @@ async function callWithRetry(content, hasContract) {
 }
 
 async function analyzeInvoices({ invoiceBuffers, contractTerms }) {
-  const parts = await Promise.all(invoiceBuffers.map(buf => splitPdf(buf)));
-  const anyOversized = parts.some(p => p.length > 1);
+  // One file at a time: splitting parses the whole PDF, and parsing every upload at once — an invoice
+  // and twenty receipts — put all of them in memory together for the sake of a page count.
+  let anyOversized = false;
+  for (const buf of invoiceBuffers) {
+    if ((await splitPdf(buf)).length > 1) { anyOversized = true; break; }
+  }
 
   // Everything fits: keep the single call with all documents together, so the model can still
   // match reimbursable lines on the invoice to their backup receipts.
@@ -209,10 +213,12 @@ async function analyzeInvoices({ invoiceBuffers, contractTerms }) {
     return callWithRetry(content, !!contractTerms);
   };
 
-  // All of them at once. Each file is independent — merging happens afterwards — and these ran in
-  // series only because the old per-minute allowance made parallel reads fail. Order is preserved so
-  // that merged lists stay in the order the files were given.
-  const results = await Promise.all(invoiceBuffers.map(buffer => analyzeInPasses(buffer, readOne)));
+  // One file after another. Each file's own pages are still read in parallel passes (see
+  // lib/pdfChunk.js), which is where the speed is; reading every file at once as well put every
+  // file's parts and encoded copies in memory together, and on a package of large scans that was
+  // enough to exhaust the server. Order is preserved so merged lists stay in the order given.
+  const results = [];
+  for (const buffer of invoiceBuffers) results.push(await analyzeInPasses(buffer, readOne));
   const merged = mergeExtracted(results);
 
   return { invoice: merged.invoice || {}, observations: merged.observations || {} };

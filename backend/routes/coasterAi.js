@@ -8,7 +8,8 @@ const { requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../lib/plans');
 const { friendlyAiError } = require('../lib/aiErrors');
 const { chooseTier } = require('../lib/chatRouting');
-const { sweepChats, KEEP_HOURS } = require('../lib/chatHistory');
+const { sweepChats, KEEP_HOURS, historyWindow } = require('../lib/chatHistory');
+const { inTurn } = require('../lib/jobs');
 const { toApiMessages, streamAnswer, titleFrom } = require('../lib/chatAnswer');
 const { blocksForFile } = require('../lib/chatDocuments');
 
@@ -150,8 +151,9 @@ router.post('/chats/:id/messages', async (req, res) => {
     });
   }
 
-  const documentIds = safeParse(chat.document_ids, []);
-  const projectDocs = chat.project_id ? await loadProjectDocuments(chat.project_id, documentIds) : [];
+  // The project documents are read when the answer is written (below), not here, so they are only
+  // in memory while a place is held for them.
+  const documentIds = chat.project_id ? safeParse(chat.document_ids, []) : [];
 
   const prior = db.prepare(`SELECT role, content, attachments FROM ai_chat_messages WHERE chat_id=? ORDER BY id`)
     .all(chat.id);
@@ -160,7 +162,7 @@ router.post('/chats/:id/messages', async (req, res) => {
   const tier = chooseTier({
     question,
     attachmentCount: attachments.length,
-    projectDocumentCount: projectDocs.length,
+    projectDocumentCount: documentIds.length,
     historyChars,
     forceDeep: req.body?.deep === true,
   });
@@ -197,15 +199,27 @@ router.post('/chats/:id/messages', async (req, res) => {
       ...prior,
       { role: 'user', content: question, attachments: JSON.stringify(attachments) },
     ];
-    const bytes = await loadAttachments(stored);
-    const { messages } = toApiMessages(stored, row => blocksFor(row, bytes));
+    // Only the files in the part of the conversation that is actually sent are read. Every file
+    // ever attached to the chat used to be fetched and encoded again on every question — and then
+    // most of them dropped by the history window — so a long chat with a few drawings in it grew
+    // heavier with each question asked.
+    const sent = historyWindow(stored).messages;
+    const hasFiles = documentIds.length > 0 || sent.some(row => safeParse(row.attachments, []).length > 0);
 
-    const answer = await streamAnswer({
-      model: tier.model,
-      // The documents go in front of the conversation, not inside it — see documentsTurn.
-      messages: [...documentsTurn(projectDocs), ...messages],
-      onText: fragment => send('text', { t: fragment }),
-    });
+    const answerWith = async () => {
+      const projectDocs = documentIds.length ? await loadProjectDocuments(chat.project_id, documentIds) : [];
+      const bytes = await loadAttachments(sent);
+      const { messages } = toApiMessages(stored, row => blocksFor(row, bytes));
+      return streamAnswer({
+        model: tier.model,
+        // The documents go in front of the conversation, not inside it — see documentsTurn.
+        messages: [...documentsTurn(projectDocs), ...messages],
+        onText: fragment => send('text', { t: fragment }),
+      });
+    };
+    // With files in it, the answer holds them in memory, so it takes one of the places the document
+    // reviews share (lib/jobs.js). A plain question does not wait behind a review.
+    const answer = hasFiles ? await inTurn(answerWith, 'coaster ai chat') : await answerWith();
 
     const saved = db.prepare(`
       INSERT INTO ai_chat_messages

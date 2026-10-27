@@ -62,14 +62,20 @@ async function slice(source, startPage, endPage) {
 // weight is not spread evenly across its pages: one scanned photograph in an otherwise text
 // document carries most of the file. So the even split comes first, and only a part that is
 // still too heavy gets halved — which on a text document never happens at all.
+//
+// The document is parsed once. It was parsed twice — once to count its pages, then again to cut
+// them — and a parsed PDF takes several times the file's own size in memory.
 async function splitPdf(buffer, maxPages = MAX_PAGES_PER_PASS, maxBytes = MAX_BYTES_PER_PASS) {
-  const total = await pageCount(buffer);
-  if (total == null) return [{ buffer, startPage: 1, endPage: total, partCount: 1 }];
+  let source;
+  try {
+    source = await PDFDocument.load(buffer, { ignoreEncryption: true });
+  } catch {
+    return [{ buffer, startPage: 1, endPage: null, partCount: 1 }];
+  }
+  const total = source.getPageCount();
   if (total <= maxPages && buffer.length <= maxBytes) {
     return [{ buffer, startPage: 1, endPage: total, partCount: 1 }];
   }
-
-  const source = await PDFDocument.load(buffer, { ignoreEncryption: true });
   const parts = [];
 
   // Only ever called on a part that is already within the page ceiling and still too heavy.
@@ -158,7 +164,14 @@ function mergeExtracted(results) {
 // because the account's per-minute token allowance would rate-limit parallel passes.
 async function analyzeInPasses(buffer, analyze, maxPages = MAX_PAGES_PER_PASS) {
   const parts = await splitPdf(buffer, maxPages);
-  const source = await PDFDocument.load(buffer, { ignoreEncryption: true }).catch(() => null);
+  // Parsed again only if an answer overflows and its pages must be halved — which is rare. It used
+  // to be parsed here every time and held for the whole read, a second full copy of the document
+  // in memory beside the parts, for a case most documents never reach.
+  let parsed;
+  const sourceOf = async () => {
+    if (parsed === undefined) parsed = await PDFDocument.load(buffer, { ignoreEncryption: true }).catch(() => null);
+    return parsed;
+  };
 
   // A pass can fit the request and still overflow the ANSWER: forty pages of a continuation
   // sheet carrying three hundred line items produce more JSON than one reply holds. That used
@@ -170,7 +183,8 @@ async function analyzeInPasses(buffer, analyze, maxPages = MAX_PAGES_PER_PASS) {
       return await analyze(part.buffer, context);
     } catch (err) {
       const pages = (part.endPage ?? 0) - (part.startPage ?? 0) + 1;
-      if (!err?.truncated || pages <= 1 || !source) throw err;
+      const source = err?.truncated && pages > 1 ? await sourceOf() : null;
+      if (!source) throw err;
       const mid = part.startPage + Math.floor((part.endPage - part.startPage) / 2);
       console.warn(`[pdfChunk] pages ${part.startPage}-${part.endPage} overflowed one answer; `
         + 'reading them in two halves');

@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { takesATurn } = require('../lib/jobs');
 const { diskUpload } = require('../lib/uploads');
 const db = require('../database');
 const { askForJson } = require('../lib/aiJson');
@@ -78,7 +79,7 @@ function formatMoney(n) {
 }
 
 // Extract key fields from an uploaded proposal PDF via Claude
-router.post('/extract', upload.single('file'), async (req, res) => {
+router.post('/extract', upload.single('file'), takesATurn('proposal read'), async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'No file uploaded' });
@@ -210,7 +211,7 @@ async function buildPackage({ orgId, projectId, template, fields, proposalBytes,
   return { mergedPdf, memoDocx };
 }
 
-router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 'po_file', maxCount: 1 }]), async (req, res) => {
+router.post('/', upload.fields([{ name: 'proposal_file', maxCount: 1 }, { name: 'po_file', maxCount: 1 }]), takesATurn('proposal intake'), async (req, res) => {
   try {
     const {
       intake_type, vendor_name, project_name, po_number,

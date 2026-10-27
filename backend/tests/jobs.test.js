@@ -57,6 +57,30 @@ const check = (name, ok) => { ok ? pass++ : fail++; console.log(`  ${ok ? 'ok  '
   check('no more than two do their work at the same moment', mostAtOnce === 2);
   check('and every one of them finishes', crowd.every(c => jobs.view(jobs.get(c, OWNER)).status === 'done'));
 
+  // 3b. Heavy work answered inside its own request shares the same two places, holds one until the
+  // response is over, and is named in what is running.
+  {
+    const { EventEmitter } = require('events');
+    const fakeRes = () => new EventEmitter();
+    const order = [];
+    const job = jobs.start({ ...OWNER, kind: 'test-turns' }, async () => { order.push('job'); await wait(150); return null; });
+    const holders = [fakeRes(), fakeRes()];
+    let third = false;
+    for (const res of holders) await new Promise(r => jobs.takesATurn('test preview')({ method: 'POST', baseUrl: '', path: '/' }, res, r));
+    jobs.takesATurn('test preview')({ method: 'POST', baseUrl: '', path: '/' }, fakeRes(), () => { third = true; });
+    await wait(60);
+    const busy = jobs.activity();
+    check('requests and jobs share the two places', !third && busy.running.length === 2 && busy.waiting >= 1);
+    check('what is running is named', busy.running.every(r => r.label === 'test preview'));
+    holders[0].emit('finish');
+    holders[0].emit('close');        // finishing and closing together give the place back once
+    await wait(30);
+    check('a finished response gives its place to the next in line', third);
+    holders[1].emit('close');
+    await wait(400);
+    check('and the waiting job runs once a place is free', order.includes('job') && jobs.view(jobs.get(job, OWNER)).status === 'done');
+  }
+
   // 4. A job whose process died is reported, not polled for ever.
   const stuck = jobs.start({ ...OWNER, kind: 'test-stuck' }, () => new Promise(() => {}));
   db.prepare(`UPDATE ai_jobs SET updated_at = datetime('now', '-90 minutes') WHERE id=?`).run(stuck);

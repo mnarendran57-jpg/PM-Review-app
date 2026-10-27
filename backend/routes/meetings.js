@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { takesATurn } = require('../lib/jobs');
 const { diskUpload } = require('../lib/uploads');
 const db = require('../database');
 const access = require('../lib/access');
@@ -244,7 +245,7 @@ router.get('/register/export.csv', (req, res) => {
 // Reads the minutes and returns a draft for the PM to confirm. Nothing is saved: the register
 // is the project's record of who owes what, and a model's first pass should not write to it
 // unreviewed.
-router.post('/extract', upload.single('file'), async (req, res) => {
+router.post('/extract', upload.single('file'), takesATurn('meeting read'), async (req, res) => {
   try {
     const project = projectInScope(req, req.body.project_id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -295,7 +296,7 @@ router.post('/extract', upload.single('file'), async (req, res) => {
 // Saves the confirmed minutes and folds their action items into the register. Items the PM
 // marked as follow-ups attach to the existing entry as a mention rather than creating a
 // second copy of the same job.
-router.post('/', upload.single('file'), async (req, res) => {
+router.post('/', upload.single('file'), takesATurn('meeting minutes'), async (req, res) => {
   try {
     const project = projectInScope(req, req.body.project_id);
     if (!project) return res.status(404).json({ error: 'Project not found' });

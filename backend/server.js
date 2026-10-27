@@ -132,6 +132,14 @@ app.listen(PORT, '0.0.0.0', () => {
     console.error('Could not reset interrupted contract reads:', err.message);
   }
 
+  // Memory notes in the log: the limit and heap ceiling now, then a line a minute while work is
+  // running — so a restart for memory can be traced to what caused it. See lib/memoryWatch.js.
+  try {
+    require('./lib/memoryWatch').start({ activity: require('./lib/jobs').activity });
+  } catch (err) {
+    console.error('Could not start the memory notes:', err.message);
+  }
+
   // Uploads wait on disk until the review that reads them is done (lib/uploads.js). Nothing can be
   // using one at start-up, so any found now were left by the process before this one; after that,
   // an hourly look for anything older than a review could still need.

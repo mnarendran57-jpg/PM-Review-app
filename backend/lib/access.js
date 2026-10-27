@@ -21,6 +21,19 @@ const db = require('../database');
 
 const isPlatformAdmin = user => user?.role === 'superadmin';
 
+// An organization's columns, minus the stored logo file. The list of organizations goes back to the
+// app on every sign-in and page load, and `o.*` carried each organization's logo bytes with it —
+// sent as JSON, at about four characters a byte, once per organization a platform admin can see.
+// Worked out from the table itself, so a column added later is included without anyone remembering.
+let orgColumnsCache = null;
+const orgColumns = (alias) => {
+  if (!orgColumnsCache) {
+    orgColumnsCache = db.prepare(`PRAGMA table_info(organizations)`).all()
+      .map(c => c.name).filter(n => n !== 'logo_blob');
+  }
+  return orgColumnsCache.map(n => `${alias ? `${alias}.` : ''}${n}`).join(', ');
+};
+
 // The one definition of "projects this non-admin can reach": added to the project itself,
 // or granted the program holding it. Every visibility check builds on this single fragment
 // so they cannot drift apart — a second, subtly different copy is how leaks start. Takes
@@ -38,10 +51,10 @@ function orgsForUser(user) {
   // is_admin travels with each row so the app can hide administrative controls without a
   // second round trip. The server still re-checks on every write.
   if (isPlatformAdmin(user)) {
-    return db.prepare(`SELECT *, 1 AS is_admin, 1 AS can_create FROM organizations ORDER BY name ASC`).all();
+    return db.prepare(`SELECT ${orgColumns()}, 1 AS is_admin, 1 AS can_create FROM organizations ORDER BY name ASC`).all();
   }
   return db.prepare(`
-    SELECT DISTINCT o.*,
+    SELECT DISTINCT ${orgColumns('o')},
       EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = o.id AND m.user_id = ? AND m.role='Admin') AS is_admin,
       EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = o.id AND m.user_id = ? AND m.role IN ('Admin','Contributor')) AS can_create
     FROM organizations o
@@ -226,7 +239,7 @@ function tokenStillValid(user, claims) {
 }
 
 module.exports = {
-  isPlatformAdmin, orgsForUser, isOrgAdmin, worksAcrossOrg, isInOrg,
+  isPlatformAdmin, orgsForUser, orgColumns, isOrgAdmin, worksAcrossOrg, isInOrg,
   programsForUser, projectsForUser, projectForUser, rolesOnProject,
   visibilityClause, recordVisible, tokenStillValid,
 };

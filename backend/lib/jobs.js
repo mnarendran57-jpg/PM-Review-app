@@ -66,8 +66,23 @@ const jobLimiter = createLimiter({ limit: Number(process.env.JOB_CONCURRENCY || 
 // has already been told the job is lost, and work that never returns — a call that hangs, a promise
 // nobody settles — would otherwise hold its place for the life of the process. Four of those and
 // nothing would ever start again.
-async function inTurn(work) {
-  const release = await jobLimiter.acquire();
+//
+// `label` names the work for the memory notes in the log (lib/memoryWatch.js), so a restart can be
+// traced to what was running when it happened.
+const running = new Map();   // id -> { label, since }
+let waiting = 0;
+let nextTurnId = 1;
+
+async function inTurn(work, label = 'work') {
+  waiting += 1;
+  let release;
+  try {
+    release = await jobLimiter.acquire();
+  } finally {
+    waiting -= 1;
+  }
+  const turnId = nextTurnId++;
+  running.set(turnId, { label, since: Date.now() });
   let held = true;
   const free = () => { if (held) { held = false; release(); } };
   const timer = setTimeout(free, STALE_AFTER_MINUTES * 60 * 1000);
@@ -75,9 +90,46 @@ async function inTurn(work) {
   try {
     return await work();
   } finally {
+    running.delete(turnId);
     clearTimeout(timer);
     free();
   }
+}
+
+// What is taking a turn right now, and how many are waiting for one — for the memory notes.
+function activity() {
+  return {
+    running: [...running.values()].map(r => ({ label: r.label, seconds: Math.round((Date.now() - r.since) / 1000) })),
+    waiting,
+  };
+}
+
+// The same two places, for heavy work that answers inside its own request rather than as a job —
+// a preview read, a form filled from a document, a chat with files attached. Before this, those ran
+// beside the jobs with no limit at all, so two people previewing a submittal while two jobs ran
+// meant four documents open at once on a server sized for two. They now wait for a place like a
+// job does; the request simply takes a little longer when the server is busy.
+//
+// As route middleware: the place is held until the response is finished or the caller goes away.
+function takesATurn(label) {
+  return (req, res, next) => {
+    waiting += 1;
+    jobLimiter.acquire().then((release) => {
+      waiting -= 1;
+      const turnId = nextTurnId++;
+      running.set(turnId, { label: label || `${req.method} ${req.baseUrl}${req.path}`, since: Date.now() });
+      let held = true;
+      const free = () => {
+        if (!held) return;
+        held = false;
+        running.delete(turnId);
+        release();
+      };
+      res.once('finish', free);
+      res.once('close', free);
+      next();
+    }, (err) => { waiting -= 1; next(err); });
+  };
 }
 
 function create({ orgId, userId, kind }) {
@@ -94,7 +146,7 @@ function start({ orgId, userId, kind }, work) {
   const id = create({ orgId, userId, kind });
 
   Promise.resolve()
-    .then(() => inTurn(work))
+    .then(() => inTurn(work, kind))
     .then((result) => {
       db.prepare(`
         UPDATE ai_jobs SET status=?, result_json=?, updated_at=datetime('now') WHERE id=?
@@ -180,4 +232,6 @@ function startFrom(req, kind, work) {
   });
 }
 
-module.exports = { start, startFrom, get, view, sweep, RUNNING, DONE, FAILED, STALE_AFTER_MINUTES };
+module.exports = {
+  start, startFrom, get, view, sweep, inTurn, takesATurn, activity, RUNNING, DONE, FAILED, STALE_AFTER_MINUTES,
+};

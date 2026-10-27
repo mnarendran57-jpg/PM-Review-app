@@ -6,6 +6,7 @@ const db = require('../database');
 const access = require('../lib/access');
 const storage = require('../lib/storage');
 const jobs = require('../lib/jobs');
+const { takesATurn } = jobs;
 const {
   analyzeSubmittal, renderMarkdown: renderSubmittalMarkdown,
 } = require('../lib/submittalAnalysis');
@@ -527,7 +528,7 @@ router.get('/:id', (req, res) => {
 
 // Reads an uploaded submittal so the entry form opens pre-filled. Saves nothing: the PM
 // confirms or corrects every field, then posts it back to "/".
-router.post('/extract', upload.single('file'), async (req, res) => {
+router.post('/extract', upload.single('file'), takesATurn('submittal read'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Upload the submittal PDF to read.' });
     if (req.file.mimetype !== 'application/pdf') {
@@ -550,7 +551,7 @@ router.post('/preview-analysis', uploadForAnalysis.fields([
   { name: 'files', maxCount: 4 },
   { name: 'spec_files', maxCount: 4 },
   { name: 'reference_files', maxCount: 10 },
-]), async (req, res) => {
+]), takesATurn('submittal preview'), async (req, res) => {
   try {
     const project = projectInScope(req, req.body.project_id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -852,7 +853,7 @@ router.patch('/:id/revisions/:revId', (req, res) => {
 // Reads the A/E's stamp off a returned document so the response form opens pre-filled.
 // Saves nothing — the action is a suggestion the PM confirms, because a misread stamp would
 // either close a live submittal or hold a finished one open.
-router.post('/:id/revisions/:revId/extract-response', upload.single('file'), async (req, res) => {
+router.post('/:id/revisions/:revId/extract-response', upload.single('file'), takesATurn('submittal stamp read'), async (req, res) => {
   try {
     const { submittal, revision } = visibleRevision(req);
     if (!submittal || !revision) return res.status(404).json({ error: 'Not found' });
@@ -869,7 +870,7 @@ router.post('/:id/revisions/:revId/extract-response', upload.single('file'), asy
 
 // Records the A/E's answer, which is what closes the round trip. This is the step that moves
 // the submittal out of "With A/E" — to closed, or to awaiting a resubmittal.
-router.post('/:id/revisions/:revId/response', upload.single('file'), async (req, res) => {
+router.post('/:id/revisions/:revId/response', upload.single('file'), takesATurn('submittal response'), async (req, res) => {
   try {
     const { submittal, revision } = visibleRevision(req);
     if (!submittal || !revision) return res.status(404).json({ error: 'Not found' });
@@ -1057,7 +1058,7 @@ router.post('/:id/analysis', uploadForAnalysis.fields([
 
 // Runs the comparison on demand — after a failure when the review was recorded, or to redo it
 // once the prediction has been re-run against a better specification.
-router.post('/:id/revisions/:revId/comparison', async (req, res) => {
+router.post('/:id/revisions/:revId/comparison', takesATurn('submittal comparison'), async (req, res) => {
   try {
     const { submittal, revision } = visibleRevision(req);
     if (!submittal || !revision) return res.status(404).json({ error: 'Not found' });

@@ -28,7 +28,7 @@ const ORG_ROLES = ['Admin', 'Contributor', 'Member'];
 
 router.get('/organizations', requirePlatformAdmin, (req, res) => {
   const rows = db.prepare(`
-    SELECT o.*,
+    SELECT ${access.orgColumns('o')},
       (SELECT COUNT(*) FROM org_members m WHERE m.org_id = o.id) AS member_count,
       (SELECT COUNT(*) FROM programs p WHERE p.org_id = o.id) AS program_count,
       (SELECT COUNT(*) FROM projects pr WHERE pr.org_id = o.id) AS project_count
