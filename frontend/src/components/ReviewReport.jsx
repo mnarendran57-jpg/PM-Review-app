@@ -34,7 +34,7 @@ export function VerdictBanner({ verdict }) {
 }
 
 // `toneOf(tile)` decides a tile's colour once it has a count; a count of null is "not checked".
-export function CountTiles({ tiles, toneOf = t => (t.count ? 'red' : 'green') }) {
+export function CountTiles({ tiles, toneOf = t => (t.count ? (t.tone || 'red') : 'green') }) {
   return (
     <div className="grid grid-cols-4 gap-2">
       {tiles.map(t => {

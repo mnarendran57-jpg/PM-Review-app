@@ -298,6 +298,53 @@ const CHECKS = [
       if (remaining >= -AGG_TOL) {
         return pass(`${carryNote}Yes — with this invoice, ${money(toDate)} of the ${money(billing.contractValue)} agreement has been billed (${earlier}), leaving ${money(remaining)}.`);
       }
+
+      // The invoice says more was billed BEFORE it than this whole PO is worth. This invoice did not
+      // cause that, so it is not marked on this invoice's amount or put down as one to resolve: it is
+      // a question for the PM. Most often a PO that replaced an expired one, whose earlier share
+      // nobody has entered; sometimes a real overrun. Both are said, with the arithmetic for the first.
+      // (Invoice 5680, October 2026: $39,000 billed before a $14,800 PO, and the red flag sat on the
+      // invoice's own $1,500.)
+      const priorAlreadyOver = billing.source === 'invoice' && !carried
+        && billing.priorBilled > billing.contractValue + AGG_TOL;
+      if (priorAlreadyOver) {
+        const earlierShare = billing.feeTotal > billing.contractValue ? billing.feeTotal - billing.contractValue : null;
+        const used = earlierShare != null ? billing.priorBilled - earlierShare + invoice.total : null;
+        const left = used != null ? billing.contractValue - used : null;
+        const ifCarried = earlierShare != null
+          ? ` If an earlier PO covered the first ${money(earlierShare)} of the ${money(billing.feeTotal)} fee, `
+            + (left >= -AGG_TOL
+              ? `${money(used)} of this PO has been used with this invoice and ${money(left)} is left.`
+              : `this PO would still be ${money(-left)} over.`)
+          : '';
+        const summary = `The invoice shows ${money(billing.priorBilled)} billed before it — already more than this `
+          + `${money(billing.contractValue)} PO, before this invoice adds ${money(invoice.total)}. That usually means an earlier `
+          + `PO paid for part of the work.${ifCarried} If so, enter what the earlier PO covered under "Already paid `
+          + 'under an earlier PO" and review the invoice again. If not, this PO has been overrun and needs a change '
+          + 'order or an amendment before more is paid.';
+        return {
+          status: 'FAIL',
+          critical: false,
+          title: 'Billed before this invoice is more than this PO',
+          detail: summary,
+          figures: {
+            kind: 'billing',
+            summary,
+            // Where the mark goes on the invoice: its "previous billing", not this invoice's amount.
+            markOn: 'prior',
+            rows: [
+              { item: 'Agreement value', amount: billing.contractValue, clause: clausesOf(contractTerms)?.contractSum || null },
+              { item: 'Billed before this invoice, as the invoice shows', amount: billing.priorBilled, emphasis: true },
+              { item: 'This invoice', amount: invoice.total },
+              ...(earlierShare != null ? [
+                { item: 'Total fee on the invoice', amount: billing.feeTotal },
+                { item: `If an earlier PO covered the first ${money(earlierShare)}: used under this PO`, amount: used },
+                ...(left >= -AGG_TOL ? [{ item: '…and left on this PO', amount: left }] : []),
+              ] : []),
+            ],
+          },
+        };
+      }
       return {
         ...fail(`${carryNote}With this invoice, ${money(toDate)} has been billed against an agreement worth ${money(billing.contractValue)} (${earlier}) — ${money(-remaining)} more than it allows. A change order or an amended PO is needed before this is paid.`
           // The fee is bigger than this PO and nothing said why: the likeliest innocent reason is a PO

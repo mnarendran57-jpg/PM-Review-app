@@ -49,7 +49,8 @@ function groupOf(r) {
 
 const finding = r => ({
   id: r.id,
-  title: FINDING_TITLES[r.id] || r.description,
+  // A check can name its own finding when one check has more than one kind — see PO2.
+  title: r.title || FINDING_TITLES[r.id] || r.description,
   critical: !!r.critical,
   detail: r.detail,
   figures: r.figures || null,
@@ -172,7 +173,10 @@ function buildInvoiceReport({ data, results, observations, contractChosen = fals
   const tiles = [
     { key: 'math', label: 'Math errors', count: math.issues.length },
     { key: 'backup', label: 'Missing receipts', count: backup ? (backup.figures?.rows?.length || 1) : 0 },
-    { key: 'contract', label: 'Contract / PO issues', count: contract ? contract.count : null },
+    // Amber when nothing in it must be resolved before paying — a question about the billing history,
+    // say — so the box agrees with the verdict above it.
+    { key: 'contract', label: 'Contract / PO issues', count: contract ? contract.count : null,
+      tone: contract?.issues?.length && !contract.issues.some(f => f.critical) ? 'amber' : undefined },
     { key: 'duplicate', label: 'Possible duplicates', count: duplicate ? (duplicate.figures?.rows?.length || 1) : (historyResult ? 0 : null) },
   ];
 

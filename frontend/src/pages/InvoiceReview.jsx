@@ -79,7 +79,12 @@ function InvoiceReportView({ report }) {
           ) : (
             <div className="space-y-4">
               {report.contract.issues.map(f => (f.figures?.kind === 'billing'
-                ? <ListFinding key={f.id} finding={f} before="paying" />
+                ? (
+                  <div key={f.id}>
+                    <ListFinding finding={f} before="paying" />
+                    {f.figures.summary && <p className="text-[12px] text-gray-600 leading-relaxed mt-2">{f.figures.summary}</p>}
+                  </div>
+                )
                 : <DeviationFinding key={f.id} finding={f} before="paying" whatLabel="On the invoice" />))}
             </div>
           )}

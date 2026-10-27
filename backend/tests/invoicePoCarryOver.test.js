@@ -68,13 +68,55 @@ const PO_LABEL = 'HVAC Replacement- Science Hall, Spring Branch Campus_CEG_PO R0
     assert.deepStrictEqual([b.carriedOver, b.priorBilled, b.carrySource], [33200, 5800, 'stated']);
   });
 
-  await check('never assumed from the numbers alone: then it is flagged, with how to clear it', () => {
+  await check('never assumed from the numbers alone: billing before the invoice past the PO is a question, not this invoice\'s fault', () => {
     const b = billingFor({ value: 14800, invoice });
     assert.strictEqual(b.carriedOver, 0);
     const po2 = runInvoiceChecks({ invoice, contractTerms: poTerms(), billing: b, duplicates: [] }, { groups: ['contract'] })
       .find(x => x.id === 'PO2');
-    assert.strictEqual(po2.status, 'FAIL');
-    assert.match(po2.detail, /Already paid under an earlier PO/);
+    assert.deepStrictEqual([po2.status, po2.critical, po2.title], ['FAIL', false, 'Billed before this invoice is more than this PO']);
+    assert.match(po2.figures.summary, /\$39,000\.00 billed before it — already more than this \$14,800\.00 PO/);
+    assert.match(po2.figures.summary, /If an earlier PO covered the first \$33,200\.00 of the \$48,000\.00 fee, \$7,300\.00 of this PO has been used with this invoice and \$7,500\.00 is left/);
+    assert.match(po2.figures.summary, /Already paid under an earlier PO/);
+    assert.strictEqual(po2.figures.markOn, 'prior');
+  });
+
+  await check('when this invoice is the one that goes past the PO, it is a red flag on its amount', () => {
+    const small = { ...invoice, total: 9000, previouslyBilled: 10000, feeTotal: null, phases: [] };
+    const po2 = runInvoiceChecks({ invoice: small, contractTerms: poTerms(), billing: billingFor({ value: 14800, invoice: small }), duplicates: [] }, { groups: ['contract'] })
+      .find(x => x.id === 'PO2');
+    assert.deepStrictEqual([po2.status, po2.critical, po2.title], ['FAIL', true, undefined]);
+    const report = buildInvoiceReport({ data: { invoice: small }, results: [po2], observations: {}, contractChosen: true });
+    const mark = collectMarks(report).find(m => m.title === 'Billing goes past what the agreement is worth');
+    assert.deepStrictEqual([mark.tone, mark.amount], ['red', 9000]);
+  });
+
+  await check('on Invoice 5680 the mark sits on the $39,000 billed before, in amber, and the verdict is a check, not a stop', async () => {
+    const { renderInvoiceReportPdf } = require('../lib/invoiceReportPdf');
+    const { PDFDocument, StandardFonts } = require('pdf-lib');
+    // Through the same path a review takes, which sets the PO's cost rules aside.
+    const { terms } = combineAgreements([{ id: 1, label: PO_LABEL, docType: 'contract', terms: poTerms() }]);
+    const results = runInvoiceChecks({ invoice, contractTerms: terms, billing: billingFor({ value: 14800, invoice }), duplicates: [] });
+    const report = buildInvoiceReport({ data: { invoice }, results, observations: {}, contractChosen: true, contractLabel: PO_LABEL, agreement: 'architect' });
+    assert.match(report.verdict.headline, /to check before paying/);
+    const mark = collectMarks(report).find(m => m.title === 'Billed before this invoice is more than this PO');
+    assert.deepStrictEqual([mark.tone, mark.amount], ['amber', 39000]);
+    // The invoice, drawn: the fee table's previous-billing total is where the mark must land.
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const page = doc.addPage([612, 792]);
+    [['Professional Engineering Services from 04/21/2026 to 10/20/2026', '', '$1,500.00', 700],
+      ['Construction Administration Services', '$1,000.00', '$1,500.00', 640],
+      ['Total', '$39,000.00', '$1,500.00', 620]].forEach(([d, prev, cur, y]) => {
+      page.drawText(d, { x: 40, y, size: 9, font });
+      if (prev) page.drawText(prev, { x: 400, y, size: 9, font });
+      page.drawText(cur, { x: 500, y, size: 9, font });
+    });
+    const pdf = await renderInvoiceReportPdf({ report, sources: [{ name: '5680.pdf', buffer: Buffer.from(await doc.save()) }] });
+    if (process.env.MARKUP_SAMPLES) require('fs').writeFileSync(require('path').join(process.env.MARKUP_SAMPLES, 'invoice-5680-fixed.pdf'), pdf);
+    const { eachPage } = require('../lib/pdfTextLayer');
+    const text = (await eachPage(pdf, async p => (await p.getTextContent()).items.map(i => i.str).join(' '))).join(' ');
+    assert.match(text, /already more than this \$14,800\.00 PO/, 'the explanation is in the PDF');
+    assert.match(text, /Page 1 of the invoice · 1 finding marked/);
   });
 
   await check('earlier invoices reviewed in Coaster are not talked down by the invoice\'s own figure', () => {

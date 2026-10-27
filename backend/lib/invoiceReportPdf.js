@@ -19,7 +19,7 @@ async function renderInvoiceReportPdf({ report, sources = [] }) {
     checkedAgainst: h.checkedAgainst,
   });
   pdf.verdictBanner(report.verdict);
-  pdf.countTiles(report.tiles, t => (t.count ? 'red' : 'green'));
+  pdf.countTiles(report.tiles, t => (t.count ? (t.tone || 'red') : 'green'));
   pdf.passedLines(report.passed, report.notChecked);
 
   if (report.duplicate) {
@@ -49,7 +49,10 @@ async function renderInvoiceReportPdf({ report, sources = [] }) {
     if (c.issues.length === 0) pdf.text('Nothing on the invoice goes against the agreement terms that were checked.', { size: 9, color: pdf.GREY, gapAfter: 4 });
     for (const f of c.issues) {
       pdf.findingTitle(f, 'paying');
-      if (f.figures?.kind === 'billing') pdf.listTable(f.figures.rows);
+      if (f.figures?.kind === 'billing') {
+        if (f.figures.summary) pdf.text(f.figures.summary, { size: 8.5, gapAfter: 3 });
+        pdf.listTable(f.figures.rows);
+      }
       else pdf.deviationTable(f.figures?.rows || [], 'ON THE INVOICE');
     }
     if (c.billing) pdf.text(c.billing, { size: 8.5, color: pdf.GREY, gapAfter: 6 });

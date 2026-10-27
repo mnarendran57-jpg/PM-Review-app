@@ -46,9 +46,22 @@ function collectMarks(report) {
 
   for (const f of report.contract?.issues || []) {
     if (f.figures?.kind === 'billing') {
-      // Past what the agreement is worth: the invoice's own total is what tips it over.
       const rows = f.figures.rows || [];
       const value = rows.find(r => r.item === 'Agreement value') || rows[0];
+      // Billing before this invoice already past the PO: the mark goes on the invoice's "previous
+      // billing", which is what the question is about, in amber — not on this invoice's amount.
+      if (f.figures.markOn === 'prior') {
+        const prior = rows.find(r => /^Billed before/.test(r.item));
+        const used = rows.find(r => /used under this PO/.test(r.item));
+        add({ tone: 'amber', title: f.title, amount: prior?.amount ?? null, phrase: null,
+          lines: [
+            `This PO is worth ${money(value?.amount)}`,
+            used ? `If an earlier PO covered the rest of the fee: ${money(used.amount)} used here` : 'Was part of it billed under an earlier PO?',
+          ],
+          cite: cite(value) });
+        continue;
+      }
+      // Past what the agreement is worth: the invoice's own total is what tips it over.
       const over = rows.find(r => r.emphasis);
       add({ tone: 'red', title: f.title, amount: h.total, phrase: null,
         lines: [`The agreement is worth ${money(value?.amount)}`, over ? `Over it by ${money(over.amount)}` : null].filter(Boolean),
