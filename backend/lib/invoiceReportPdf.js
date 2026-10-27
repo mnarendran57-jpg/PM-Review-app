@@ -55,6 +55,12 @@ async function renderInvoiceReportPdf({ report, sources = [] }) {
     if (c.billing) pdf.text(c.billing, { size: 8.5, color: pdf.GREY, gapAfter: 6 });
   }
 
+  if (report.secondLook?.length) {
+    pdf.heading('Worth a second look', report.secondLook.length, 'amber');
+    pdf.text("Coaster's reading of entries that may not be right — check them before paying.", { size: 8.5, color: pdf.GREY, gapAfter: 2 });
+    pdf.listTable(report.secondLook);
+  }
+
   pdf.notesSection(report.notes);
   if (sources.length) {
     try {

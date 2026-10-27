@@ -1,7 +1,7 @@
 const db = require('../database');
 const storage = require('./storage');
 const { extractContractTerms } = require('./contractExtract');
-const { readContractClauses } = require('./contractClauses');
+const { readContractClauses, CLAUSES_VERSION } = require('./contractClauses');
 const { isGoverning } = require('./docTypes');
 
 // Reads a contract's terms the first time a review actually needs them, and never before.
@@ -98,7 +98,11 @@ async function ensureAllRead(rows) {
 // back to the terms alone.
 async function ensureTermsWithClauses(row) {
   const cached = (() => {
-    try { return JSON.parse(row.terms || '{}').clauses || null; } catch { return null; }
+    // A reading from before the reader looked for everything it now does is read again, once.
+    try {
+      const stored = JSON.parse(row.terms || '{}').clauses || null;
+      return stored && (stored.version || 1) >= CLAUSES_VERSION ? stored : null;
+    } catch { return null; }
   })();
   const readClauses = async () => {
     if (cached || !isGoverning(row.doc_type) || row.terms_status === 'failed') return null;

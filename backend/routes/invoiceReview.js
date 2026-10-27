@@ -3,7 +3,7 @@ const router = express.Router();
 const { diskUpload } = require('../lib/uploads');
 const db = require('../database');
 const { analyzeInvoices } = require('../lib/invoiceExtract');
-const { runInvoiceChecks } = require('../lib/invoiceChecks');
+const { runInvoiceChecks, billingFor } = require('../lib/invoiceChecks');
 const { buildInvoiceReport } = require('../lib/invoiceReport');
 const { renderInvoiceReportPdf } = require('../lib/invoiceReportPdf');
 const { friendlyAiError } = require('../lib/aiErrors');
@@ -78,6 +78,8 @@ router.post('/', upload.fields([
 
     const projectId = req.body.project_id ? Number(req.body.project_id) : null;
     const agreement = agreementRequested(req.body);
+    // What an earlier, expired PO already covered, when the PM says so — see billingFor.
+    const earlierPaid = Math.max(0, Number(String(req.body.earlier_po_paid || '').replace(/[$,\s]/g, '')) || 0);
     // The filed agreements chosen: contract_ids, a list, or contract_id, the single one a request from
     // before several could be chosen sends.
     const chosenIds = [
@@ -140,7 +142,7 @@ router.post('/', upload.fields([
           duplicates: earlierReviewsOf(req, projectId, invoice),
           // Billed so far is counted against the agreement whose value is used — the PO, where one
           // states it.
-          billing: chosen && valueFrom ? billedAgainst(req, valueFrom.id, contractTerms, invoice) : null,
+          billing: chosen && valueFrom ? billedAgainst(req, valueFrom.id, contractTerms, invoice, { earlierPaid }) : null,
         };
         const results = runInvoiceChecks(data, {
           groups: ['math', 'backup', 'history', ...(chosen ? ['contract'] : [])],
@@ -163,7 +165,7 @@ router.post('/', upload.fields([
           // The agreement the billing is counted against, so the next invoice adds to the same total.
           (valueFrom?.id ?? contractRows[0]?.id) ?? null,
           contractLabel,
-          JSON.stringify({ agreement: agreement || null, contract: chosen, agreementIds: contractRows.map(r => r.id) }),
+          JSON.stringify({ agreement: agreement || null, contract: chosen, agreementIds: contractRows.map(r => r.id), earlierPoPaid: earlierPaid || null }),
           invoice.vendor || null,
           invoice.invoiceNumber || null,
           invoice.invoiceDate || null,
@@ -230,7 +232,10 @@ function earlierReviewsOf(req, projectId, invoice) {
 // number is one bill, whichever review of it was the last — and this one, if it was reviewed
 // before, does not count against itself.
 // An agreement uploaded for one review is not filed, so nothing was billed against it before.
-function billedAgainst(req, contractId, contractTerms, invoice) {
+//
+// That history is then weighed against the invoice's own record of what came before, less anything
+// an earlier PO covered (lib/invoiceChecks.js, billingFor).
+function billedAgainst(req, contractId, contractTerms, invoice, { earlierPaid = 0 } = {}) {
   const value = Number(contractTerms?.originalContractSum) || Number(contractTerms?.clauses?.contractSum?.amount);
   if (!(value > 0)) return null;
   const rows = contractId == null ? [] : db.prepare(
@@ -240,11 +245,12 @@ function billedAgainst(req, contractId, contractTerms, invoice) {
   const thisKey = keyOf({ vendor: invoice.vendor, invoice_number: invoice.invoiceNumber, invoice_date: invoice.invoiceDate, total_amount: invoice.total });
   const seen = new Map();
   for (const r of rows) if (keyOf(r) !== thisKey) seen.set(keyOf(r), Number(r.total_amount) || 0);
-  return {
-    contractValue: value,
-    priorBilled: [...seen.values()].reduce((a, b) => a + b, 0),
-    priorCount: seen.size,
-  };
+  return billingFor({
+    value, invoice,
+    history: { priorBilled: [...seen.values()].reduce((a, b) => a + b, 0), priorCount: seen.size },
+    earlierPaid,
+    continues: !!contractTerms?.clauses?.earlierAgreement,
+  });
 }
 
 // The report a stored review renders as, on screen and in the PDF alike.

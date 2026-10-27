@@ -29,7 +29,7 @@ const noContract = { groups: ['math', 'backup', 'history'] };
 (async () => {
   await check('without an agreement, nothing about the contract or PO runs', () => {
     const ids = runInvoiceChecks({ invoice, contractTerms: null }, noContract).map(r => r.id).sort();
-    assert.deepStrictEqual(ids, ['D1', 'M1', 'M2', 'M3', 'R1']);
+    assert.deepStrictEqual(ids, ['D1', 'M1', 'M2', 'M3', 'M4', 'R1']);
   });
 
   await check('a wrong line comes back with its figures', () => {

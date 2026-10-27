@@ -22,6 +22,7 @@ const FINDING_TITLES = {
   M1: 'The total does not add up',
   M2: 'Line totals that do not match quantity × price',
   M3: 'The lines do not add up to the printed subtotal',
+  M4: 'The fee table does not add up',
   T1: 'Tax charged where the contract does not allow it',
   C1: 'Costs the contract does not allow',
   PO1: 'Billed against a different PO',
@@ -32,7 +33,7 @@ const FINDING_TITLES = {
 
 // What each check is called in the one line listing what passed — a name, not a question.
 const CHECK_NAMES = {
-  M1: 'the total', M2: 'line totals', M3: 'the subtotal', T1: 'tax',
+  M1: 'the total', M2: 'line totals', M3: 'the subtotal', M4: 'the fee table', T1: 'tax',
   C1: 'costs the contract forbids', PO1: 'the PO number', PO2: 'billing against the agreement value',
   R1: 'receipts for reimbursable costs', D1: 'earlier reviews for a duplicate',
 };
@@ -57,6 +58,23 @@ const finding = r => ({
 // One row per Coaster finding, one per failed check however many lines it names.
 const countOf = issues => issues.reduce((n, f) => n + (f.byCoaster ? (f.figures?.rows?.length || 1) : 1), 0);
 
+// A purchase order's general conditions — billing must match the items and amounts on the PO, and
+// may not exceed its total — are not about any one line, and the total is checked as a total, with
+// any balance carried over from an earlier PO taken into account. Coaster's reading is told so; this
+// is the backstop for when it says one anyway, which put a red flag on an engineer's "Professional
+// Engineering Services" line for no reason but the PO's standard wording (October 2026).
+const GENERAL_PO = new RegExp([
+  // "must match the items and amounts on the purchase order"
+  /(match|matches|matching)[^.]{0,80}(items?|amounts?)[^.]{0,40}(purchase order|\bp\.?o\b)/.source,
+  // "no sum in excess of the total purchase order amount", "exceeds the PO"
+  /(in excess of|exceed|exceeds|exceeding|above|more than)[^.]{0,60}(purchase order|\bp\.?o\b)/.source,
+  // "the purchase order only authorizes $14,800", "the PO total is …"
+  /(purchase order|\bp\.?o\b)[^.]{0,30}(total|only|authori[sz]|amount|value)/.source,
+  // the fee or the billing to date set against the agreement — the billing check's own question
+  /billing to date|total billing|billed to date|total (contract )?fee/.source,
+].join('|'), 'i');
+const isGeneralPoCondition = c => GENERAL_PO.test([c.item, c.rule, c.quote, c.clause?.quote].filter(Boolean).join(' '));
+
 function buildInvoiceReport({ data, results, observations, contractChosen = false, contractLabel = null, agreement = null }) {
   const inv = data.invoice || {};
   const o = observations || {};
@@ -75,7 +93,8 @@ function buildInvoiceReport({ data, results, observations, contractChosen = fals
   // already covers it with the contract's own words, and the reading repeats it anyway.
   const coasterConcerns = (Array.isArray(o.contractConcerns) ? o.contractConcerns : [])
     .filter(c => c && c.item && c.rule)
-    .filter(c => !/\b(tax|taxes)\b/i.test(c.item));
+    .filter(c => !/\b(tax|taxes)\b/i.test(c.item))
+    .filter(c => !isGeneralPoCondition(c));
   const contractIssues = contractResults.filter(r => r.status === 'FAIL').map(finding);
   // A cost the checks already caught from the agreement's clauses is not flagged a second time as
   // Coaster's reading — the same clause, cited twice, would count as two problems.
@@ -110,6 +129,14 @@ function buildInvoiceReport({ data, results, observations, contractChosen = fals
       return r?.status === 'PASS' ? r.detail : null;
     })(),
   } : null;
+
+  // Entries Coaster thought worth a second look before paying. Prompts, not findings: shown, and
+  // marked on the invoice in amber, but not counted against the verdict.
+  const secondLook = (Array.isArray(o.secondLook) ? o.secondLook : [])
+    .filter(e => e && e.item && e.why)
+    // The billing total against the PO is the billing check's to answer, carry-over and all.
+    .filter(e => !isGeneralPoCondition({ item: e.item, rule: e.why }))
+    .map(e => ({ item: String(e.item), amount: typeof e.amount === 'number' ? e.amount : null, note: String(e.why) }));
 
   const notes = [
     o.pricingSanity && { title: 'Pricing worth double-checking', body: o.pricingSanity },
@@ -157,7 +184,7 @@ function buildInvoiceReport({ data, results, observations, contractChosen = fals
     .filter(r => r.status === 'SKIPPED' && /could not|couldn't|no invoice total/i.test(r.detail || ''))
     .map(r => ({ description: nameOf(r), detail: r.detail }));
 
-  const report = { header, verdict, tiles, math, backup, duplicate, contract, notes, passed, notChecked };
+  const report = { header, verdict, tiles, math, backup, duplicate, contract, secondLook, notes, passed, notChecked };
   report.markdown = renderMarkdown(report);
   return report;
 }
@@ -206,6 +233,12 @@ function renderMarkdown(report) {
   if (contract) {
     section(`${contract.title || 'Contract and PO'}${contract.label ? ` — ${contract.label}` : ''}`, contract.issues);
     if (contract.billing) { lines.push(contract.billing); lines.push(''); }
+  }
+  if (report.secondLook?.length) {
+    lines.push("### Worth a second look — Coaster's reading");
+    lines.push('');
+    for (const e of report.secondLook) lines.push(`- **${e.item}**${typeof e.amount === 'number' ? ` — ${money(e.amount)}` : ''}: ${e.note}`);
+    lines.push('');
   }
   if (notes.length) {
     lines.push("### Coaster's notes — verify before acting");

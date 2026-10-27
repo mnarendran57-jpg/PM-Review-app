@@ -23,6 +23,37 @@ function invoiceTool(hasContract) {
             taxAmount: { type: 'number' },
             taxRate: { type: 'number', description: 'A decimal — 8.25% is 0.0825.' },
             total: { type: 'number' },
+            // A professional's invoice usually carries the whole engagement's history, not only this
+            // month: the total fee, and what was billed before. Read so the billing check can tell
+            // what was billed under THIS purchase order from what an earlier one already covered.
+            feeTotal: {
+              type: 'number',
+              description: 'The total fee or contract amount for the whole engagement, if the invoice '
+                + 'shows one (the "Total" of a fee column). Omit if not shown.',
+            },
+            previouslyBilled: {
+              type: 'number',
+              description: 'The total billed BEFORE this invoice, if the invoice shows it ("previous '
+                + 'billing", "previously invoiced", "billed to date" less this invoice). Omit if not shown.',
+            },
+            // The fee table: one row per phase or task, as printed. Checked in code for arithmetic.
+            phases: {
+              type: 'array',
+              description: 'If the invoice bills by phase or task with a fee table, one entry per row, '
+                + 'exactly as printed. Omit the total row. Empty if there is no such table.',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  fee: { type: 'number', description: 'The phase fee.' },
+                  percentComplete: { type: 'number', description: 'A decimal — 25% is 0.25.' },
+                  earned: { type: 'number', description: 'Earned to date, as printed.' },
+                  previouslyBilled: { type: 'number', description: 'Billed before this invoice, as printed.' },
+                  current: { type: 'number', description: 'Billed on this invoice, as printed.' },
+                },
+                required: ['name'],
+              },
+            },
             lineItems: {
               type: 'array',
               items: {
@@ -61,6 +92,28 @@ function invoiceTool(hasContract) {
                 + 'does not match its line, a backup total that differs from what was billed. Omit '
                 + 'when there is nothing beyond what the lines already record.',
             },
+            secondLook: {
+              type: 'array',
+              description: 'Entries on the invoice that do not look right and are worth a second look '
+                + 'before paying — for example a phase billed past its percent complete, the same '
+                + 'charge billed twice, a service period that overlaps an earlier invoice or falls '
+                + 'outside the contract, a lump sum with no explanation where the rest is itemised, a '
+                + 'line that does not belong to this project. Only what is visible on the documents. '
+                + 'NOT arithmetic (checked separately), NOT general contract or purchase-order '
+                + 'conditions, and NOT ordinary billing for the work the invoice is for. NOT the fee '
+                + 'total or the billing to date compared with the purchase order or contract amount: '
+                + 'that is checked separately, and a fee larger than the PO is usually a PO that '
+                + 'replaced an earlier one. Empty when nothing stands out, which is the usual case.',
+              items: {
+                type: 'object',
+                properties: {
+                  item: { type: 'string', description: 'The line or entry, as printed.' },
+                  amount: { type: 'number' },
+                  why: { type: 'string', description: 'In one short plain-English sentence.' },
+                },
+                required: ['item', 'why'],
+              },
+            },
             pricingSanity: {
               type: 'string',
               description: 'Plain English, at most two short sentences: based on general construction '
@@ -78,11 +131,15 @@ function invoiceTool(hasContract) {
   if (hasContract) {
     tool.input_schema.properties.observations.properties.contractConcerns = {
       type: 'array',
-      description: 'Lines on the invoice that the contract terms you were given forbid or restrict — '
-        + 'for example overtime billed without the written direction the contract requires, an '
-        + 'hourly rate above the agreed rate schedule, a reimbursable billed above its agreed '
-        + 'multiplier, or a cost the contract lists as not reimbursable. Leave out sales tax; it is checked '
-        + 'separately. Empty when nothing on the invoice goes against the contract.',
+      description: 'Specific lines on the invoice that the contract terms you were given forbid or '
+        + 'restrict — for example a reimbursable expense the contract does not allow, a reimbursable '
+        + 'billed above its agreed multiplier, an hourly rate above the agreed rate schedule, or '
+        + 'overtime billed without the written direction the contract requires. Leave out sales tax, '
+        + 'and leave out GENERAL purchase-order conditions — that billing must match the items and '
+        + 'amounts on the PO, or may not exceed the PO total. Those are not about any one line, and '
+        + 'the billing total is checked separately, including any amount carried over from an '
+        + 'earlier PO. Ordinary billing for the services the agreement is for is never a concern. '
+        + 'Empty when nothing on the invoice goes against the contract, which is the usual case.',
       items: {
         type: 'object',
         properties: {

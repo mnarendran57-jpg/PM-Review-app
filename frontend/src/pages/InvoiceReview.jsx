@@ -87,6 +87,15 @@ function InvoiceReportView({ report }) {
         </Section>
       )}
 
+      {report.secondLook?.length > 0 && (
+        <Section title="Worth a second look" count={report.secondLook.length} tone="amber">
+          <p className="text-[11px] text-gray-400 mb-2">
+            Coaster's reading of entries that may not be right — check them before paying.
+          </p>
+          <ListFinding finding={{ figures: { rows: report.secondLook } }} showTitle={false} />
+        </Section>
+      )}
+
       <CoasterNotes notes={report.notes} />
       <PassedLine passed={report.passed} notChecked={report.notChecked} />
     </div>
@@ -132,6 +141,9 @@ export default function InvoiceReview() {
   const [contracts, setContracts] = useState(null);
   // As many as the invoice is billed under — a contract for its terms and a PO for its amount, say.
   const [contractIds, setContractIds] = useState([]);
+  // What an earlier, expired PO already covered, when this one carried its balance over. Optional:
+  // Coaster works it out itself when the PO says it continues an earlier one.
+  const [earlierPaid, setEarlierPaid] = useState('');
   const contractAdd = useAddedDocuments(routeProjectId, contractIds.map(Number), ids => setContractIds(ids.map(String)));
   // Which choice the suggestion below was last made for, so it is made once and an untick sticks.
   const suggestedFor = useRef('');
@@ -195,6 +207,7 @@ export default function InvoiceReview() {
         // and checked against like any filed agreement, the rest are read for this review alone.
         fd.append('contract_ids', JSON.stringify(await contractAdd.fileShared()));
         for (const once of contractAdd.onceFiles) fd.append('contract_files', once);
+        if (earlierPaid.trim()) fd.append('earlier_po_paid', earlierPaid.trim());
       } else {
         // Sent empty, so the server does not fall back to the project's default contract.
         fd.append('contract_id', '');
@@ -224,7 +237,7 @@ export default function InvoiceReview() {
   };
 
   const reset = () => {
-    setFiles([]); setCheck(''); setContractIds([]); suggestedFor.current = '';
+    setFiles([]); setCheck(''); setContractIds([]); setEarlierPaid(''); suggestedFor.current = '';
     contractAdd.setAdded([]); setResult(null); setError('');
   };
   const active = result || viewing;
@@ -305,6 +318,18 @@ export default function InvoiceReview() {
                   noun="invoice" label={contracts?.length ? 'And upload more' : 'Upload them'}
                   hint={`the ${whose} contract, purchase order, or both`}
                   categories={routeProjectId ? CONTRACT_CATEGORIES : []} disabled={busy} />
+                <div className="pt-1">
+                  <label className="label">Already paid under an earlier PO <span className="normal-case font-normal text-gray-400">(optional)</span></label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">$</span>
+                    <input className="input pl-6" inputMode="decimal" placeholder="e.g. 33,200"
+                      value={earlierPaid} onChange={e => setEarlierPaid(e.target.value)} />
+                  </div>
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    If this PO replaced an expired one, what the old PO covered. Only billing after that is counted
+                    against this PO. Coaster works it out itself when the PO says it continues an earlier one.
+                  </p>
+                </div>
               </div>
             )}
 

@@ -106,6 +106,47 @@ const CHECKS = [
     }
   },
 
+  // A professional's fee table: each phase's fee × percent complete is what it has earned, and what
+  // it has earned less what was billed before is what this invoice may bill. Engineers' and
+  // architects' invoices are built this way, and a slip anywhere in a row is money billed early.
+  {
+    id: 'M4', group: 'math', category: 'Invoice Math', critical: true,
+    description: 'Does the fee table add up — fee × percent complete, earned less previously billed, and the current column to the invoice total?',
+    run: ({ invoice }) => {
+      const phases = (invoice.phases || []).filter(p => p && p.name);
+      if (phases.length === 0) return skip('Skipped — this invoice does not bill by phase with a fee table.');
+      const rows = [];
+      for (const p of phases) {
+        if (p.fee != null && p.percentComplete != null && p.earned != null) {
+          const should = p.fee * p.percentComplete;
+          if (!close(should, p.earned, AGG_TOL)) {
+            rows.push({ item: `${p.name} — earned`, working: `${money(p.fee)} × ${Math.round(p.percentComplete * 1000) / 10}%`, shown: p.earned, computed: should, difference: p.earned - should });
+          }
+        }
+        if (p.earned != null && p.previouslyBilled != null && p.current != null) {
+          const should = p.earned - p.previouslyBilled;
+          if (!close(should, p.current, AGG_TOL)) {
+            rows.push({ item: `${p.name} — billed now`, working: `${money(p.earned)} earned − ${money(p.previouslyBilled)} billed before`, shown: p.current, computed: should, difference: p.current - should });
+          }
+        }
+      }
+      const currents = phases.filter(p => p.current != null);
+      if (currents.length === phases.length && invoice.total != null) {
+        const sum = currents.reduce((a, p) => a + p.current, 0) + (Number(invoice.taxAmount) || 0);
+        // Only when the fee table is the whole invoice: one with expenses listed beside it adds them.
+        const extras = (invoice.lineItems || []).filter(li => li.isReimbursable).reduce((a, li) => a + (Number(li.total) || 0), 0);
+        if (!close(sum + extras, invoice.total, AGG_TOL) && !close(sum, invoice.total, AGG_TOL)) {
+          rows.push({ item: 'Current billing, all phases', working: 'the "current" column added up', shown: invoice.total, computed: sum + extras, difference: invoice.total - (sum + extras) });
+        }
+      }
+      if (rows.length === 0) return pass(`Yes — every row of the fee table works out, and the current billing adds up to the invoice.`);
+      return {
+        ...fail(rows.map(r => `${r.item}: ${r.working} is ${money(r.computed)}, but the invoice shows ${money(r.shown)}.`).join(' ')),
+        figures: { kind: 'compare', rows },
+      };
+    }
+  },
+
   // T. Tax
   {
     id: 'T1', group: 'contract', category: 'Tax', critical: true,
@@ -241,20 +282,38 @@ const CHECKS = [
       if (invoice.total == null) return skip('Skipped — no invoice total could be read to add to what has been billed.');
       const toDate = (billing.priorBilled || 0) + invoice.total;
       const remaining = billing.contractValue - toDate;
-      const earlier = billing.priorCount
-        ? `${money(billing.priorBilled)} across ${billing.priorCount} earlier invoice${billing.priorCount === 1 ? '' : 's'} reviewed in Coaster`
-        : 'no earlier invoices reviewed in Coaster';
+      // Where the billing before this invoice came from: the invoice's own "previously billed",
+      // less what an earlier PO covered — or, failing that, the invoices reviewed in Coaster.
+      const carried = billing.carriedOver > 0;
+      const earlier = billing.source === 'invoice'
+        ? `${money(billing.priorBilled)} billed under it before this invoice${carried ? '' : ', as the invoice shows'}`
+        : billing.priorCount
+          ? `${money(billing.priorBilled)} across ${billing.priorCount} earlier invoice${billing.priorCount === 1 ? '' : 's'} reviewed in Coaster`
+          : 'no earlier invoices reviewed in Coaster';
+      const carryNote = carried
+        ? `This purchase order continues an earlier one: ${money(billing.carriedOver)} of the `
+          + `${billing.feeTotal ? `${money(billing.feeTotal)} fee` : 'engagement'} was covered before it`
+          + `${billing.carrySource === 'stated' ? ' (as you entered)' : ''}, so only billing after that counts against this PO. `
+        : '';
       if (remaining >= -AGG_TOL) {
-        return pass(`Yes — with this invoice, ${money(toDate)} of the ${money(billing.contractValue)} agreement has been billed (${earlier}), leaving ${money(remaining)}.`);
+        return pass(`${carryNote}Yes — with this invoice, ${money(toDate)} of the ${money(billing.contractValue)} agreement has been billed (${earlier}), leaving ${money(remaining)}.`);
       }
       return {
-        ...fail(`With this invoice, ${money(toDate)} has been billed against an agreement worth ${money(billing.contractValue)} (${earlier}) — ${money(-remaining)} more than it allows. A change order or an amended PO is needed before this is paid.`),
+        ...fail(`${carryNote}With this invoice, ${money(toDate)} has been billed against an agreement worth ${money(billing.contractValue)} (${earlier}) — ${money(-remaining)} more than it allows. A change order or an amended PO is needed before this is paid.`
+          // The fee is bigger than this PO and nothing said why: the likeliest innocent reason is a PO
+          // that replaced an earlier one, and the PM can say so.
+          + (!carried && billing.feeTotal > billing.contractValue
+            ? ` If an earlier purchase order covered part of the ${money(billing.feeTotal)} fee, enter what it covered under "Already paid under an earlier PO" and review the invoice again.`
+            : '')),
         figures: {
           kind: 'billing',
           rows: [
             // The agreement's own statement of what it is worth, where its clauses were read.
             { item: 'Agreement value', amount: billing.contractValue, clause: clausesOf(contractTerms)?.contractSum || null },
-            { item: `Billed before this invoice${billing.priorCount ? ` (${billing.priorCount} reviewed in Coaster)` : ''}`, amount: billing.priorBilled || 0 },
+            ...(carried ? [{ item: 'Covered by an earlier PO (not counted here)', amount: billing.carriedOver }] : []),
+            { item: billing.source === 'invoice'
+              ? 'Billed under this agreement before this invoice'
+              : `Billed before this invoice${billing.priorCount ? ` (${billing.priorCount} reviewed in Coaster)` : ''}`, amount: billing.priorBilled || 0 },
             { item: 'This invoice', amount: invoice.total },
             { item: 'Over the agreement by', amount: -remaining, emphasis: true },
           ],
@@ -286,6 +345,43 @@ const CHECKS = [
   },
 ];
 
+// What has been billed under THIS agreement before this invoice, for the billing check.
+//
+// A professional's invoice carries the engagement's whole history — the total fee and everything
+// billed before — and when a purchase order has replaced an expired one, part of that history was
+// billed under the old one. Counting it against the new PO reports an overrun that is not there.
+//
+// So the earlier PO's share is taken off first: the amount the PM entered, or — only where the PO
+// itself says it continues an earlier one — the fee less this PO's value. Never assumed from the
+// numbers alone: a fee larger than the PO with nothing saying why may be exactly the overrun this
+// check exists to catch.
+//
+// value: what this agreement is worth. history: { priorBilled, priorCount } from invoices reviewed
+// in Coaster against it. earlierPaid: what the PM said an earlier PO covered, or null. continues:
+// whether the PO says it continues an earlier one.
+function billingFor({ value, invoice, history = { priorBilled: 0, priorCount: 0 }, earlierPaid = null, continues = false }) {
+  if (!(value > 0)) return null;
+  const prev = typeof invoice.previouslyBilled === 'number' && invoice.previouslyBilled >= 0 ? invoice.previouslyBilled : null;
+  const fee = typeof invoice.feeTotal === 'number' && invoice.feeTotal > 0 ? invoice.feeTotal : null;
+  let carriedOver = 0;
+  let carrySource = null;
+  if (earlierPaid > 0) {
+    carriedOver = earlierPaid;
+    carrySource = 'stated';
+  } else if (continues && fee && prev != null && fee > value + AGG_TOL) {
+    carriedOver = Math.min(fee - value, prev);
+    carrySource = 'worked out';
+  }
+  const base = { contractValue: value, priorCount: history.priorCount || 0, carriedOver, carrySource, feeTotal: fee };
+  // The invoice's own record of what came before, less the earlier PO's share — unless the invoices
+  // reviewed in Coaster against this agreement come to more, which the invoice cannot talk down.
+  if (prev != null) {
+    const underThis = Math.max(0, prev - carriedOver);
+    if (underThis >= (history.priorBilled || 0)) return { ...base, priorBilled: underThis, source: 'invoice' };
+  }
+  return { ...base, priorBilled: history.priorBilled || 0, source: 'coaster', carriedOver: prev != null ? carriedOver : 0 };
+}
+
 // "PO-253016-004", "253016 004" and "#253016-004" are the same number.
 function normalizeRef(value) {
   return String(value || '').toUpperCase().replace(/^(PO|P\.O\.|NO\.?|#)\s*/, '').replace(/[^A-Z0-9]/g, '');
@@ -306,4 +402,4 @@ function runInvoiceChecks(data, { groups = ['math', 'backup', 'history', 'contra
   });
 }
 
-module.exports = { runInvoiceChecks, normalizeRef };
+module.exports = { runInvoiceChecks, normalizeRef, billingFor };

@@ -81,6 +81,12 @@ const TOOL = {
         },
         required: ['quote'],
       },
+      earlierAgreement: {
+        ...CLAUSE,
+        description: 'The wording that says this document revises, replaces, supersedes or continues an '
+          + 'earlier purchase order or contract, or carries over a remaining balance from one — '
+          + '"Revised PO", "replaces PO 1234", "balance carried over from…". Omit if it says nothing of the kind.',
+      },
       rates: {
         ...CLAUSE,
         description: 'The clause or exhibit that sets billing rates — hourly rates by role, unit rates, '
@@ -106,6 +112,10 @@ const TOOL = {
     required: [],
   },
 };
+
+// Raised when the reader starts looking for something new: 2 added earlierAgreement, the wording
+// that says a PO continues an expired one (October 2026).
+const CLAUSES_VERSION = 2;
 
 const PROMPT = `You are reading an executed construction contract, design agreement or purchase order
 for the owner's project manager, who checks the change orders and invoices billed under it. Record
@@ -153,6 +163,7 @@ function tidy(raw, startPage = 1) {
   return {
     tax: clean(r.tax, startPage),
     rates: clean(r.rates, startPage),
+    earlierAgreement: clean(r.earlierAgreement, startPage),
     markups,
     allowances,
     contractSum,
@@ -181,7 +192,11 @@ function combine(passes) {
   }
   return {
     tax: first('tax'), markups: first('markups'), allowances: first('allowances'),
-    contractSum: first('contractSum'), reimbursables: first('reimbursables'), rates: first('rates'), costRules,
+    contractSum: first('contractSum'), reimbursables: first('reimbursables'), rates: first('rates'),
+    earlierAgreement: first('earlierAgreement'), costRules,
+    // What this reading knows to look for. A stored reading from before a field was added is read
+    // again, once, the next time it is needed (lib/contractTerms.js).
+    version: CLAUSES_VERSION,
   };
 }
 
@@ -261,4 +276,4 @@ function clauseFor(concern, terms) {
   return { section, heading, page, quote: q, ...(source ? { source } : {}) };
 }
 
-module.exports = { readContractClauses, citeLabel, clauseFor, forbiddenCosts, sectionLike, tidy, combine };
+module.exports = { readContractClauses, citeLabel, clauseFor, forbiddenCosts, sectionLike, tidy, combine, CLAUSES_VERSION };

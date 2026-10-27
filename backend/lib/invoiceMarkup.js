@@ -69,6 +69,9 @@ function collectMarks(report) {
       });
     }
   }
+  for (const e of report.secondLook || []) {
+    add({ tone: 'amber', title: 'Worth a second look', amount: e.amount, phrase: e.item, lines: [e.note] });
+  }
   return marks;
 }
 

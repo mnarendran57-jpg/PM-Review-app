@@ -14,6 +14,13 @@
 //                first agreement that states one
 //   the rest     reimbursables, rates, markup limits and allowances from the first agreement, in
 //                the order chosen, that addresses them
+//   continues    whether a PO says it revises or continues an earlier one, for the billing check
+//
+// Costs not allowed — the rules a line on an invoice or change order is matched against — come from
+// contracts only, never from purchase orders (Naren, October 2026). A PO's conditions are general:
+// that billing must match the PO, that it may not exceed the PO total. Matched word by word against
+// the lines they put red flags on ordinary billing for the very services the PO is for. The PO's
+// total is checked as a total, by the billing check.
 //
 // Each clause carries `source`, the document it is quoted from, when there is more than one — so a
 // citation says "PO 253016-004 · Section 4.2" and not just "Section 4.2" of which document.
@@ -22,14 +29,27 @@ const { ensureTermsWithClauses } = require('./contractTerms');
 const { extractContractTerms } = require('./contractExtract');
 const { readContractClauses } = require('./contractClauses');
 
+// Filed as a purchase order; or named as one — "PO 253016", "…_CEG_PO R000136351…" (an underscore
+// counts as a separator, which a word boundary does not); or describing itself as one in its own
+// wording, which a PO's terms nearly always do ("the total purchase order amount").
+const PO_IN_NAME = /(?:^|[^a-z0-9])p\.?\s?o\.?(?:[^a-z]|$)|purchase\s*order/i;
 const looksLikePo = a => a.docType === 'purchase-order'
-  || /\bP\.?\s?O\.?\b|purchase\s+order/i.test(a.label || '');
+  || PO_IN_NAME.test(a.label || '')
+  || (a.docType !== 'contract' && /purchase\s+order/i.test(Object.values(a.terms?.clauses || {})
+    .filter(c => c && !Array.isArray(c) && typeof c === 'object').map(c => c.quote || '').join(' ')));
 
 // agreements: [{ id, label, docType, terms }] in the order chosen, each terms as read (with clauses).
 // Returns { terms, valueFrom } — the combined terms, and the agreement whose value is used (for what
 // has been billed against it before), or null.
+// A PO's terms with its cost rules set aside — see above.
+function withoutPoCostRules(a) {
+  if (!looksLikePo(a)) return a;
+  const clauses = a.terms.clauses ? { ...a.terms.clauses, costRules: [] } : a.terms.clauses;
+  return { ...a, terms: { ...a.terms, unallowableItems: [], clauses } };
+}
+
 function combineAgreements(agreements) {
-  const list = (agreements || []).filter(a => a && a.terms);
+  const list = (agreements || []).filter(a => a && a.terms).map(withoutPoCostRules);
   if (list.length === 0) return { terms: null, valueFrom: null };
   if (list.length === 1) {
     const only = list[0];
@@ -69,6 +89,7 @@ function combineAgreements(agreements) {
       rates: firstWith(a => a.terms.clauses?.rates),
       markups: firstWith(a => a.terms.clauses?.markups),
       allowances: firstWith(a => a.terms.clauses?.allowances),
+      earlierAgreement: firstWith(a => a.terms.clauses?.earlierAgreement),
       costRules: list.flatMap(a => (a.terms.clauses?.costRules || []).map(c => tag(c, a))),
     },
     // Which documents these are, for the reading that looks for costs they forbid.
