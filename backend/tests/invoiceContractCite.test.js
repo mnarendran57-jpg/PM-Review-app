@@ -80,8 +80,8 @@ async function invoicePdf() {
   });
 
   await check("the report names whose agreement it was, and does not flag one cost twice", () => {
-    assert.strictEqual(report.contract.title, "Architect's contract / PO");
-    assert.match(report.header.checkedAgainst.join(', '), /the architect's contract or PO \(Owner-Architect Agreement\)/);
+    assert.strictEqual(report.contract.title, "Architect or vendor's contract / PO");
+    assert.match(report.header.checkedAgainst.join(', '), /the architect or vendor's contract or PO \(Owner-Architect Agreement\)/);
     const coaster = report.contract.issues.find(f => f.byCoaster);
     assert.deepStrictEqual(coaster.figures.rows.map(r => r.item), ['Design development phase']);
     assert.match(report.markdown, /Contract, Article 11\.8 Reimbursable Expenses, page 7: "Reimbursable Expenses shall be billed at cost/);

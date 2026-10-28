@@ -21,14 +21,15 @@ const GOVERNING_DOCS = ['contract', 'purchase-order'];
 // an architect's invoice measured against the contractor's terms reports problems that are not there.
 // The math, receipts and earlier reviews are checked whichever is chosen.
 const CHECK_OPTIONS = [
-  { key: 'architect', label: "Architect's contract / PO", hint: 'Tax, costs it forbids, rates, the PO number, how much is left on it' },
+  // Stored as 'architect'; covers vendors too — an engineer, a consultant, a supplier on their own PO.
+  { key: 'architect', label: "Architect or vendor's contract / PO", hint: 'Tax, costs it forbids, rates, the PO number, how much is left on it' },
   { key: 'contractor', label: "Contractor's contract / PO", hint: 'Tax, costs it forbids, the PO number, how much is left on it' },
   { key: 'basic', label: 'Math checks', hint: 'The arithmetic, receipts and duplicates only' },
 ];
 
 // A filed agreement that reads as the architect's: named for the architect or the design team, or an
 // AIA owner-architect form. Used only to suggest which one to tick; the PM can tick another.
-const looksArchitect = d => /architect|\ba\/e\b|design|engineer|b10[1-9]|b1\d\d/i
+const looksArchitect = d => /architect|\ba\/e\b|design|engineer|vendor|supplier|consultant|b10[1-9]|b1\d\d/i
   .test([d.label, d.file_name, d.party].filter(Boolean).join(' '));
 
 // Whether the invoice can be paid, a count of each kind of problem, and each problem with its numbers —
@@ -193,7 +194,7 @@ export default function InvoiceReview() {
   const toggleContract = id => setContractIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
   const wantsAgreement = check === 'architect' || check === 'contractor';
   const chosenCount = contractIds.length + contractAdd.added.length;
-  const whose = check === 'architect' ? "architect's" : "contractor's";
+  const whose = check === 'architect' ? "architect or vendor's" : "contractor's";
   const missing = files.length === 0 ? 'Upload the vendor invoice PDF first.'
     : !check ? 'Choose what to check it against.'
       : wantsAgreement && chosenCount === 0 ? `Choose the ${whose} contract or PO, or upload it.`

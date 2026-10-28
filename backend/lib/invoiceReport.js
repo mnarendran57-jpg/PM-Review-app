@@ -3,8 +3,10 @@ const { citeLabel, clauseFor, sectionLike } = require('./contractClauses');
 
 // Whose agreement the invoice was checked against, as the report names it. Null for a review from
 // before the PM said, or one checked against an agreement without saying whose.
-const AGREEMENT_NAMES = { architect: "the architect's contract or PO", contractor: "the contractor's contract or PO" };
-const AGREEMENT_TITLES = { architect: "Architect's contract / PO", contractor: "Contractor's contract / PO" };
+// "architect" is the key stored on a review; since October 2026 it covers vendors as well — an
+// engineer, a consultant, a supplier billing on their own agreement or PO.
+const AGREEMENT_NAMES = { architect: "the architect or vendor's contract or PO", contractor: "the contractor's contract or PO" };
+const AGREEMENT_TITLES = { architect: "Architect or vendor's contract / PO", contractor: "Contractor's contract / PO" };
 
 // The invoice review as somebody deciding whether to pay it reads it: one line saying whether it can
 // be paid, a count of each kind of problem, and each problem with its numbers.

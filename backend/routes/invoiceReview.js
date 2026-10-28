@@ -112,7 +112,8 @@ router.post('/', upload.fields([
       }
     }
     if (agreement && contractRows.length === 0 && contractFiles.length === 0) {
-      return res.status(400).json({ error: `Choose the ${agreement}'s contract or PO, or upload it.` });
+      const whose = agreement === 'architect' ? "architect or vendor's" : "contractor's";
+      return res.status(400).json({ error: `Choose the ${whose} contract or PO, or upload it.` });
     }
     const chosen = contractRows.length > 0 || contractFiles.length > 0;
     const contractLabel = labelAll({ rows: contractRows, files: contractFiles });
