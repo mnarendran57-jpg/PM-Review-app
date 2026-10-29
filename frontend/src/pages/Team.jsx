@@ -524,7 +524,88 @@ function FirmModal({ onClose, onSaved }) {
 // count, which read as though a populated organization were empty — Olivier showed "0 other
 // members" beside three people. Administrators sort first, because they are still the ones the
 // owner is accountable to.
-function OrganizationCard({ org, onChanged, onPlan, confirm, setError }) {
+// Deleting an organization and everything in it — for fake and abandoned sign-ups. Coaster only.
+// What it would take is fetched first and printed, and the name must be typed to go ahead.
+function DeleteOrgModal({ org, onClose, onDeleted }) {
+  const [preview, setPreview] = useState(null);
+  const [typed, setTyped] = useState('');
+  const [withAccounts, setWithAccounts] = useState(true);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    adminApi.organizationDeletion(org.id)
+      .then(setPreview)
+      .catch(e => setError(e?.response?.data?.error || 'Could not read what this organization holds.'));
+  }, [org.id]);
+
+  const matches = typed.trim() === String(org.name).trim();
+  const remove = async () => {
+    setError(''); setDeleting(true);
+    try {
+      await adminApi.deleteOrganization(org.id, { confirm_name: typed.trim(), with_accounts: withAccounts });
+      onDeleted();
+      onClose();
+    } catch (e) {
+      setError(e?.response?.data?.error || 'Could not delete this organization.');
+      setDeleting(false);
+    }
+  };
+
+  const accounts = preview?.accounts || [];
+  return (
+    <Modal title={`Delete ${org.name}`} onClose={deleting ? () => {} : onClose}>
+      <div className="space-y-4">
+        <p className="text-sm text-gray-600">
+          This deletes the organization and everything in it, for good. It cannot be undone.
+        </p>
+
+        {!preview && !error && <p className="text-sm text-gray-400">Checking what it holds…</p>}
+        {preview && (
+          <div className="p-3 rounded-xl text-sm space-y-1" style={{ background: '#fef2f2', border: '1px solid #fecaca' }}>
+            <p className="font-semibold" style={{ color: '#b91c1c' }}>What goes with it</p>
+            <p className="text-gray-700">{preview.people} {preview.people === 1 ? 'person' : 'people'} lose their place in it</p>
+            {preview.records.map(r => (
+              <p key={r.table} className="text-gray-700">{r.count} {r.label.toLowerCase()}</p>
+            ))}
+            {preview.fileCount > 0 && <p className="text-gray-700">{preview.fileCount} uploaded file{preview.fileCount === 1 ? '' : 's'}</p>}
+            {preview.records.length === 0 && preview.fileCount === 0 && (
+              <p className="text-gray-500">No projects, reviews or documents — nothing but the organization itself.</p>
+            )}
+          </div>
+        )}
+
+        {accounts.length > 0 && (
+          <label className="flex items-start gap-2.5 text-sm text-gray-700 cursor-pointer">
+            <input type="checkbox" className="mt-1" checked={withAccounts} onChange={e => setWithAccounts(e.target.checked)} />
+            <span>
+              Also delete {accounts.length === 1 ? 'the account' : `the ${accounts.length} accounts`} that
+              belong{accounts.length === 1 ? 's' : ''} to no other organization
+              <span className="block text-[11px] text-gray-400 mt-0.5">{accounts.map(a => a.email).join(', ')}</span>
+              <span className="block text-[11px] text-gray-400">Left unticked, they keep an account that belongs to nothing.</span>
+            </span>
+          </label>
+        )}
+
+        <div>
+          <label className="label">Type <span className="font-semibold text-gray-900">{org.name}</span> to confirm</label>
+          <input className="input" value={typed} onChange={e => setTyped(e.target.value)} autoFocus disabled={deleting} />
+        </div>
+
+        {error && <p className="text-sm" style={{ color: '#dc2626' }}>{error}</p>}
+
+        <div className="flex justify-end gap-2">
+          <button className="btn-secondary" onClick={onClose} disabled={deleting}>Cancel</button>
+          <button className="btn-danger px-3 py-2 text-sm" onClick={remove} disabled={!matches || !preview || deleting}>
+            {deleting ? 'Deleting…' : 'Delete organization'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function OrganizationCard({ org, onChanged, onPlan, onDelete, confirm, setError }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(undefined);   // undefined closed, null new
   const [accessFor, setAccessFor] = useState(null);
@@ -571,9 +652,15 @@ function OrganizationCard({ org, onChanged, onPlan, confirm, setError }) {
           <p className="text-[11px] text-gray-400">
             {org.features?.length ?? 0} of {org.featureTotal ?? org.features?.length ?? 0} tools
           </p>
-          <button className="btn-secondary px-2.5 py-1 text-xs mt-1.5" onClick={() => onPlan(org)}>
-            Change plan
-          </button>
+          <div className="flex gap-1 justify-end mt-1.5">
+            <button className="btn-secondary px-2.5 py-1 text-xs" onClick={() => onPlan(org)}>
+              Change plan
+            </button>
+            <button className="btn-danger" title="Delete this organization and everything in it"
+              onClick={() => onDelete(org)}>
+              <TrashIcon className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -661,6 +748,7 @@ function OwnerTeam() {
   const [orgs, setOrgs] = useState(null);
   const [addingOrg, setAddingOrg] = useState(false);
   const [pricingOrg, setPricingOrg] = useState(null);
+  const [deletingOrg, setDeletingOrg] = useState(null);
   const [error, setError] = useState('');
   const [confirm, confirmDialog] = useConfirm();
 
@@ -753,6 +841,7 @@ function OwnerTeam() {
               org={o}
               onChanged={load}
               onPlan={setPricingOrg}
+              onDelete={setDeletingOrg}
               confirm={confirm}
               setError={setError}
             />
@@ -789,6 +878,9 @@ function OwnerTeam() {
       )}
       {pricingOrg && (
         <PlanModal org={pricingOrg} onClose={() => setPricingOrg(null)} onSaved={load} />
+      )}
+      {deletingOrg && (
+        <DeleteOrgModal org={deletingOrg} onClose={() => setDeletingOrg(null)} onDeleted={load} />
       )}
     </div>
   );

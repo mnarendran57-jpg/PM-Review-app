@@ -227,6 +227,9 @@ export const adminApi = {
   listOrganizations: () => api.get('/admin/organizations').then(r => r.data),
   createOrganization: data => api.post('/admin/organizations', data).then(r => r.data),
   updateOrganization: (id, data) => api.put(`/admin/organizations/${id}`, data).then(r => r.data),
+  // What deleting an organization would take, and deleting it (the name typed to confirm).
+  organizationDeletion: id => api.get(`/admin/organizations/${id}/deletion`).then(r => r.data),
+  deleteOrganization: (id, data) => api.delete(`/admin/organizations/${id}`, { data }).then(r => r.data),
 };
 
 // Public: used by someone who has an invitation link but no account yet.

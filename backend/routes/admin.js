@@ -8,6 +8,8 @@ const email = require('../lib/email');
 const plans = require('../lib/plans');
 const audit = require('../lib/audit');
 const companies = require('../lib/companies');
+const orgRemoval = require('../lib/orgRemoval');
+const storage = require('../lib/storage');
 const { siteAddress } = require('../lib/siteAddress');
 const { requireOrg, requireOrgAdmin, requirePlatformAdmin } = require('../middleware/auth');
 
@@ -106,6 +108,54 @@ router.put('/organizations/:id', requirePlatformAdmin, (req, res) => {
   db.prepare(`UPDATE organizations SET name=?, status=? WHERE id=?`)
     .run(name, req.body.status || 'Active', req.params.id);
   res.json({ success: true });
+});
+
+// Deleting an organization, with everything it owns — for the fake and abandoned ones. Coaster
+// only. What it takes is worked out in lib/orgRemoval.js; the page shows it first, and the delete
+// itself must be confirmed by typing the organization's name.
+router.get('/organizations/:id/deletion', requirePlatformAdmin, (req, res) => {
+  const preview = orgRemoval.deletionPreview(Number(req.params.id));
+  if (!preview) return res.status(404).json({ error: 'Not found' });
+  res.json(preview);
+});
+
+router.delete('/organizations/:id', requirePlatformAdmin, async (req, res) => {
+  const orgId = Number(req.params.id);
+  const org = db.prepare(`SELECT id, name FROM organizations WHERE id = ?`).get(orgId);
+  if (!org) return res.status(404).json({ error: 'Not found' });
+  if (String(req.body?.confirm_name || '').trim() !== String(org.name).trim()) {
+    return res.status(400).json({ error: 'Type the organization name exactly as it appears to confirm.' });
+  }
+  // Not one you are working in: deleting it would take the page out from under you.
+  if (db.prepare(`SELECT 1 FROM org_members WHERE org_id = ? AND user_id = ?`).get(orgId, req.user.id)) {
+    return res.status(400).json({ error: 'You belong to this organization, so it cannot be deleted from here. Leave it first.' });
+  }
+
+  const preview = orgRemoval.deletionPreview(orgId);
+  let result;
+  try {
+    result = orgRemoval.deleteOrganization(orgId, { withAccounts: !!req.body?.with_accounts });
+  } catch (err) {
+    console.error('[admin] organization delete failed:', err);
+    return res.status(500).json({ error: 'The organization could not be deleted. Nothing was removed.' });
+  }
+
+  // After the rows, never before — see lib/projectRemoval.js.
+  let filesRemoved = 0;
+  if (result.keys.length) {
+    try { await storage.remove(result.keys); filesRemoved = result.keys.length; }
+    catch (err) { console.error('[admin] organization delete: files could not be removed:', err); }
+  }
+
+  audit.record({
+    action: 'org_deleted', req, userId: req.user.id, email: req.user.email, orgId,
+    detail: {
+      name: org.name, people: preview.people,
+      records: Object.fromEntries(preview.records.map(r => [r.table, r.count])),
+      accountsDeleted: result.accounts.map(a => a.email), filesRemoved,
+    },
+  });
+  res.json({ success: true, accountsDeleted: result.accounts.length, filesRemoved });
 });
 
 // --- Plans (vendor only) ---------------------------------------------------------------
